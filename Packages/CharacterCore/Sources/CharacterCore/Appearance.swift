@@ -83,7 +83,7 @@ public struct GradientStop: Hashable, Sendable, Codable {
 
 /// A gradient fill. Its points are in the same space as the path's points, so the
 /// gradient moves, turns and scales with the shape.
-public struct Gradient: Hashable, Sendable, Codable {
+public struct ShapeGradient: Hashable, Sendable, Codable {
     public enum Kind: String, Hashable, Sendable, Codable, CaseIterable {
         /// Colors change along the line from `start` to `end`.
         case linear

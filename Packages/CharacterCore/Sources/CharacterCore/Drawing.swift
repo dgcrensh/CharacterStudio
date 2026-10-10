@@ -8,7 +8,7 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     /// gradients fall back to; `nil` means no fill at all.
     public var fill: RGBAColor?
     /// Draws the fill as a gradient instead of `fill`.
-    public var gradient: Gradient?
+    public var gradient: ShapeGradient?
     /// The global color `fill` follows, if any (a `GlobalColor` id).
     public var fillGlobal: Int?
     public var stroke: StrokeStyle?

@@ -67,10 +67,10 @@ public enum ClipRole: Hashable, Sendable {
 /// What a cover step paints.
 public struct ArtPaint: Hashable, Sendable {
     public var color: RGBAColor
-    public var gradient: Gradient?
+    public var gradient: ShapeGradient?
     public var opacity: Double
 
-    public init(color: RGBAColor, gradient: Gradient? = nil, opacity: Double = 1) {
+    public init(color: RGBAColor, gradient: ShapeGradient? = nil, opacity: Double = 1) {
         self.color = color
         self.gradient = gradient
         self.opacity = opacity

@@ -23,22 +23,19 @@ enum ThumbnailRenderer {
         context.translateBy(x: CGFloat(side / 2), y: CGFloat(side / 2))
         context.scaleBy(x: CGFloat(k), y: CGFloat(k))
         context.translateBy(x: CGFloat(-bounds.center.x), y: CGFloat(-bounds.center.y))
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
 
+        let tolerance = 0.5 / k
         for part in drawing.parts {
-            for shape in part.shapes {
-                let path = cgPath(shape.path)
-                if let fill = shape.visibleFill {
-                    context.addPath(path)
-                    context.setFillColor(cgColor(fill))
-                    context.fillPath(using: .winding)
-                }
-                if let stroke = shape.stroke, stroke.width > 0 {
-                    context.addPath(path)
-                    context.setStrokeColor(cgColor(stroke.color))
-                    context.setLineWidth(CGFloat(stroke.width))
-                    context.strokePath()
+            for (index, shape) in part.shapes.enumerated() {
+                if let base = part.clipBase(of: index) {
+                    // Clipped shapes draw only where their base draws.
+                    context.saveGState()
+                    context.addPath(clipMask(part.shapes[base], tolerance: tolerance))
+                    context.clip(using: .winding)
+                    draw(shape, in: context, tolerance: tolerance)
+                    context.restoreGState()
+                } else {
+                    draw(shape, in: context, tolerance: tolerance)
                 }
             }
         }
@@ -50,6 +47,99 @@ enum ThumbnailRenderer {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
+    }
+
+    /// Draws one shape's fill and outline. Outlines come from the same stroker as the
+    /// canvas, so caps, joins, dashes and varying width match it.
+    private static func draw(_ shape: VectorShape, in context: CGContext, tolerance: Double) {
+        let opacity = CGFloat(min(max(shape.opacity, 0), 1))
+        let path = cgPath(shape.path)
+        if let fill = shape.visibleFill {
+            context.saveGState()
+            context.setAlpha(opacity)
+            context.addPath(path)
+            if let gradient = shape.gradient, let cg = cgGradient(gradient) {
+                context.clip(using: .winding)
+                let start = CGPoint(gradient.start), end = CGPoint(gradient.end)
+                let options: CGGradientDrawingOptions = [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+                switch gradient.kind {
+                case .linear:
+                    context.drawLinearGradient(cg, start: start, end: end, options: options)
+                case .radial:
+                    let radius = CGFloat(gradient.start.distance(to: gradient.end))
+                    context.drawRadialGradient(cg, startCenter: start, startRadius: 0, endCenter: start,
+                                               endRadius: radius, options: options)
+                }
+            } else {
+                context.setFillColor(cgColor(fill))
+                context.fillPath(using: .winding)
+            }
+            context.restoreGState()
+        }
+        guard let stroke = shape.stroke, stroke.width > 0 else { return }
+        let alignment = shape.path.closed ? stroke.alignment : .center
+        let triangles = Stroker.triangles(for: shape.path, style: stroke, widthScale: alignment == .center ? 1 : 2,
+                                          tolerance: tolerance)
+        guard !triangles.isEmpty else { return }
+        context.saveGState()
+        context.setAlpha(opacity)
+        switch alignment {
+        case .center:
+            break
+        case .inside:
+            context.addPath(path)
+            context.clip(using: .winding)
+        case .outside:
+            // Everything but the path's inside: a large rectangle with the path cut out.
+            let bounds = Rect(points: triangles).outset(by: 1)
+            context.addRect(CGRect(x: bounds.minPoint.x, y: bounds.minPoint.y, width: bounds.width, height: bounds.height))
+            context.addPath(path)
+            context.clip(using: .evenOdd)
+        }
+        let outline = CGMutablePath()
+        addTriangles(triangles, to: outline)
+        context.addPath(outline)
+        context.setFillColor(cgColor(stroke.color))
+        // The stroker winds every triangle the same way, so non-zero fills their union.
+        context.fillPath(using: .winding)
+        context.restoreGState()
+    }
+
+    /// Where a clip base draws: its fill and its outline, all wound the same way so a
+    /// non-zero fill is their union.
+    private static func clipMask(_ base: VectorShape, tolerance: Double) -> CGPath {
+        let mask = CGMutablePath()
+        if base.visibleFill != nil {
+            let poly = base.path.flattened(tolerance: tolerance)
+            var area = 0.0
+            for i in poly.indices { area += poly[i].cross(poly[(i + 1) % poly.count]) }
+            mask.addPath(cgPath(area >= 0 ? base.path : base.path.reversed()))
+        }
+        if let stroke = base.stroke, stroke.width > 0 {
+            let alignment = base.path.closed ? stroke.alignment : .center
+            // An inside outline lies within the fill; an outside one is the far half of a doubled one.
+            if alignment != .inside || base.visibleFill == nil {
+                let triangles = Stroker.triangles(for: base.path, style: stroke,
+                                                  widthScale: alignment == .outside ? 2 : 1, tolerance: tolerance)
+                addTriangles(triangles, to: mask)
+            }
+        }
+        return mask
+    }
+
+    private static func addTriangles(_ triangles: [Vec2], to path: CGMutablePath) {
+        for i in stride(from: 0, to: triangles.count, by: 3) {
+            path.addLines(between: [CGPoint(triangles[i]), CGPoint(triangles[i + 1]), CGPoint(triangles[i + 2])])
+            path.closeSubpath()
+        }
+    }
+
+    private static func cgGradient(_ gradient: ShapeGradient) -> CGGradient? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let stops = Array(gradient.stops.prefix(ShapeGradient.maxStops))
+        let colors = stops.map { cgColor($0.color) } as CFArray
+        let locations = stops.map { CGFloat($0.offset) }
+        return CGGradient(colorsSpace: space, colors: colors, locations: locations)
     }
 
     private static func cgPath(_ path: BezierPath) -> CGPath {

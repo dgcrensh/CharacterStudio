@@ -319,6 +319,9 @@ extension DrawingEditor {
             }
             kind = "shapes"
         }
+        // The global colors the copied shapes follow travel with them, by name.
+        let used = Set(clip.parts.flatMap { $0.shapes.flatMap { [$0.fillGlobal, $0.stroke?.global].compactMap { $0 } } })
+        clip.globalColors = drawing.globalColors.filter { used.contains($0.id) }
         guard !clip.parts.isEmpty, case .object(var members) = CharacterFormat.encode(clip) else { return nil }
         members.append((key: "clipboard", value: .string(kind)))
         return JSONValue.object(members).formatted()
@@ -346,11 +349,12 @@ extension DrawingEditor {
         let offset = pasteOffset(for: parts[0].shapes[0].path)
         let shift = Affine2D.translation(offset)
         let shapesOnly = json["clipboard"] == JSONValue.string("shapes")
+        let globals = adoptGlobalColors(decoded.drawing.globalColors)
         var refs: Set<ShapeRef> = []
         if let target = shapesOnly ? selectedPartID : isolatedPart, let p = drawing.partIndex(target) {
             for part in parts {
                 for shape in part.shapes {
-                    let copy = pastedCopy(of: shape, moved: shift)
+                    let copy = pastedCopy(of: shape, moved: shift, globals: globals)
                     drawing.parts[p].shapes.append(copy)
                     refs.insert(ShapeRef(part: target, shape: copy.id))
                 }
@@ -360,7 +364,7 @@ extension DrawingEditor {
             var added: [Int] = []
             for part in parts {
                 var copy = Part(id: drawing.makeID(), name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
-                for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift)) }
+                for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift, globals: globals)) }
                 drawing.parts.append(copy)
                 added.append(copy.id)
                 for shape in copy.shapes { refs.insert(ShapeRef(part: copy.id, shape: shape.id)) }
@@ -371,13 +375,41 @@ extension DrawingEditor {
         return true
     }
 
-    /// A visible, unlocked copy of `shape` with a fresh id.
-    private mutating func pastedCopy(of shape: VectorShape, moved shift: Affine2D) -> VectorShape {
+    /// Matches pasted global colors to this character's by name, adding any it lacks.
+    /// Returns the pasted id to this character's global color for each.
+    private mutating func adoptGlobalColors(_ pasted: [GlobalColor]) -> [Int: GlobalColor] {
+        var map: [Int: GlobalColor] = [:]
+        for global in pasted {
+            if let existing = drawing.globalColors.first(where: { $0.name == global.name }) {
+                map[global.id] = existing
+            } else {
+                let added = GlobalColor(id: drawing.makeID(), name: global.name, color: global.color)
+                drawing.globalColors.append(added)
+                map[global.id] = added
+            }
+        }
+        return map
+    }
+
+    /// A visible, unlocked copy of `shape` with a fresh id, following this character's
+    /// global colors.
+    private mutating func pastedCopy(of shape: VectorShape, moved shift: Affine2D,
+                                     globals: [Int: GlobalColor]) -> VectorShape {
         var copy = shape
         copy.id = drawing.makeID()
         copy.apply(shift)
         copy.isHidden = false
         copy.isLocked = false
+        copy.fillGlobal = copy.fillGlobal.flatMap { globals[$0]?.id }
+        if let global = shape.fillGlobal.flatMap({ globals[$0] }), copy.fill != nil {
+            copy.fill = global.color
+            if copy.gradient != nil { copy.gradient!.stops[0].color = global.color }
+        }
+        if copy.stroke != nil {
+            let global = shape.stroke?.global.flatMap { globals[$0] }
+            copy.stroke!.global = global?.id
+            if let global { copy.stroke!.color = global.color }
+        }
         return copy
     }
 

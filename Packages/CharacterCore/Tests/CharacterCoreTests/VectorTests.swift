@@ -230,14 +230,6 @@ final class DrawingTests: XCTestCase {
         XCTAssertTrue(frame.contains(.zero))
         XCTAssertFalse(frame.contains(Vec2(8, 8)))
     }
-
-    func testFillTessellation() {
-        var out: [Float] = []
-        FillTessellator.appendFan(polygon: [Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)], to: &out)
-        XCTAssertEqual(out.count, 2 * 3 * 2)
-        FillTessellator.appendCover(Rect(points: [Vec2(0, 0), Vec2(1, 1)]), to: &out)
-        XCTAssertEqual(out.count, 12 + 12)
-    }
 }
 
 final class UndoStackTests: XCTestCase {

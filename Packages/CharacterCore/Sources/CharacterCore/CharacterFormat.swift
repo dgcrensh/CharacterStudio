@@ -186,7 +186,7 @@ public enum CharacterFormat {
         return .object(members)
     }
 
-    private static func gradient(_ gradient: Gradient) -> JSONValue {
+    private static func gradient(_ gradient: ShapeGradient) -> JSONValue {
         let stops: [JSONValue] = gradient.stops.map {
             obj(["offset": num($0.offset), "color": .string($0.color.hexString)])
         }
@@ -371,14 +371,14 @@ public enum CharacterFormat {
         return stroke
     }
 
-    private static func gradient(_ node: Node) throws -> Gradient {
+    private static func gradient(_ node: Node) throws -> ShapeGradient {
         var stops: [GradientStop] = []
         for stop in try node.require("stops").array() {
             let offset = min(max(try stop.require("offset").number(), 0), 1)
             stops.append(GradientStop(offset: offset, color: try stop.require("color").color()))
         }
         guard !stops.isEmpty else { throw CharacterFileError.invalid(path: node.path + ".stops", problem: "is empty") }
-        return Gradient(kind: try node.require("type").keyword(Gradient.Kind.self),
+        return ShapeGradient(kind: try node.require("type").keyword(ShapeGradient.Kind.self),
                         start: try node.require("start").vec2(), end: try node.require("end").vec2(), stops: stops)
     }
 

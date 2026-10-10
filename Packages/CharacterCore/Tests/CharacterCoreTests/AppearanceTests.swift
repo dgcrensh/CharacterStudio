@@ -350,7 +350,7 @@ final class ArtBatchTests: XCTestCase {
 
     func testGradientsAndOpacity() {
         var shape = VectorShape(id: 0, path: square(0, 0, 10), fill: red)
-        shape.gradient = Gradient(kind: .linear, start: Vec2(0, 0), end: Vec2(10, 0),
+        shape.gradient = ShapeGradient(kind: .linear, start: Vec2(0, 0), end: Vec2(10, 0),
                                   stops: [GradientStop(offset: 0, color: red), GradientStop(offset: 1, color: blue)])
         let d = drawing([shape])
         let left = render(d, at: Vec2(0.5, 5)).color, right = render(d, at: Vec2(9.5, 5)).color
@@ -359,7 +359,7 @@ final class ArtBatchTests: XCTestCase {
         let middle = render(d, at: Vec2(5, 3)).color
         XCTAssertEqual(middle.r, 0.5, accuracy: 0.01)
 
-        shape.gradient = Gradient(kind: .radial, start: Vec2(5, 5), end: Vec2(10, 5),
+        shape.gradient = ShapeGradient(kind: .radial, start: Vec2(5, 5), end: Vec2(10, 5),
                                   stops: [GradientStop(offset: 0, color: red), GradientStop(offset: 1, color: blue)])
         shape.opacity = 0.5
         let faded = render(drawing([shape]), at: Vec2(5, 5)).color
@@ -473,6 +473,7 @@ final class AppearanceEditingTests: XCTestCase {
         e.setGradientSpan(0.5)
         gradient = e.drawing.parts[0].shapes[0].gradient!
         XCTAssertTrue(gradient.start.isApproximately(Vec2(25, 50)))
+        XCTAssertEqual(e.selectionAppearance?.gradientSpan ?? 0, 0.5, accuracy: 1e-9)
 
         // The first stop is the plain fill; picking a fill color sets it.
         e.setGradientStop(1, color: .white)
@@ -545,6 +546,36 @@ final class AppearanceEditingTests: XCTestCase {
         e.removeGlobalColor(ink)
         XCTAssertTrue(e.drawing.parts[0].shapes.allSatisfy { $0.stroke?.global == nil && $0.stroke?.color == .black })
         XCTAssertEqual(e.drawing.globalColors.map(\.id), [skin])
+    }
+
+    func testCopyAndPasteKeepGlobalColors() {
+        var e = editor()
+        let skin = e.addGlobalColor(red, name: "Skin")
+        e.addGlobalColor(blue, name: "Unused")
+        select(&e, 0)
+        e.applyGlobalFill(skin)
+        let text = e.copySelection()!
+        XCTAssertTrue(text.contains("Skin"))
+        XCTAssertFalse(text.contains("Unused"))
+
+        // Into the same character: the copy follows the same global color.
+        XCTAssertTrue(e.paste(text))
+        let pasted = e.drawing.shape(e.activeShape!)!
+        XCTAssertEqual(pasted.fillGlobal, skin)
+        XCTAssertEqual(e.drawing.globalColors.count, 2)
+
+        // Into another character with a "Skin" of its own: it follows that one.
+        var other = DrawingEditor()
+        let otherSkin = other.addGlobalColor(.white, name: "Skin")
+        XCTAssertTrue(other.paste(text))
+        XCTAssertEqual(other.drawing.parts[0].shapes[0].fillGlobal, otherSkin)
+        XCTAssertEqual(other.drawing.parts[0].shapes[0].fill, .white)
+
+        // Into one without it: the global color comes along.
+        var fresh = DrawingEditor()
+        XCTAssertTrue(fresh.paste(text))
+        XCTAssertEqual(fresh.drawing.globalColors.map(\.name), ["Skin"])
+        XCTAssertEqual(fresh.drawing.parts[0].shapes[0].fillGlobal, fresh.drawing.globalColors[0].id)
     }
 
     func testAnchorWidths() {
@@ -622,7 +653,7 @@ final class AppearanceFormatTests: XCTestCase {
                                 stroke: StrokeStyle(color: blue, width: 2.5, cap: .square, join: .bevel, miterLimit: 2,
                                                     dash: [3, 1.5], dashOffset: 0.5, alignment: .outside, global: skin.id))
         shape.fillGlobal = skin.id
-        shape.gradient = Gradient(kind: .radial, start: Vec2(5, 5), end: Vec2(9, 5),
+        shape.gradient = ShapeGradient(kind: .radial, start: Vec2(5, 5), end: Vec2(9, 5),
                                   stops: [GradientStop(offset: 0, color: red), GradientStop(offset: 0.7, color: blue)])
         shape.opacity = 0.4
         var clipped = VectorShape(id: d.makeID(), path: square(2, 2, 10), fill: blue)

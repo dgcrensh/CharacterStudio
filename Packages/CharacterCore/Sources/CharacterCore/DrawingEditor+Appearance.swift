@@ -4,7 +4,9 @@ import Foundation
 /// for showing in the appearance controls.
 public struct ShapeAppearance: Hashable, Sendable {
     public var opacity: Double
-    public var gradient: Gradient?
+    public var gradient: ShapeGradient?
+    /// How much of the shape the gradient spans (see `setGradientSpan`).
+    public var gradientSpan: Double?
     public var isClipped: Bool
     /// The global colors the fill and outline follow.
     public var fillGlobal: Int?
@@ -53,7 +55,9 @@ extension DrawingEditor {
     public var selectionAppearance: ShapeAppearance? {
         guard let first = drawing.shapeIndices(in: selection).first else { return nil }
         let shape = drawing.parts[first.0].shapes[first.1]
-        return ShapeAppearance(opacity: shape.opacity, gradient: shape.visibleFill != nil ? shape.gradient : nil,
+        let gradient = shape.visibleFill != nil ? shape.gradient : nil
+        return ShapeAppearance(opacity: shape.opacity, gradient: gradient,
+                               gradientSpan: gradient.map { Self.span(of: $0, in: shape.path.bounds()) },
                                isClipped: shape.isClipped, fillGlobal: shape.fillGlobal,
                                outlineGlobal: shape.stroke?.global, hasOutline: shape.stroke != nil,
                                isClosed: shape.path.closed)
@@ -127,7 +131,7 @@ extension DrawingEditor {
     /// A new gradient runs from the fill color to a darker shade, top to bottom
     /// (linear) or from the middle out (radial), across the shape. Changing the kind
     /// keeps the colors.
-    public mutating func setGradient(_ kind: Gradient.Kind?) {
+    public mutating func setGradient(_ kind: ShapeGradient.Kind?) {
         let fallback = style.fill
         restyleSelection(key: "gradientKind") { shape in
             guard shape.path.closed else { return }
@@ -143,11 +147,11 @@ extension DrawingEditor {
             let center = bounds.center
             switch kind {
             case .linear:
-                shape.gradient = Gradient(kind: .linear, start: Vec2(center.x, bounds.minPoint.y),
+                shape.gradient = ShapeGradient(kind: .linear, start: Vec2(center.x, bounds.minPoint.y),
                                           end: Vec2(center.x, bounds.maxPoint.y), stops: stops)
             case .radial:
                 let radius = max(bounds.width, bounds.height) / 2
-                shape.gradient = Gradient(kind: .radial, start: center, end: center + Vec2(radius, 0), stops: stops)
+                shape.gradient = ShapeGradient(kind: .radial, start: center, end: center + Vec2(radius, 0), stops: stops)
             }
         }
     }
@@ -182,28 +186,43 @@ extension DrawingEditor {
         }
     }
 
-    /// Scales a gradient about its start (the center of a radial one) so it spans
+    /// Scales a gradient about its middle (the center of a radial one) so it spans
     /// `fraction` of the shape: 1 runs edge to edge.
     public mutating func setGradientSpan(_ fraction: Double) {
         let fraction = max(fraction, 0.05)
         restyleSelection(key: "gradientSpan") { shape in
             guard var gradient = shape.gradient else { return }
-            let bounds = shape.path.bounds()
             let axis = (gradient.end - gradient.start).normalized
             guard axis != .zero else { return }
+            let full = Self.fullLength(of: gradient, in: shape.path.bounds())
             switch gradient.kind {
             case .linear:
-                // The shape's extent along the gradient's direction.
-                let corners = bounds.corners.map { ($0 - bounds.center).dot(axis) }
-                let extent = (corners.max() ?? 0) - (corners.min() ?? 0)
                 let middle = (gradient.start + gradient.end) / 2
-                gradient.start = middle - axis * (extent * fraction / 2)
-                gradient.end = middle + axis * (extent * fraction / 2)
+                gradient.start = middle - axis * (full * fraction / 2)
+                gradient.end = middle + axis * (full * fraction / 2)
             case .radial:
-                gradient.end = gradient.start + axis * (max(bounds.width, bounds.height) / 2 * fraction)
+                gradient.end = gradient.start + axis * (full * fraction)
             }
             shape.gradient = gradient
         }
+    }
+
+    /// The gradient's length when it spans the shape: the shape's extent along a linear
+    /// gradient's direction, or half the larger side for a radial one's radius.
+    static func fullLength(of gradient: ShapeGradient, in bounds: Rect) -> Double {
+        switch gradient.kind {
+        case .linear:
+            let axis = (gradient.end - gradient.start).normalized
+            let along = bounds.corners.map { ($0 - bounds.center).dot(axis) }
+            return (along.max() ?? 0) - (along.min() ?? 0)
+        case .radial:
+            return max(bounds.width, bounds.height) / 2
+        }
+    }
+
+    static func span(of gradient: ShapeGradient, in bounds: Rect) -> Double {
+        let full = fullLength(of: gradient, in: bounds)
+        return full > 1e-9 ? gradient.start.distance(to: gradient.end) / full : 1
     }
 
     /// Swaps the gradient's colors end for end.

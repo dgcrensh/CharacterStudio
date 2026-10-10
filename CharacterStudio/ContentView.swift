@@ -75,6 +75,7 @@ private struct ToolBar: View {
     let ui: EditorUIState
     @State private var showingLayers = false
     @State private var showingInspector = false
+    @State private var showingAppearance = false
 
     var body: some View {
         // On a short screen (landscape) the strip scrolls rather than running off the edge.
@@ -89,6 +90,7 @@ private struct ToolBar: View {
         .background(.regularMaterial, in: Capsule())
         // On the strip as a whole, since ViewThatFits builds it twice.
         .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
+        .popover(isPresented: $showingAppearance) { AppearancePanel(store: store, ui: ui) }
         .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
         .padding(.vertical, 16)
     }
@@ -108,6 +110,7 @@ private struct ToolBar: View {
 
             Divider().frame(width: 24)
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
+            Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
             Menu {
                 Button("Reset View", systemImage: "scope") { store.resetView() }
@@ -420,9 +423,8 @@ private struct StyleBar: View {
                 Label("Outline", systemImage: "circle")
             }
             .toggleStyle(.button)
-            // Outlines are opaque: overlapping capsules would double-blend translucent color.
             ColorPicker("Outline color", selection: Binding(get: { ui.style.outline.color }, set: { store.setOutline($0) }),
-                        supportsOpacity: false)
+                        supportsOpacity: true)
                 .labelsHidden()
             Slider(value: Binding(get: { ui.style.outlineWidth }, set: { store.setOutlineWidth($0.rounded()) }), in: 1...40)
                 .frame(width: 140)
@@ -436,6 +438,10 @@ private struct StyleBar: View {
                     .accessibilityLabel("Smoothing")
                 Slider(value: Binding(get: { ui.smoothing }, set: { store.setSmoothing($0) }), in: 0...1)
                     .frame(width: 110)
+                Toggle(isOn: Binding(get: { ui.pressureWidth }, set: { store.setPressureWidth($0) })) {
+                    Label("Pressure Width", systemImage: "lineweight")
+                }
+                .toggleStyle(.button)
             }
 
             Divider().frame(height: 24)
@@ -455,6 +461,20 @@ private struct PaletteRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Global colors: shapes filled or outlined with one follow it when it changes.
+            ForEach(ui.globalColors) { global in
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(global.color.color)
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary, lineWidth: 1))
+                    .frame(width: 26, height: 26)
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
+                    .onTapGesture { store.applyGlobalFill(global.id) }
+                    .contextMenu {
+                        Button("Use as Fill", systemImage: "drop.fill") { store.applyGlobalFill(global.id) }
+                        Button("Use as Outline", systemImage: "circle") { store.applyGlobalOutline(global.id) }
+                    }
+                    .accessibilityLabel("Global color \(global.name)")
+            }
             ForEach(Array(ui.palette.enumerated()), id: \.offset) { index, color in
                 Circle()
                     .fill(color.color)
@@ -474,6 +494,7 @@ private struct PaletteRow: View {
             Menu {
                 Button("Add Fill Color", systemImage: "drop.fill") { store.addFillToPalette() }
                 Button("Add Outline Color", systemImage: "circle") { store.addOutlineToPalette() }
+                Button("New Global Color from Fill", systemImage: "square.fill") { store.addGlobalColorFromFill() }
             } label: {
                 Label("Add to Palette", systemImage: "plus.circle")
             }
