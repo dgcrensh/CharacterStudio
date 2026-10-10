@@ -6,6 +6,8 @@ import Foundation
 public enum EditorOverlay {
     public static let accent = RGBAColor(r: 0.18, g: 0.49, b: 0.96)
     public static let handleFill = RGBAColor.white
+    /// The eraser's ring and the outline of what it would delete.
+    public static let eraserColor = RGBAColor(r: 0.9, g: 0.25, b: 0.2)
 
     public static func vertices(for editor: DrawingEditor, zoom: Double) -> [Float] {
         var out: [Float] = []
@@ -51,9 +53,46 @@ public enum EditorOverlay {
             }
         }
 
+        // Hover: what a touch would hit, the brush size, the eraser's reach, the cut point.
+        func outline(of ref: ShapeRef, color: RGBAColor) {
+            guard let path = drawing.shape(ref)?.path else { return }
+            let poly = path.flattened(tolerance: 0.5 * px)
+            CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                      width: 2 * px, color: color, to: &out)
+        }
+        func ring(_ center: Vec2, radius: Double, color: RGBAColor) {
+            let steps = 48
+            var points: [Vec2] = []
+            for i in 0...steps {
+                let angle = 2 * Double.pi * Double(i) / Double(steps)
+                points.append(center + Vec2(cos(angle), sin(angle)) * radius)
+            }
+            CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
+        }
+        if let target = editor.hoverTarget, !drawing.shapeRefs(in: editor.selection).contains(target) || editor.tool == .eraser {
+            outline(of: target, color: editor.tool == .eraser ? eraserColor : accent)
+        }
+        if let hover = editor.hoverPoint {
+            switch editor.tool {
+            case .pencil:
+                if editor.style.outlineEnabled || !editor.style.fillEnabled {
+                    ring(hover, radius: max(editor.style.outlineWidth / 2, 1.5 * px), color: editor.style.outline)
+                }
+            case .eraser:
+                ring(hover, radius: EditorMetrics.eraserRadius * px, color: eraserColor)
+            case .scissors:
+                if let cut = editor.scissorsPreview { ringDot(cut, radius: 6) }
+            case .pen, .select, .directSelect, .shape:
+                break
+            }
+        }
+
         switch editor.tool {
-        case .pencil:
+        case .pencil, .shape, .eraser:
             break
+
+        case .scissors:
+            for ref in drawing.shapeRefs(in: editor.selection) { outline(of: ref, color: accent) }
 
         case .pen:
             if let pen = editor.penPath {

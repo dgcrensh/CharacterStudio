@@ -158,6 +158,8 @@ private struct ContextBar: View {
                     Label("Add", systemImage: "plus.square.on.square")
                 }
                 .toggleStyle(.button)
+            case .shape, .eraser, .scissors:
+                EmptyView()
             }
 
             if ui.tool != .pencil { snapMenu }

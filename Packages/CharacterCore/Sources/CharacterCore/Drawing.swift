@@ -17,12 +17,19 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public var path: BezierPath
     public var fill: RGBAColor?
     public var stroke: StrokeStyle?
+    /// Editor hints, saved in the file: a hidden shape is not drawn in the editor, and
+    /// neither a hidden nor a locked shape can be tapped, selected or erased.
+    public var isHidden: Bool
+    public var isLocked: Bool
 
-    public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil) {
+    public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
+                isHidden: Bool = false, isLocked: Bool = false) {
         self.id = id
         self.path = path
         self.fill = fill
         self.stroke = stroke
+        self.isHidden = isHidden
+        self.isLocked = isLocked
     }
 
     /// Fill only applies to closed paths.
@@ -79,13 +86,25 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var shapes: [VectorShape]
     /// The part's own pivot, independent of any bone origin.
     public var pivot: Vec2
+    /// Editor hints, saved in the file, that apply to every shape in the part.
+    public var isHidden: Bool
+    public var isLocked: Bool
 
-    public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero) {
+    public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero,
+                isHidden: Bool = false, isLocked: Bool = false) {
         self.id = id
         self.name = name
         self.shapes = shapes
         self.pivot = pivot
+        self.isHidden = isHidden
+        self.isLocked = isLocked
     }
+
+    /// True when shape `index` is drawn in the editor.
+    public func isShown(_ index: Int) -> Bool { !isHidden && !shapes[index].isHidden }
+
+    /// True when shape `index` can be tapped, selected, erased or cut.
+    public func isEditable(_ index: Int) -> Bool { isShown(index) && !isLocked && !shapes[index].isLocked }
 
     public var bounds: Rect {
         shapes.reduce(Rect.null) { $0.union($1.bounds) }
@@ -263,14 +282,26 @@ public struct Drawing: Hashable, Sendable, Codable {
         return name
     }
 
-    /// The topmost shape under `p`. Reference images are locked and never hit.
-    public func hitTest(_ p: Vec2, tolerance: Double) -> (part: Int, shape: Int)? {
-        for part in parts.reversed() {
-            for shape in part.shapes.reversed() where shape.contains(p, tolerance: tolerance) {
-                return (part.id, shape.id)
+    /// The topmost editable shape under `p`, only in part `within` when it is given.
+    /// Hidden and locked shapes, and reference images, are never hit.
+    public func hitTest(_ p: Vec2, tolerance: Double, within: Int? = nil) -> (part: Int, shape: Int)? {
+        for part in parts.reversed() where within == nil || part.id == within {
+            for i in part.shapes.indices.reversed() where part.isEditable(i) && part.shapes[i].contains(p, tolerance: tolerance) {
+                return (part.id, part.shapes[i].id)
             }
         }
         return nil
+    }
+
+    /// Every editable shape, in draw order, only in part `within` when it is given.
+    public func editableShapeRefs(within: Int? = nil) -> [ShapeRef] {
+        var out: [ShapeRef] = []
+        for part in parts where within == nil || part.id == within {
+            for i in part.shapes.indices where part.isEditable(i) {
+                out.append(ShapeRef(part: part.id, shape: part.shapes[i].id))
+            }
+        }
+        return out
     }
 
     public func exists(_ selection: Selection) -> Bool {

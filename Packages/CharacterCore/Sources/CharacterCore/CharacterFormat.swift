@@ -125,11 +125,21 @@ public enum CharacterFormat {
     }
 
     private static func attachment(_ part: Part) -> JSONValue {
-        obj([
-            "type": .string("vector"),
-            "pivot": vec(part.pivot),
-            "shapes": .array(part.shapes.map(shape)),
-        ])
+        var members: [(key: String, value: JSONValue)] = [
+            (key: "type", value: .string("vector")),
+            (key: "pivot", value: vec(part.pivot)),
+        ]
+        members += editorHints(hidden: part.isHidden, locked: part.isLocked)
+        members.append((key: "shapes", value: .array(part.shapes.map(shape))))
+        return .object(members)
+    }
+
+    /// `hidden` and `locked`, written only when true so older files stay unchanged.
+    private static func editorHints(hidden: Bool, locked: Bool) -> [(key: String, value: JSONValue)] {
+        var members: [(key: String, value: JSONValue)] = []
+        if hidden { members.append((key: "hidden", value: .bool(true))) }
+        if locked { members.append((key: "locked", value: .bool(true))) }
+        return members
     }
 
     private static func shape(_ shape: VectorShape) -> JSONValue {
@@ -141,6 +151,7 @@ public enum CharacterFormat {
             let value = obj(["color": .string(stroke.color.hexString), "width": num(stroke.width)])
             members.append((key: "stroke", value: value))
         }
+        members += editorHints(hidden: shape.isHidden, locked: shape.isLocked)
         members.append((key: "points", value: .array(shape.path.points.map(point))))
         return .object(members)
     }
@@ -218,6 +229,8 @@ public enum CharacterFormat {
             guard try node.field("type")?.string() ?? "vector" == "vector" else { continue }
             var part = Part(id: drawing.makeID(), name: slot.id)
             if let pivot = try node.field("pivot")?.vec2() { part.pivot = pivot }
+            part.isHidden = try node.field("hidden")?.bool() ?? false
+            part.isLocked = try node.field("locked")?.bool() ?? false
             for shapeNode in try node.field("shapes")?.array() ?? [] {
                 part.shapes.append(try shape(shapeNode, id: drawing.makeID()))
             }
@@ -264,6 +277,8 @@ public enum CharacterFormat {
             guard width >= 0 else { throw CharacterFileError.invalid(path: stroke.path + ".width", problem: "is negative") }
             shape.stroke = StrokeStyle(color: try stroke.require("color").color(), width: width)
         }
+        shape.isHidden = try node.field("hidden")?.bool() ?? false
+        shape.isLocked = try node.field("locked")?.bool() ?? false
         return shape
     }
 
