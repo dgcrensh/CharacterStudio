@@ -36,6 +36,12 @@ public struct ShapeStyle: Hashable, Sendable {
     public var outline: RGBAColor
     public var outlineWidth: Double
     public var outlineEnabled: Bool
+    public var outlineCap: LineCap = .round
+    public var outlineJoin: LineJoin = .round
+    public var miterLimit: Double = 4
+    /// Dash and gap lengths in points; empty for a solid outline.
+    public var outlineDash: [Double] = []
+    public var outlineAlignment: StrokeAlignment = .center
 
     public init(fill: RGBAColor = RGBAColor(hex: "#F2A65A")!, fillEnabled: Bool = true,
                 outline: RGBAColor = .ink, outlineWidth: Double = 3, outlineEnabled: Bool = true) {
@@ -44,6 +50,12 @@ public struct ShapeStyle: Hashable, Sendable {
         self.outline = outline
         self.outlineWidth = outlineWidth
         self.outlineEnabled = outlineEnabled
+    }
+
+    /// An outline in this style.
+    public func makeStroke(color: RGBAColor? = nil) -> StrokeStyle {
+        StrokeStyle(color: color ?? outline, width: outlineWidth, cap: outlineCap, join: outlineJoin,
+                    miterLimit: miterLimit, dash: outlineDash, alignment: outlineAlignment)
     }
 }
 
@@ -135,6 +147,9 @@ public struct DrawingEditor: Sendable {
     public var style = ShapeStyle()
     /// 0 keeps strokes close to the Pencil path; 1 smooths them a lot.
     public var smoothing = 0.4
+    /// When on, Pencil pressure sets the outline width along new freehand strokes.
+    /// Off by default: outlines are uniform.
+    public var pressureWidth = false
     /// When on, a new freehand stroke or pen path joins the selected part instead of
     /// starting a new one. Freehand strokes also need to overlap that part.
     public var autoJoinSelectedPart = false
@@ -707,7 +722,7 @@ public struct DrawingEditor: Sendable {
         var shape = VectorShape(id: drawing.makeID(), path: BezierPath(points: [point], closed: false))
         shape.fill = style.fillEnabled ? style.fill : nil
         // Outlined while open so the path is visible; closing may drop the outline.
-        shape.stroke = StrokeStyle(color: style.outline, width: style.outlineWidth)
+        shape.stroke = style.makeStroke()
         if autoJoinSelectedPart || isolatedPart != nil, let target = selectedPartID, let p = drawing.partIndex(target) {
             drawing.parts[p].shapes.append(shape)
             penPath = PenPath(part: target, shape: shape.id, fromStart: false, createdPart: false)
@@ -969,9 +984,16 @@ public struct DrawingEditor: Sendable {
     /// Fits a finished pencil stroke and adds it as a shape. A closed stroke becomes
     /// a filled shape. With `autoJoinSelectedPart` on and a part selected, a stroke that
     /// overlaps it joins that part; otherwise it starts a new part.
-    public mutating func addStroke(_ points: [Vec2], zoom: Double) {
+    ///
+    /// `pressures` (0...1, one per point) set the outline width at each anchor when
+    /// `pressureWidth` is on; otherwise the outline is uniform.
+    public mutating func addStroke(_ points: [Vec2], pressures: [Double] = [], zoom: Double) {
         guard !points.isEmpty else { return }
-        addPath(CurveFitter.fit(points, options: .forSmoothing(smoothing, zoom: zoom)))
+        var path = CurveFitter.fit(points, options: .forSmoothing(smoothing, zoom: zoom))
+        if pressureWidth, pressures.count == points.count {
+            PressureWidth.apply(pressures, samples: points, to: &path)
+        }
+        addPath(path)
     }
 
     /// Adds a finished path (a fitted stroke or a QuickShape) in the current style as
@@ -986,7 +1008,7 @@ public struct DrawingEditor: Sendable {
     /// A new shape with `path` in the current style. A closed path is filled; an open
     /// one, or one with fill off, is outlined so it stays visible.
     mutating func styledShape(_ path: BezierPath) -> VectorShape {
-        let outline = StrokeStyle(color: style.outline, width: style.outlineWidth)
+        let outline = style.makeStroke()
         var shape = VectorShape(id: drawing.makeID(), path: path)
         if path.closed {
             shape.fill = style.fillEnabled ? style.fill : nil
@@ -1115,6 +1137,11 @@ public struct DrawingEditor: Sendable {
         if let stroke = shape.stroke {
             result.outline = stroke.color
             result.outlineWidth = stroke.width
+            result.outlineCap = stroke.cap
+            result.outlineJoin = stroke.join
+            result.miterLimit = stroke.miterLimit
+            result.outlineDash = stroke.dash
+            result.outlineAlignment = stroke.alignment
         }
         result.outlineEnabled = shape.stroke != nil
         return result
@@ -1127,7 +1154,11 @@ public struct DrawingEditor: Sendable {
         style.fill = color
         style.fillEnabled = true
         restyleSelection(key: "fill") { shape in
-            if shape.path.closed { shape.fill = color }
+            guard shape.path.closed else { return }
+            shape.fill = color
+            shape.fillGlobal = nil
+            // A gradient's first stop is its plain fill, so the two stay in step.
+            if shape.gradient != nil { shape.gradient!.stops[0].color = color }
         }
     }
 
@@ -1137,9 +1168,11 @@ public struct DrawingEditor: Sendable {
         restyleSelection(key: "fillEnabled") { shape in
             guard shape.path.closed else { return }
             if enabled {
-                shape.fill = color
+                if shape.fill == nil { shape.fill = color }
             } else if shape.stroke != nil {
                 shape.fill = nil
+                shape.gradient = nil
+                shape.fillGlobal = nil
             }
         }
     }
@@ -1148,23 +1181,29 @@ public struct DrawingEditor: Sendable {
         noteRecentColor(color, source: continuous ? "outline" : nil)
         style.outline = color
         style.outlineEnabled = true
-        let width = style.outlineWidth
+        let template = style
         restyleSelection(key: "outline") { shape in
-            shape.stroke = StrokeStyle(color: color, width: shape.stroke?.width ?? width)
+            if shape.stroke == nil {
+                shape.stroke = template.makeStroke(color: color)
+            } else {
+                shape.stroke!.color = color
+                shape.stroke!.global = nil
+            }
         }
     }
 
     public mutating func setOutlineWidth(_ width: Double) {
         style.outlineWidth = width
-        let color = style.outline
+        let template = style
         restyleSelection(key: "outlineWidth") { shape in
-            shape.stroke = StrokeStyle(color: shape.stroke?.color ?? color, width: width)
+            if shape.stroke == nil { shape.stroke = template.makeStroke() }
+            shape.stroke!.width = width
         }
     }
 
     public mutating func setOutlineEnabled(_ enabled: Bool) {
         style.outlineEnabled = enabled
-        let outline = StrokeStyle(color: style.outline, width: style.outlineWidth)
+        let outline = style.makeStroke()
         restyleSelection(key: "outlineEnabled") { shape in
             if enabled {
                 if shape.stroke == nil { shape.stroke = outline }
@@ -1295,7 +1334,7 @@ public struct DrawingEditor: Sendable {
         return true
     }
 
-    private mutating func restyleSelection(key: String, _ change: (inout VectorShape) -> Void) {
+    mutating func restyleSelection(key: String, _ change: (inout VectorShape) -> Void) {
         let targets = drawing.shapeIndices(in: selection)
         guard !targets.isEmpty else { return }
         let before = drawing

@@ -148,7 +148,10 @@ public struct CanvasSession: Sendable {
 
     // MARK: Touches (screen-space points, times in seconds)
 
-    public mutating func touchBegan(id: Int, kind: TouchKind, location: Vec2, majorRadius: Double = 0, time: Double = 0) {
+    /// `pressure` is the Pencil's force as a fraction (0...1) of the most it reports,
+    /// when known.
+    public mutating func touchBegan(id: Int, kind: TouchKind, location: Vec2, majorRadius: Double = 0, time: Double = 0,
+                                    pressure: Double? = nil) {
         switch kind {
         case .pencil:
             guard drawingTouch == nil || isFingerDrawing else {
@@ -162,7 +165,7 @@ public struct CanvasSession: Sendable {
             fingers.removeAll()
             fingerOrder.removeAll()
             tap = nil
-            beginPencil(touch: id, at: location)
+            beginPencil(touch: id, at: location, pressure: pressure)
             stillSince = (location, time)
 
         case .finger:
@@ -192,7 +195,10 @@ public struct CanvasSession: Sendable {
     /// `samples` are the coalesced locations since the last call, oldest first, ending
     /// with the current location. `predicted` are the system's predicted locations.
     /// `time` (seconds, as touches report it) lets a Pencil held still trigger QuickShape.
-    public mutating func touchMoved(id: Int, samples: [Vec2], predicted: [Vec2] = [], time: Double? = nil) {
+    /// `pressures`, when given, are each sample's force as a fraction (0...1) of the most
+    /// the Pencil reports.
+    public mutating func touchMoved(id: Int, samples: [Vec2], predicted: [Vec2] = [], time: Double? = nil,
+                                    pressures: [Double]? = nil) {
         guard let current = samples.last else { return }
         if var t = tap, let start = t.starts[id] {
             if current.distance(to: start) > options.tapMaxMovement { t.moved = true }
@@ -211,7 +217,10 @@ public struct CanvasSession: Sendable {
                 }
             } else if var stroke = liveStroke {
                 let spacing = options.minSampleSpacing / camera.zoom
-                for s in samples { stroke.append(camera.toWorld(s), minSpacing: spacing) }
+                let pressures = pressures?.count == samples.count ? pressures : nil
+                for (k, s) in samples.enumerated() {
+                    stroke.append(camera.toWorld(s), pressure: pressures?[k], minSpacing: spacing)
+                }
                 stroke.predicted = predicted.map { camera.toWorld($0) }
                 liveStroke = stroke
                 if let time, stillSince.map({ current.distance(to: $0.point) > options.quickShapeStillness }) ?? true {
@@ -277,7 +286,7 @@ public struct CanvasSession: Sendable {
         navigation = ((a, b), TwoFingerNavigation(startCamera: camera, start0: p0, start1: p1))
     }
 
-    private mutating func beginPencil(touch: Int, at location: Vec2) {
+    private mutating func beginPencil(touch: Int, at location: Vec2, pressure: Double? = nil) {
         drawingTouch = touch
         quickShape = nil
         let world = camera.toWorld(location)
@@ -287,7 +296,12 @@ public struct CanvasSession: Sendable {
             let style = editor.style
             // The live stroke previews the outline color; a fill-only shape previews its fill.
             let color = style.outlineEnabled || !style.fillEnabled ? style.outline : style.fill
-            liveStroke = InkStroke(id: nextStrokeID, start: world, brush: Brush(width: style.outlineWidth, color: color))
+            var stroke = InkStroke(id: nextStrokeID, start: world, brush: Brush(width: style.outlineWidth, color: color))
+            if let pressure {
+                stroke.pressures = [pressure]
+                stroke.showsPressure = editor.pressureWidth
+            }
+            liveStroke = stroke
             nextStrokeID += 1
         case .pen, .select, .directSelect, .shape, .eraser, .scissors:
             editor.pencilBegan(at: world, zoom: camera.zoom)
@@ -298,7 +312,7 @@ public struct CanvasSession: Sendable {
         if let shape = quickShape {
             editor.addPath(shape)
         } else if let stroke = liveStroke {
-            editor.addStroke(stroke.points, zoom: camera.zoom)
+            editor.addStroke(stroke.points, pressures: stroke.pressures, zoom: camera.zoom)
         } else if let id = drawingTouch {
             let world = location.map { camera.toWorld($0) } ?? fingers[id].map { camera.toWorld($0) }
             if let world { editor.pencilEnded(at: world, time: time) } else { editor.pencilCancelled() }

@@ -47,6 +47,25 @@ public struct CubicBezier: Hashable, Sendable {
         r.flatten(tolerance: tolerance, depth: depth + 1, into: &out)
     }
 
+    /// Like `flatten`, also appending each point's curve parameter to `params`.
+    public func flatten(tolerance: Double, into out: inout [Vec2], params: inout [Double]) {
+        flatten(tolerance: max(tolerance, 1e-6), depth: 0, t0: 0, t1: 1, into: &out, params: &params)
+    }
+
+    private func flatten(tolerance: Double, depth: Int, t0: Double, t1: Double, into out: inout [Vec2],
+                         params: inout [Double]) {
+        let flat = p1.distance(toSegment: p0, p3) <= tolerance && p2.distance(toSegment: p0, p3) <= tolerance
+        if flat || depth >= 16 {
+            out.append(p3)
+            params.append(t1)
+            return
+        }
+        let (l, r) = split(at: 0.5)
+        let mid = (t0 + t1) / 2
+        l.flatten(tolerance: tolerance, depth: depth + 1, t0: t0, t1: mid, into: &out, params: &params)
+        r.flatten(tolerance: tolerance, depth: depth + 1, t0: mid, t1: t1, into: &out, params: &params)
+    }
+
     /// The curve parameter closest to `p`, and the distance there.
     public func nearest(to p: Vec2) -> (t: Double, distance: Double) {
         let samples = 24
@@ -89,6 +108,9 @@ public struct PathPoint: Hashable, Sendable, Codable {
     public var inHandle: Vec2
     public var outHandle: Vec2
     public var mode: HandleMode
+    /// The outline's width here, as a multiple of the stroke width (the file's `w`).
+    /// Widths blend linearly along each segment; 1 everywhere is a uniform outline.
+    public var width: Double = 1
 
     public init(_ position: Vec2, in inHandle: Vec2 = .zero, out outHandle: Vec2 = .zero, smooth: Bool = true) {
         self.position = position
@@ -169,6 +191,32 @@ public struct BezierPath: Hashable, Sendable, Codable {
         return out
     }
 
+    /// A polyline through the path with the outline width multiple at each point,
+    /// blended linearly along each segment. Closed paths do not repeat the first point.
+    public func flattenedWithWidths(tolerance: Double) -> (points: [Vec2], widths: [Double]) {
+        guard let first = points.first else { return ([], []) }
+        var out = [first.position]
+        var widths = [first.width]
+        var params: [Double] = []
+        for i in 0..<segmentCount {
+            params.removeAll(keepingCapacity: true)
+            segment(i).flatten(tolerance: tolerance, into: &out, params: &params)
+            let w0 = points[i].width, w1 = points[(i + 1) % points.count].width
+            for t in params { widths.append(w0 + (w1 - w0) * t) }
+        }
+        if closed, segmentCount > 0, out.count > 1 {
+            out.removeLast()
+            widths.removeLast()
+        }
+        return (out, widths)
+    }
+
+    /// True when some anchor's width is not 1.
+    public var hasVariableWidth: Bool { points.contains { $0.width != 1 } }
+
+    /// The largest anchor width multiple (1 for an empty path).
+    public var maxWidth: Double { points.map(\.width).max() ?? 1 }
+
     public func bounds(tolerance: Double = 0.25) -> Rect {
         Rect(points: flattened(tolerance: tolerance))
     }
@@ -198,7 +246,8 @@ public struct BezierPath: Hashable, Sendable, Codable {
         let a = i, b = (i + 1) % points.count
         points[a].outHandle = l.p1 - l.p0
         points[b].inHandle = r.p2 - r.p3
-        let new = PathPoint(l.p3, in: l.p2 - l.p3, out: r.p1 - r.p0, smooth: true)
+        var new = PathPoint(l.p3, in: l.p2 - l.p3, out: r.p1 - r.p0, smooth: true)
+        new.width = points[a].width + (points[b].width - points[a].width) * t
         points.insert(new, at: a + 1)
         return a + 1
     }

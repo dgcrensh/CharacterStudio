@@ -56,12 +56,13 @@ public struct DecodedCharacter: Sendable {
 
 /// Reads and writes the Character Studio JSON format (see `Schema/` in the repository).
 ///
-/// v0.1 stores the art the editor has today: every part becomes a slot on the root
-/// bone with one vector attachment in the default skin, and the slot list order is
-/// the draw order. Bones, weights, skins and poses arrive with later milestones; the
-/// keys are already present so the shape of the file does not change.
+/// Every part becomes a slot on the root bone with one vector attachment in the
+/// default skin, and the slot list order is the draw order. Bones, weights, skins and
+/// poses arrive with later milestones; the keys are already present so the shape of
+/// the file does not change. 0.2 adds appearance: outline caps, joins, dashes and
+/// alignment, per-point outline width, gradients, opacity, clipping and global colors.
 public enum CharacterFormat {
-    public static let version = FormatVersion(0, 1, 0)
+    public static let version = FormatVersion(0, 2, 0)
     /// The oldest version this build can open.
     public static let oldestReadable = FormatVersion(0, 1, 0)
     public static let rootBone = "root"
@@ -72,11 +73,12 @@ public enum CharacterFormat {
     /// `referenceFiles` names the package file holding each reference image's pixels.
     public static func encode(_ drawing: Drawing, referenceFiles: [Int: String] = [:]) -> JSONValue {
         let names = slotNames(for: drawing.parts)
+        let globals = Dictionary(drawing.globalColors.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         var slots: [JSONValue] = []
         var skin: [(key: String, value: JSONValue)] = []
         for (part, name) in zip(drawing.parts, names) {
             slots.append(obj(["id": .string(name), "bone": .string(rootBone), "attachment": .string(name)]))
-            skin.append((key: name, value: obj([name: attachment(part)])))
+            skin.append((key: name, value: obj([name: attachment(part, globals: globals)])))
         }
         let rootBoneValue = obj([
             "id": .string(rootBone), "parent": .null, "length": 0,
@@ -87,7 +89,9 @@ public enum CharacterFormat {
             if let file = referenceFiles[ref.id] { references.append(reference(ref, file: file)) }
         }
         let drawOrder: [JSONValue] = names.map { .string($0) }
-        let palette: [JSONValue] = drawing.palette.map { .string($0.hexString) }
+        // Plain colors, then the named global colors.
+        let palette: [JSONValue] = drawing.palette.map { .string($0.hexString) } +
+            drawing.globalColors.map { obj(["name": .string($0.name), "color": .string($0.color.hexString)]) }
 
         return obj([
             "formatVersion": .string(version.description),
@@ -124,13 +128,13 @@ public enum CharacterFormat {
         }
     }
 
-    private static func attachment(_ part: Part) -> JSONValue {
+    private static func attachment(_ part: Part, globals: [Int: String]) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [
             (key: "type", value: .string("vector")),
             (key: "pivot", value: vec(part.pivot)),
         ]
         members += editorHints(hidden: part.isHidden, locked: part.isLocked)
-        members.append((key: "shapes", value: .array(part.shapes.map(shape))))
+        members.append((key: "shapes", value: .array(part.shapes.map { shape($0, globals: globals) })))
         return .object(members)
     }
 
@@ -142,18 +146,56 @@ public enum CharacterFormat {
         return members
     }
 
-    private static func shape(_ shape: VectorShape) -> JSONValue {
+    /// Keys beyond 0.1's are written only when they differ from their defaults, so a
+    /// shape that uses none of them is written as before.
+    private static func shape(_ shape: VectorShape, globals: [Int: String]) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [(key: "closed", value: .bool(shape.path.closed))]
         if let fill = shape.fill {
             members.append((key: "fill", value: .string(fill.hexString)))
+            if let name = shape.fillGlobal.flatMap({ globals[$0] }) {
+                members.append((key: "fillGlobal", value: .string(name)))
+            }
+            if let gradient = shape.gradient {
+                members.append((key: "gradient", value: self.gradient(gradient)))
+            }
         }
         if let stroke = shape.stroke {
-            let value = obj(["color": .string(stroke.color.hexString), "width": num(stroke.width)])
-            members.append((key: "stroke", value: value))
+            members.append((key: "stroke", value: self.stroke(stroke, globals: globals)))
         }
+        if shape.opacity != 1 { members.append((key: "opacity", value: num(shape.opacity))) }
+        if shape.isClipped { members.append((key: "clipped", value: .bool(true))) }
         members += editorHints(hidden: shape.isHidden, locked: shape.isLocked)
         members.append((key: "points", value: .array(shape.path.points.map(point))))
         return .object(members)
+    }
+
+    private static func stroke(_ stroke: StrokeStyle, globals: [Int: String]) -> JSONValue {
+        var members: [(key: String, value: JSONValue)] = [(key: "color", value: .string(stroke.color.hexString))]
+        if let name = stroke.global.flatMap({ globals[$0] }) {
+            members.append((key: "global", value: .string(name)))
+        }
+        members.append((key: "width", value: num(stroke.width)))
+        if stroke.cap != .round { members.append((key: "cap", value: .string(stroke.cap.rawValue))) }
+        if stroke.join != .round { members.append((key: "join", value: .string(stroke.join.rawValue))) }
+        if stroke.miterLimit != 4 { members.append((key: "miterLimit", value: num(stroke.miterLimit))) }
+        if !stroke.dash.isEmpty {
+            members.append((key: "dash", value: .array(stroke.dash.map(num))))
+            if stroke.dashOffset != 0 { members.append((key: "dashOffset", value: num(stroke.dashOffset))) }
+        }
+        if stroke.alignment != .center { members.append((key: "align", value: .string(stroke.alignment.rawValue))) }
+        return .object(members)
+    }
+
+    private static func gradient(_ gradient: Gradient) -> JSONValue {
+        let stops: [JSONValue] = gradient.stops.map {
+            obj(["offset": num($0.offset), "color": .string($0.color.hexString)])
+        }
+        return obj([
+            "type": .string(gradient.kind.rawValue),
+            "start": vec(gradient.start),
+            "end": vec(gradient.end),
+            "stops": .array(stops),
+        ])
     }
 
     private static func point(_ point: PathPoint) -> JSONValue {
@@ -162,6 +204,7 @@ public enum CharacterFormat {
             (key: "in", value: vec(point.inHandle)),
             (key: "out", value: vec(point.outHandle)),
         ]
+        if point.width != 1 { members.append((key: "w", value: num(point.width))) }
         if !point.isSmooth { members.append((key: "smooth", value: .bool(false))) }
         if point.mode == .symmetric { members.append((key: "symmetric", value: .bool(true))) }
         return .object(members)
@@ -221,6 +264,21 @@ public enum CharacterFormat {
         let unordered = slots.filter { slot in !ordered.contains { $0.id == slot.id } }
         ordered += unordered
 
+        // Plain colors and named global colors share the palette. Global colors are
+        // read first, since shapes refer to them by name.
+        var globals: [String: Int] = [:]
+        for node in try root.field("palette")?.array() ?? [] {
+            if case .object = node.value {
+                let name = try node.require("name").string()
+                let color = GlobalColor(id: drawing.makeID(), name: drawing.uniqueGlobalColorName(name),
+                                        color: try node.require("color").color())
+                drawing.globalColors.append(color)
+                if globals[name] == nil { globals[name] = color.id }
+            } else {
+                drawing.palette.append(try node.color())
+            }
+        }
+
         let skin = try root.field("skins")?.field(defaultSkin)
         for slot in ordered {
             guard let attachmentName = slot.attachment,
@@ -232,12 +290,10 @@ public enum CharacterFormat {
             part.isHidden = try node.field("hidden")?.bool() ?? false
             part.isLocked = try node.field("locked")?.bool() ?? false
             for shapeNode in try node.field("shapes")?.array() ?? [] {
-                part.shapes.append(try shape(shapeNode, id: drawing.makeID()))
+                part.shapes.append(try shape(shapeNode, id: drawing.makeID(), globals: globals))
             }
             drawing.parts.append(part)
         }
-
-        drawing.palette = try (root.field("palette")?.array() ?? []).map { try $0.color() }
 
         var files: [Int: String] = [:]
         for node in try root.field("references")?.array() ?? [] {
@@ -259,12 +315,17 @@ public enum CharacterFormat {
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
     }
 
-    private static func shape(_ node: Node, id: Int) throws -> VectorShape {
+    private static func shape(_ node: Node, id: Int, globals: [String: Int]) throws -> VectorShape {
         var points: [PathPoint] = []
         for p in try node.require("points").array() {
             var point = PathPoint(try p.require("p").vec2())
             point.inHandle = try p.field("in")?.vec2() ?? .zero
             point.outHandle = try p.field("out")?.vec2() ?? .zero
+            if let w = try p.field("w") {
+                let width = try w.number()
+                guard width >= 0 else { throw CharacterFileError.invalid(path: w.path, problem: "is negative") }
+                point.width = width
+            }
             point.isSmooth = try p.field("smooth")?.bool() ?? true
             if point.isSmooth, try p.field("symmetric")?.bool() ?? false { point.mode = .symmetric }
             points.append(point)
@@ -272,14 +333,53 @@ public enum CharacterFormat {
         let path = BezierPath(points: points, closed: try node.field("closed")?.bool() ?? false)
         var shape = VectorShape(id: id, path: path)
         shape.fill = try node.field("fill")?.color()
-        if let stroke = try node.field("stroke") {
-            let width = try stroke.require("width").number()
-            guard width >= 0 else { throw CharacterFileError.invalid(path: stroke.path + ".width", problem: "is negative") }
-            shape.stroke = StrokeStyle(color: try stroke.require("color").color(), width: width)
+        if shape.fill != nil {
+            // An unknown global color name leaves the plain color.
+            shape.fillGlobal = try node.field("fillGlobal").flatMap { globals[try $0.string()] }
+            shape.gradient = try node.field("gradient").map(gradient)
         }
+        if let stroke = try node.field("stroke") {
+            shape.stroke = try self.stroke(stroke, globals: globals)
+        }
+        if let opacity = try node.field("opacity")?.number() { shape.opacity = min(max(opacity, 0), 1) }
+        shape.isClipped = try node.field("clipped")?.bool() ?? false
         shape.isHidden = try node.field("hidden")?.bool() ?? false
         shape.isLocked = try node.field("locked")?.bool() ?? false
         return shape
+    }
+
+    private static func stroke(_ node: Node, globals: [String: Int]) throws -> StrokeStyle {
+        let width = try node.require("width").number()
+        guard width >= 0 else { throw CharacterFileError.invalid(path: node.path + ".width", problem: "is negative") }
+        var stroke = StrokeStyle(color: try node.require("color").color(), width: width)
+        stroke.global = try node.field("global").flatMap { globals[try $0.string()] }
+        stroke.cap = try node.field("cap")?.keyword(LineCap.self) ?? .round
+        stroke.join = try node.field("join")?.keyword(LineJoin.self) ?? .round
+        if let limit = try node.field("miterLimit") {
+            stroke.miterLimit = try limit.number()
+            guard stroke.miterLimit >= 1 else { throw CharacterFileError.invalid(path: limit.path, problem: "is less than 1") }
+        }
+        if let dash = try node.field("dash") {
+            stroke.dash = try dash.array().map { item in
+                let length = try item.number()
+                guard length >= 0 else { throw CharacterFileError.invalid(path: item.path, problem: "is negative") }
+                return length
+            }
+        }
+        stroke.dashOffset = try node.field("dashOffset")?.number() ?? 0
+        stroke.alignment = try node.field("align")?.keyword(StrokeAlignment.self) ?? .center
+        return stroke
+    }
+
+    private static func gradient(_ node: Node) throws -> Gradient {
+        var stops: [GradientStop] = []
+        for stop in try node.require("stops").array() {
+            let offset = min(max(try stop.require("offset").number(), 0), 1)
+            stops.append(GradientStop(offset: offset, color: try stop.require("color").color()))
+        }
+        guard !stops.isEmpty else { throw CharacterFileError.invalid(path: node.path + ".stops", problem: "is empty") }
+        return Gradient(kind: try node.require("type").keyword(Gradient.Kind.self),
+                        start: try node.require("start").vec2(), end: try node.require("end").vec2(), stops: stops)
     }
 
     // MARK: Versions
@@ -292,7 +392,15 @@ public enum CharacterFormat {
 
     /// Upgrade steps, oldest first. Add one here whenever the format changes in a way
     /// older files need rewriting, and bump `version`.
-    static let migrations: [Migration] = []
+    static let migrations: [Migration] = [
+        // 0.2 only adds optional keys, so a 0.1 file reads as it is.
+        Migration(to: FormatVersion(0, 2, 0)) { json in
+            guard case .object(var members) = json, let i = members.firstIndex(where: { $0.key == "formatVersion" })
+            else { return json }
+            members[i].value = .string("0.2.0")
+            return .object(members)
+        },
+    ]
 
     /// Checks `formatVersion` and upgrades an older file to the current format.
     public static func migrate(_ json: JSONValue) throws -> JSONValue {
@@ -377,6 +485,16 @@ private struct Node {
         let items = try array()
         guard items.count == 2 else { throw fail("is not an [x, y] pair") }
         return Vec2(try items[0].number(), try items[1].number())
+    }
+
+    /// A string naming one case of `T`.
+    func keyword<T: RawRepresentable & CaseIterable>(_: T.Type) throws -> T where T.RawValue == String {
+        let text = try string()
+        guard let value = T(rawValue: text) else {
+            let names = T.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", ")
+            throw fail("is not one of \(names)")
+        }
+        return value
     }
 
     func color() throws -> RGBAColor {

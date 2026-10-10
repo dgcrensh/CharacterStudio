@@ -420,7 +420,7 @@ extension DrawingEditor {
         let before = drawing
         var first = shape
         first.path = pieces[0]
-        if first.stroke == nil { first.stroke = StrokeStyle(color: style.outline, width: style.outlineWidth) }
+        if first.stroke == nil { first.stroke = style.makeStroke() }
         drawing.parts[idx.0].shapes[idx.1] = first
         var refs: Set<ShapeRef> = [ref]
         for (k, piece) in pieces.dropFirst().enumerated() {
