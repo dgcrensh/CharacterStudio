@@ -17,10 +17,12 @@ final class CanvasSessionTests: XCTestCase {
         s.touchEnded(id: 1, location: Vec2(540, 400))
 
         XCTAssertNil(s.liveStroke)
-        XCTAssertEqual(s.strokes.count, 1)
-        XCTAssertEqual(s.strokes[0].points, [Vec2(0, 0), Vec2(10, 0), Vec2(20, 0), Vec2(40, 0)])
-        XCTAssertTrue(s.strokes[0].predicted.isEmpty)
-        XCTAssertEqual(s.strokesRevision, 1)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+        let path = try! XCTUnwrap(s.editor.drawing.parts.first?.shapes.first?.path)
+        XCTAssertFalse(path.closed)
+        XCTAssertTrue(path.points.first!.position.isApproximately(Vec2(0, 0), tolerance: 1e-6))
+        XCTAssertTrue(path.points.last!.position.isApproximately(Vec2(40, 0), tolerance: 1e-6))
+        XCTAssertTrue(s.editor.canUndo)
     }
 
     func testCloseSamplesAreDropped() {
@@ -36,7 +38,7 @@ final class CanvasSessionTests: XCTestCase {
         s.touchMoved(id: 1, samples: [Vec2(50, 0)])
         s.touchCancelled(id: 1)
         XCTAssertNil(s.liveStroke)
-        XCTAssertTrue(s.strokes.isEmpty)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
     }
 
     func testOneFingerNeverDrawsOrMoves() {
@@ -46,7 +48,7 @@ final class CanvasSessionTests: XCTestCase {
         s.touchMoved(id: 1, samples: [Vec2(300, 300)])
         s.touchEnded(id: 1)
         XCTAssertEqual(s.camera, before)
-        XCTAssertTrue(s.strokes.isEmpty)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
         XCTAssertNil(s.liveStroke)
     }
 
@@ -86,7 +88,7 @@ final class CanvasSessionTests: XCTestCase {
         s.touchMoved(id: 1, samples: [Vec2(520, 400)])
         s.touchEnded(id: 1)
         XCTAssertTrue(s.camera.toScreen(.zero).isApproximately(Vec2(500, 400)))
-        XCTAssertEqual(s.strokes.count, 1)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
         // The ignored touches stay ignored after the Pencil lifts.
         s.touchMoved(id: 3, samples: [Vec2(0, 0)])
         XCTAssertFalse(s.isNavigating)
@@ -117,7 +119,7 @@ final class CanvasSessionTests: XCTestCase {
         s.touchEnded(id: 2)
         XCTAssertTrue(s.isDrawing)
         s.touchEnded(id: 1)
-        XCTAssertEqual(s.strokes.count, 1)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
     }
 
     func testStrokesFollowTheCamera() {
@@ -125,7 +127,7 @@ final class CanvasSessionTests: XCTestCase {
         s.camera = CanvasCamera(worldToScreen: .scale(2))
         s.touchBegan(id: 1, kind: .pencil, location: Vec2(100, 100))
         s.touchEnded(id: 1)
-        XCTAssertEqual(s.strokes[0].points, [Vec2(50, 50)])
+        XCTAssertEqual(s.editor.drawing.parts[0].shapes[0].path.points.map(\.position), [Vec2(50, 50)])
     }
 
     func testFingerDrawingInSimulatorTurnsIntoNavigation() {
@@ -137,7 +139,7 @@ final class CanvasSessionTests: XCTestCase {
         XCTAssertTrue(s.isNavigating)
         s.touchEnded(id: 1)
         s.touchEnded(id: 2)
-        XCTAssertTrue(s.strokes.isEmpty)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
     }
 
     func testFingerDrawingCommitsWhenAlone() {
@@ -145,15 +147,112 @@ final class CanvasSessionTests: XCTestCase {
         s.touchBegan(id: 1, kind: .finger, location: Vec2(400, 400))
         s.touchMoved(id: 1, samples: [Vec2(420, 400)])
         s.touchEnded(id: 1)
-        XCTAssertEqual(s.strokes.count, 1)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
     }
 
-    func testClearBumpsRevision() {
+    func testClearIsUndoable() {
         var s = session()
         s.touchBegan(id: 1, kind: .pencil, location: Vec2(0, 0))
         s.touchEnded(id: 1)
         s.clear()
-        XCTAssertTrue(s.strokes.isEmpty)
-        XCTAssertEqual(s.strokesRevision, 2)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
+        s.undo()
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+    }
+
+    // MARK: Multi-finger taps
+
+    private func drawLine(_ s: inout CanvasSession, id: Int, from a: Vec2, to b: Vec2) {
+        s.touchBegan(id: id, kind: .pencil, location: a)
+        s.touchMoved(id: id, samples: [Vec2.lerp(a, b, 0.5), b])
+        s.touchEnded(id: id, location: b)
+    }
+
+    func testTwoFingerTapUndoesAndThreeFingerTapRedoes() {
+        var s = session()
+        drawLine(&s, id: 1, from: Vec2(100, 100), to: Vec2(200, 100))
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+
+        s.touchBegan(id: 2, kind: .finger, location: Vec2(400, 400), time: 1.0)
+        s.touchBegan(id: 3, kind: .finger, location: Vec2(500, 400), time: 1.02)
+        s.touchMoved(id: 3, samples: [Vec2(502, 401)])
+        s.touchEnded(id: 2, location: Vec2(400, 400), time: 1.15)
+        s.touchEnded(id: 3, location: Vec2(502, 401), time: 1.16)
+        XCTAssertEqual(s.lastTapCommand, .undo)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
+        XCTAssertTrue(s.camera.toScreen(.zero).isApproximately(Vec2(500, 400)))
+
+        s.touchBegan(id: 4, kind: .finger, location: Vec2(400, 400), time: 2.0)
+        s.touchBegan(id: 5, kind: .finger, location: Vec2(500, 400), time: 2.01)
+        s.touchBegan(id: 6, kind: .finger, location: Vec2(600, 400), time: 2.02)
+        s.touchEnded(id: 4, time: 2.1)
+        s.touchEnded(id: 5, time: 2.1)
+        s.touchEnded(id: 6, time: 2.12)
+        XCTAssertEqual(s.lastTapCommand, .redo)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+        XCTAssertEqual(s.tapCommandCount, 2)
+    }
+
+    func testSlowOrMovingTwoFingerTouchIsNotATap() {
+        var s = session()
+        drawLine(&s, id: 1, from: Vec2(100, 100), to: Vec2(200, 100))
+
+        s.touchBegan(id: 2, kind: .finger, location: Vec2(400, 400), time: 1.0)
+        s.touchBegan(id: 3, kind: .finger, location: Vec2(500, 400), time: 1.0)
+        s.touchEnded(id: 2, time: 2.0)
+        s.touchEnded(id: 3, time: 2.0)
+        XCTAssertNil(s.lastTapCommand)
+
+        s.touchBegan(id: 4, kind: .finger, location: Vec2(400, 400), time: 3.0)
+        s.touchBegan(id: 5, kind: .finger, location: Vec2(500, 400), time: 3.0)
+        s.touchMoved(id: 4, samples: [Vec2(450, 400)])
+        s.touchEnded(id: 4, time: 3.1)
+        s.touchEnded(id: 5, time: 3.1)
+        XCTAssertNil(s.lastTapCommand)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+    }
+
+    // MARK: Tools
+
+    func testClosedStrokeBecomesFilledShape() {
+        var s = session()
+        s.touchBegan(id: 1, kind: .pencil, location: Vec2(400, 300))
+        var samples: [Vec2] = []
+        for i in 1...64 {
+            let a = Double(i) / 64 * 2 * .pi
+            samples.append(Vec2(500 - 100 * cos(a), 300 - 100 * sin(a)))
+        }
+        s.touchMoved(id: 1, samples: samples)
+        s.touchEnded(id: 1, location: samples.last!)
+        let shape = try! XCTUnwrap(s.editor.drawing.parts.first?.shapes.first)
+        XCTAssertTrue(shape.path.closed)
+        XCTAssertNotNil(shape.fill)
+        XCTAssertNotNil(shape.stroke)
+    }
+
+    func testSelectToolDragsAPart() {
+        var s = session()
+        drawLine(&s, id: 1, from: Vec2(100, 100), to: Vec2(300, 100))
+        s.editor.tool = .select
+        s.touchBegan(id: 2, kind: .pencil, location: Vec2(200, 100))
+        s.touchMoved(id: 2, samples: [Vec2(200, 150), Vec2(200, 200)])
+        s.touchEnded(id: 2, location: Vec2(200, 200))
+        let part = s.editor.drawing.parts[0]
+        XCTAssertEqual(s.editor.selection, .part(part.id))
+        let first = part.shapes[0].path.points[0].position
+        XCTAssertTrue(s.camera.toScreen(first).isApproximately(Vec2(100, 200), tolerance: 1e-6))
+        s.undo()
+        let restored = s.editor.drawing.parts[0].shapes[0].path.points[0].position
+        XCTAssertTrue(s.camera.toScreen(restored).isApproximately(Vec2(100, 100), tolerance: 1e-6))
+    }
+
+    func testFingersDoNotEditInSelectTool() {
+        var s = session()
+        drawLine(&s, id: 1, from: Vec2(100, 100), to: Vec2(300, 100))
+        s.editor.tool = .select
+        s.touchBegan(id: 2, kind: .finger, location: Vec2(200, 100))
+        s.touchMoved(id: 2, samples: [Vec2(200, 300)])
+        s.touchEnded(id: 2)
+        XCTAssertEqual(s.editor.selection, Selection.none)
     }
 }

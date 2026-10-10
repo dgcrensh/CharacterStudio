@@ -1,6 +1,6 @@
 /// Metal shaders, compiled at launch from source so the project needs no .metal
-/// build step. Struct layouts must match `CanvasUniforms` (CanvasRenderer.swift)
-/// and `CapsuleTessellator` (CharacterCore).
+/// build step. Struct layouts must match `CanvasUniforms` (CanvasRenderer.swift),
+/// `CapsuleTessellator` and `FillTessellator` (CharacterCore).
 enum ShaderSource {
     static let metal = """
     #include <metal_stdlib>
@@ -72,6 +72,45 @@ enum ShaderSource {
             discard_fragment();
         }
         return in.color * coverage; // premultiplied
+    }
+
+    // Fills use stencil-then-cover: the fan marks winding numbers in the stencil,
+    // then the cover quad paints where the stencil is non-zero (and clears it).
+    vertex float4 fill_vertex(uint vid [[vertex_id]],
+                              const device packed_float2 *positions [[buffer(0)]],
+                              constant Uniforms &u [[buffer(1)]]) {
+        return u.worldToClip * float4(float2(positions[vid]), 0.0, 1.0);
+    }
+
+    fragment float4 fill_fragment(constant float4 &color [[buffer(0)]]) {
+        return color; // premultiplied
+    }
+
+    struct ImageVertex {
+        packed_float2 world;
+        packed_float2 uv;
+    };
+
+    struct ImageOut {
+        float4 position [[position]];
+        float2 uv;
+    };
+
+    vertex ImageOut image_vertex(uint vid [[vertex_id]],
+                                 const device ImageVertex *vertices [[buffer(0)]],
+                                 constant Uniforms &u [[buffer(1)]]) {
+        ImageVertex v = vertices[vid];
+        ImageOut out;
+        out.position = u.worldToClip * float4(float2(v.world), 0.0, 1.0);
+        out.uv = float2(v.uv);
+        return out;
+    }
+
+    fragment float4 image_fragment(ImageOut in [[stage_in]],
+                                   texture2d<float> image [[texture(0)]],
+                                   sampler imageSampler [[sampler(0)]],
+                                   constant float &opacity [[buffer(0)]]) {
+        return image.sample(imageSampler, in.uv) * opacity; // premultiplied texels
     }
 
     struct GridOut {
