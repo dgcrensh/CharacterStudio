@@ -1,6 +1,9 @@
 import CharacterCore
 import QuartzCore
 import UIKit
+import os
+
+private let touchLog = Logger(subsystem: "com.dgcrensh.characterstudio", category: "touches")
 
 /// The drawing surface: a `CAMetalLayer`-backed view that forwards raw touches to
 /// the canvas session and redraws on the display's refresh (up to 120 Hz).
@@ -25,6 +28,9 @@ final class MetalCanvasView: UIView {
     /// Polls for a QuickShape hold while a stroke is drawn: a Pencil held still sends
     /// no events of its own to react to.
     private var quickShapeWatch: Task<Void, Never>?
+    /// Recognizers on views above the canvas that it switched off, to switch back on
+    /// when the canvas leaves the window.
+    private var disabledAncestorRecognizers: [UIGestureRecognizer] = []
 
     init(store: CanvasStore) {
         self.store = store
@@ -58,9 +64,12 @@ final class MetalCanvasView: UIView {
             contentScaleFactor = window.traitCollection.displayScale
             setNeedsLayout()
             startDisplayLink()
+            disableAncestorPinches()
         } else {
             displayLink?.invalidate()
             displayLink = nil
+            for recognizer in disabledAncestorRecognizers { recognizer.isEnabled = true }
+            disabledAncestorRecognizers = []
         }
     }
 
@@ -129,6 +138,36 @@ final class MetalCanvasView: UIView {
         gestureRecognizer.view === self && super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 
+    /// Refusing in `gestureRecognizerShouldBegin` is not enough for every system
+    /// recognizer: one that holds back or cancels touches while it decides still takes
+    /// a two-finger pinch (a three-finger one got through because a pinch recognizer
+    /// fails on a third touch). So pinch, rotation and edge-swipe recognizers on the
+    /// views above the canvas are switched off while it is on screen. Called again on
+    /// each touch, since the document's zoom transition adds its recognizers late.
+    private func disableAncestorPinches() {
+        var view = superview
+        while let current = view {
+            for recognizer in current.gestureRecognizers ?? [] where recognizer.isEnabled {
+                let name = String(describing: type(of: recognizer))
+                let steals = recognizer is UIPinchGestureRecognizer || recognizer is UIRotationGestureRecognizer
+                    || recognizer is UIScreenEdgePanGestureRecognizer
+                    || name.contains("Pinch") || name.contains("Zoom")
+                guard steals else { continue }
+                touchLog.debug("Switching off \(name, privacy: .public) on \(String(describing: type(of: current)), privacy: .public)")
+                recognizer.isEnabled = false
+                disabledAncestorRecognizers.append(recognizer)
+            }
+            view = current.superview
+        }
+    }
+
+    /// The system's three-finger editing gestures (swipe to undo, pinch to copy) would
+    /// act on the document behind the editor's back and fight three-finger navigation.
+    /// The canvas has its own two- and three-finger taps for undo and redo.
+    /// The system asks the first responder, so the canvas takes that role on touch.
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+    override var canBecomeFirstResponder: Bool { true }
+
     private func kind(of touch: UITouch) -> TouchKind? {
         switch touch.type {
         case .pencil: .pencil
@@ -145,6 +184,8 @@ final class MetalCanvasView: UIView {
         // Shift and Option on a hardware keyboard constrain and duplicate.
         if let event { store.setKeyboardModifiers(event.modifierFlags) }
         if store.ui.palettePoint != nil { store.hidePalette() }
+        disableAncestorPinches()
+        if !isFirstResponder { becomeFirstResponder() }
         for touch in touches {
             guard let touchKind = kind(of: touch) else { continue }
             let id = nextTouchID
@@ -207,6 +248,11 @@ final class MetalCanvasView: UIView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // A cancelled touch means something else took it; name the culprits when debugging.
+        let takers = touches.flatMap { $0.gestureRecognizers ?? [] }
+            .filter { $0.view !== self && ($0.state == .began || $0.state == .changed || $0.state == .ended) }
+            .map { String(describing: type(of: $0)) }
+        touchLog.debug("Touches cancelled; recognizers: \(takers, privacy: .public)")
         for touch in touches {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             store.session.touchCancelled(id: id)

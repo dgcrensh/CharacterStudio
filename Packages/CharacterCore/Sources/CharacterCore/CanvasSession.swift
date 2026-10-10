@@ -13,7 +13,9 @@ public struct InputOptions: Hashable, Sendable {
     /// on in the iOS Simulator, which has no Pencil.
     public var fingerDraws: Bool = false
     /// Touches with a major radius above this (in points) are treated as a resting palm.
-    public var palmMajorRadius: Double = 32
+    /// iPad reports finger radii in steps of about 10.4 pt, and a fingertip pressed
+    /// into a pinch often reads 41.8, so the cut sits above 52.3 and below a palm.
+    public var palmMajorRadius: Double = 56
     /// Samples closer than this many screen points to the previous one are dropped.
     public var minSampleSpacing: Double = 0.5
     /// A multi-finger tap must lift within this many seconds...
@@ -25,7 +27,7 @@ public struct InputOptions: Hashable, Sendable {
     /// ...within this many screen points snaps the stroke to a clean shape.
     public var quickShapeStillness: Double = 4
 
-    public init(fingerDraws: Bool = false, palmMajorRadius: Double = 32, minSampleSpacing: Double = 0.5,
+    public init(fingerDraws: Bool = false, palmMajorRadius: Double = 56, minSampleSpacing: Double = 0.5,
                 tapMaxDuration: Double = 0.35, tapMaxMovement: Double = 12,
                 quickShapeDelay: Double = 0.5, quickShapeStillness: Double = 4) {
         self.fingerDraws = fingerDraws

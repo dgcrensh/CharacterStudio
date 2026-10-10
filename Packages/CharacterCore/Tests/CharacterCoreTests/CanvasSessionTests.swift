@@ -116,6 +116,43 @@ final class CanvasSessionTests: XCTestCase {
         XCTAssertFalse(s.isNavigating)
     }
 
+    func testFirmFingertipsStillPinch() {
+        // iPad reports a fingertip pressed into a pinch at about 41.8 pt.
+        var s = session()
+        s.touchBegan(id: 1, kind: .finger, location: Vec2(400, 400), majorRadius: 41.8)
+        s.touchBegan(id: 2, kind: .finger, location: Vec2(600, 400), majorRadius: 41.8)
+        XCTAssertTrue(s.isNavigating)
+        s.touchMoved(id: 1, samples: [Vec2(300, 400)])
+        s.touchMoved(id: 2, samples: [Vec2(700, 400)])
+        XCTAssertEqual(s.camera.zoom, 2, accuracy: 1e-9)
+    }
+
+    func testErasedStrokeStaysGoneAfterPinch() {
+        var s = session()
+        s.touchBegan(id: 1, kind: .pencil, location: Vec2(500, 400))
+        s.touchMoved(id: 1, samples: [Vec2(540, 400), Vec2(580, 400)])
+        s.touchEnded(id: 1, location: Vec2(600, 400))
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+
+        s.editor.tool = .eraser
+        s.touchBegan(id: 2, kind: .pencil, location: Vec2(550, 370), time: 1)
+        s.touchMoved(id: 2, samples: [Vec2(550, 400), Vec2(550, 430)], time: 1.1)
+        s.touchEnded(id: 2, location: Vec2(550, 430), time: 1.2)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
+
+        s.touchBegan(id: 3, kind: .finger, location: Vec2(400, 400), time: 2)
+        s.touchBegan(id: 4, kind: .finger, location: Vec2(600, 400), time: 2)
+        s.touchMoved(id: 3, samples: [Vec2(300, 400)], time: 2.1)
+        s.touchMoved(id: 4, samples: [Vec2(700, 400)], time: 2.1)
+        s.touchEnded(id: 3, location: Vec2(300, 400), time: 2.2)
+        s.touchEnded(id: 4, location: Vec2(700, 400), time: 2.2)
+        XCTAssertEqual(s.camera.zoom, 2, accuracy: 1e-9)
+        XCTAssertEqual(s.editor.drawing.shapeCount, 0)
+        // The erase is one undo step.
+        s.undo()
+        XCTAssertEqual(s.editor.drawing.shapeCount, 1)
+    }
+
     func testPencilInterruptsNavigation() {
         var s = session()
         s.touchBegan(id: 1, kind: .finger, location: Vec2(400, 400))

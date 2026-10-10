@@ -43,7 +43,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 
 ## Milestone 1 notes
 
-- **Input routing** lives in `CanvasSession` (CharacterCore) so it is unit-tested: the Pencil draws, one finger does nothing, two fingers pan, pinch-zoom and rotate together, fingers are ignored while the Pencil is down, and wide contacts (major radius over 32 pt) are treated as a palm. Over the canvas the system's own gestures (pinching a document closed, swiping back from the edge) are switched off so they cannot steal a two-finger pinch; use the back button to close the document.
+- **Input routing** lives in `CanvasSession` (CharacterCore) so it is unit-tested: the Pencil draws, one finger does nothing, two fingers pan, pinch-zoom and rotate together, fingers are ignored while the Pencil is down, and wide contacts (major radius over 56 pt, above a firmly pressed fingertip) are treated as a palm. Over the canvas the system's own gestures (pinching a document closed, swiping back from the edge, and the three-finger undo, copy and paste gestures) are switched off so they cannot steal a pinch or undo the document behind the editor; use the back button to close the document.
 - **Latency:** each move event feeds all coalesced samples plus predicted samples into the live stroke; a 120 Hz display link draws on the next frame. The Metal layer uses two drawables to save a frame.
 - **Rendering:** each stroke segment is a quad whose fragment shader draws an anti-aliased capsule, which gives round caps and joins at any zoom. Finished strokes are tessellated once into a cached buffer; the camera is applied on the GPU, so navigation never re-tessellates.
 - **Canvas:** infinite, with a dot grid (larger dot at the world origin) so pan, zoom (5% to 6400%) and rotation are visible.
@@ -53,7 +53,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 
 **Using it**
 
-- **Layout:** the tools, undo and redo, Inspector, Layers and the More menu run down a vertical strip on the left edge. The context bar (the current tool's options) sits at the right of the top bar, beside the document title, and the style bar along the bottom.
+- **Layout:** the tools, undo and redo, Inspector, Layers and the More menu run down a vertical strip on the left edge. The context bar (the current tool's options) sits at the right of the top bar, beside the document title; when the current tool has more controls than fit, the bar scrolls sideways. The style bar runs along the bottom.
 - **Pencil** (pencil tip, formerly Brush): draw freehand with the Pencil. Each stroke is fitted to an editable Bézier path when you lift. A stroke that ends near its start closes into a filled shape; an open stroke is an outline. The smoothing slider (Pencil tool only) trades accuracy for smoother curves.
 - **Parts:** a new stroke or pen path starts a new part. Turn on **Auto-join selected part** (Pencil context bar) and a stroke that overlaps the selected part, or a pen path, joins it instead. It is off by default.
 - **Pen** (pen nib): tap to place a corner anchor; drag right after placing to pull out a symmetric handle. Tap the first anchor to close the path. Tap the end of an existing open path to continue it, or the end of another open path (while drawing) to join the two. **Done**, or tapping the last anchor again (double-tap), ends an open path. A rubber band previews the next segment when the Pencil hovers (iPad Pencil hover, or a pointer in the Simulator). Each anchor is one undo step.

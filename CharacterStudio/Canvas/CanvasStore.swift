@@ -84,6 +84,10 @@ final class CanvasStore {
     /// The drawing revision and contents last handed to the document.
     private var documentRevision: Int
     private var document: CharacterPackage
+    /// Versions recently handed to the document, newest last. One of them coming back
+    /// is the system undoing the document behind the editor (its three-finger swipe or
+    /// shake), not an edit made elsewhere.
+    private var sentDocuments: [CharacterPackage] = []
     private var seenTapCommands = 0
 
     init(package: CharacterPackage = CharacterPackage()) {
@@ -96,6 +100,7 @@ final class CanvasStore {
         referenceData = package.referenceImages
         document = package
         documentRevision = session.editor.revision
+        sentDocuments = [package]
         refresh()
     }
 
@@ -117,6 +122,8 @@ final class CanvasStore {
         let drawing = editor.drawing
         let images = referenceData.filter { id, _ in drawing.referenceIndex(id) != nil }
         document = CharacterPackage(drawing: drawing, referenceImages: images)
+        sentDocuments.append(document)
+        if sentDocuments.count > 32 { sentDocuments.removeFirst() }
         onDocumentChange?(document)
     }
 
@@ -124,6 +131,11 @@ final class CanvasStore {
     /// example, edited on another device). Undoable like any other change.
     func documentChanged(_ package: CharacterPackage) {
         guard package != document else { return }
+        if sentDocuments.contains(package) {
+            // The editor has its own undo; keep the canvas and put the document back in step.
+            onDocumentChange?(document)
+            return
+        }
         var drawing = package.drawing
         drawing.nextID = max(drawing.nextID, session.editor.drawing.nextID)
         // Fresh reference ids, so cached pixels and textures never mix up images.

@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Binding var document: CharacterDocument
     @State private var store: CanvasStore
+    /// The canvas width, which bounds the context bar in the navigation bar.
+    @State private var canvasWidth: CGFloat = 0
 
     init(document: Binding<CharacterDocument>) {
         _document = document
@@ -15,6 +17,7 @@ struct ContentView: View {
     var body: some View {
         CanvasRepresentable(store: store)
             .ignoresSafeArea()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { canvasWidth = $0 }
             .overlay(alignment: .leading) {
                 ToolBar(store: store, ui: store.ui)
                     .padding(.leading, 16)
@@ -48,7 +51,10 @@ struct ContentView: View {
             // title, and a tap anywhere in it opens the rename menu.
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { ContextBar(store: store, ui: store.ui) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Leave room for the back button and the title.
+                    ContextBar(store: store, ui: store.ui, maxWidth: max(280, canvasWidth - 380))
+                }
                     // The context bar draws its own capsule, like the tool and style bars.
                     .sharedBackgroundVisibility(.hidden)
             }
@@ -211,15 +217,22 @@ private struct ToolButton: View {
 private struct ContextBar: View {
     let store: CanvasStore
     let ui: EditorUIState
+    /// The widest the bar may be, capsule included.
+    let maxWidth: CGFloat
 
+    /// A navigation bar item is offered as much width as it asks for, so the bar sizes
+    /// itself: as wide as its controls up to `maxWidth`, scrolling beyond that rather
+    /// than running off the edge of the screen.
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            controls
-            ScrollView(.horizontal, showsIndicators: false) { controls }
+        ScrollView(.horizontal, showsIndicators: false) {
+            controls.padding(.horizontal, 20)
         }
-        .padding(.horizontal, 20)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: max(maxWidth, 0))
+        .fixedSize()
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
+        .clipShape(Capsule())
     }
 
     private var controls: some View {
