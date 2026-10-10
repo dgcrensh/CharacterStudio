@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Binding var document: CharacterDocument
     @State private var store: CanvasStore
+    /// The canvas width, which bounds the context bar in the navigation bar.
+    @State private var canvasWidth: CGFloat = 0
 
     init(document: Binding<CharacterDocument>) {
         _document = document
@@ -15,12 +17,20 @@ struct ContentView: View {
     var body: some View {
         CanvasRepresentable(store: store)
             .ignoresSafeArea()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { canvasWidth = $0 }
             .overlay(alignment: .leading) {
                 ToolBar(store: store, ui: store.ui)
                     .padding(.leading, 16)
             }
+            .overlay(alignment: .trailing) {
+                ModifierStrip(store: store, ui: store.ui)
+                    .padding(.trailing, 16)
+            }
             .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
             .overlay { ToastView(ui: store.ui) }
+            .overlay { PencilPalette(store: store, ui: store.ui) }
+            // Keyboard shortcuts (EditorCommands) act on the focused document's canvas.
+            .focusedSceneValue(\.canvasStore, store)
             .onDrop(of: [.image], isTargeted: nil) { providers in
                 let store = store
                 for provider in providers {
@@ -41,7 +51,10 @@ struct ContentView: View {
             // title, and a tap anywhere in it opens the rename menu.
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { ContextBar(store: store, ui: store.ui) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Leave room for the back button and the title.
+                    ContextBar(store: store, ui: store.ui, maxWidth: max(280, canvasWidth - 380))
+                }
                     // The context bar draws its own capsule, like the tool and style bars.
                     .sharedBackgroundVisibility(.hidden)
             }
@@ -64,28 +77,38 @@ private struct ToolBar: View {
     @State private var showingInspector = false
 
     var body: some View {
+        // On a short screen (landscape) the strip scrolls rather than running off the edge.
+        ViewThatFits(in: .vertical) {
+            strip
+            ScrollView(.vertical, showsIndicators: false) { strip }
+        }
+        .labelStyle(.iconOnly)
+        .font(.title3)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 16)
+        .background(.regularMaterial, in: Capsule())
+        // On the strip as a whole, since ViewThatFits builds it twice.
+        .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
+        .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
+        .padding(.vertical, 16)
+    }
+
+    private var strip: some View {
         VStack(spacing: 12) {
-            ToolButton(store: store, ui: ui, tool: .pencil, title: "Pencil", systemImage: "pencil.tip")
-            ToolButton(store: store, ui: ui, tool: .pen, title: "Pen", systemImage: "pencil.and.outline")
-            ToolButton(store: store, ui: ui, tool: .select, title: "Select", systemImage: "cursorarrow")
-            ToolButton(store: store, ui: ui, tool: .directSelect, title: "Direct Select",
-                       systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+            ForEach(ToolButton.all, id: \.tool) { item in
+                ToolButton(store: store, ui: ui, tool: item.tool, title: item.title, systemImage: item.systemImage)
+            }
 
             Divider().frame(width: 24)
             Button("Undo", systemImage: "arrow.uturn.backward") { store.undo() }
                 .disabled(!ui.canUndo)
             Button("Redo", systemImage: "arrow.uturn.forward") { store.redo() }
                 .disabled(!ui.canRedo)
-
-            if ui.selection != .none {
-                Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
-            }
+            EditMenu(store: store, ui: ui)
 
             Divider().frame(width: 24)
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
-                .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
-                .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
             Menu {
                 Button("Reset View", systemImage: "scope") { store.resetView() }
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) { store.clear() }
@@ -93,11 +116,66 @@ private struct ToolBar: View {
                 Label("More", systemImage: "ellipsis.circle")
             }
         }
-        .labelStyle(.iconOnly)
-        .font(.title3)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 16)
-        .background(.regularMaterial, in: Capsule())
+    }
+}
+
+/// Duplicate, the clipboard, delete, arrange, hide and lock, and isolation, for the
+/// selection. The same commands have keyboard shortcuts (`EditorCommands`).
+private struct EditMenu: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+
+    var body: some View {
+        Menu {
+            Button("Duplicate", systemImage: "plus.square.on.square") { store.duplicate() }
+                .disabled(!ui.canArrange)
+            Button("Cut", systemImage: "scissors") { store.cut() }
+                .disabled(!ui.canArrange)
+            Button("Copy", systemImage: "doc.on.doc") { store.copy() }
+                .disabled(!ui.canArrange)
+            Button("Paste", systemImage: "doc.on.clipboard") { store.paste() }
+            Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
+                .disabled(ui.selection == .none)
+
+            Divider()
+            Menu("Arrange", systemImage: "square.3.layers.3d.top.filled") {
+                Button("Bring to Front", systemImage: "square.3.layers.3d.top.filled") { store.arrange(.bringToFront) }
+                Button("Bring Forward", systemImage: "square.2.layers.3d.top.filled") { store.arrange(.bringForward) }
+                Button("Send Backward", systemImage: "square.2.layers.3d.bottom.filled") { store.arrange(.sendBackward) }
+                Button("Send to Back", systemImage: "square.3.layers.3d.bottom.filled") { store.arrange(.sendToBack) }
+            }
+            .disabled(!ui.canArrange)
+            if ui.canMoveShapes {
+                Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
+                Menu("Move to Part", systemImage: "arrow.right.square") {
+                    ForEach(ui.layers.bones.flatMap(\.parts)) { part in
+                        Button(part.name) { store.moveSelection(toPart: part.id) }
+                    }
+                }
+            }
+
+            Divider()
+            Button("Hide", systemImage: "eye.slash") { store.hideSelection() }
+                .disabled(!ui.canHideOrLock)
+            Button("Lock", systemImage: "lock") { store.lockSelection() }
+                .disabled(!ui.canHideOrLock)
+            if ui.hasHiddenArt {
+                Button("Show All", systemImage: "eye") { store.showAll() }
+            }
+            if ui.hasLockedArt {
+                Button("Unlock All", systemImage: "lock.open") { store.unlockAll() }
+            }
+
+            Divider()
+            if ui.isolatedPart != nil {
+                Button("Exit Isolation", systemImage: "scope") { store.exitIsolation() }
+            } else {
+                Button("Isolate Part", systemImage: "scope") { store.isolateSelection() }
+                    .disabled(ui.selectedPart == nil)
+            }
+        } label: {
+            Label("Edit", systemImage: "square.on.square.dashed")
+        }
     }
 }
 
@@ -108,6 +186,17 @@ private struct ToolButton: View {
     let tool: Tool
     let title: String
     let systemImage: String
+
+    /// Every tool, in strip order, with its name and symbol.
+    static let all: [(tool: Tool, title: String, systemImage: String)] = [
+        (.pencil, "Pencil", "pencil.tip"),
+        (.pen, "Pen", "pencil.and.outline"),
+        (.shape, "Shapes", "square.on.circle"),
+        (.select, "Select", "cursorarrow"),
+        (.directSelect, "Direct Select", "point.topleft.down.to.point.bottomright.curvepath"),
+        (.eraser, "Eraser", "eraser"),
+        (.scissors, "Scissors", "scissors"),
+    ]
 
     var body: some View {
         let isCurrent = ui.tool == tool
@@ -128,19 +217,36 @@ private struct ToolButton: View {
 private struct ContextBar: View {
     let store: CanvasStore
     let ui: EditorUIState
+    /// The widest the bar may be, capsule included.
+    let maxWidth: CGFloat
 
+    /// A navigation bar item is offered as much width as it asks for, so the bar sizes
+    /// itself: as wide as its controls up to `maxWidth`, scrolling beyond that rather
+    /// than running off the edge of the screen.
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            controls
-            ScrollView(.horizontal, showsIndicators: false) { controls }
+        ScrollView(.horizontal, showsIndicators: false) {
+            controls.padding(.horizontal, 20)
         }
-        .padding(.horizontal, 20)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: max(maxWidth, 0))
+        .fixedSize()
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
+        .clipShape(Capsule())
     }
 
     private var controls: some View {
         HStack(spacing: 14) {
+            if ui.isolatedPart != nil {
+                Button { store.exitIsolation() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "scope")
+                        Text("Exit \(ui.isolatedPartName)").lineLimit(1)
+                    }
+                }
+                .accessibilityLabel("Exit isolation")
+                Divider().frame(height: 24)
+            }
             switch ui.tool {
             case .pencil:
                 Toggle(isOn: Binding(get: { ui.autoJoin }, set: { store.setAutoJoin($0) })) {
@@ -158,9 +264,19 @@ private struct ContextBar: View {
                     Label("Add", systemImage: "plus.square.on.square")
                 }
                 .toggleStyle(.button)
+            case .shape:
+                shapeControls
+            case .eraser:
+                Text("Drag across shapes to delete them")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .scissors:
+                Text("Tap an outline to cut it there")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
-            if ui.tool != .pencil { snapMenu }
+            if [Tool.pen, .shape, .select, .directSelect].contains(ui.tool) { snapMenu }
 
             if ui.tool == .directSelect, ui.anchorCount > 0 { pointControls }
             if ui.canJoin, ui.tool == .select || ui.tool == .directSelect {
@@ -171,6 +287,46 @@ private struct ContextBar: View {
                 nudgeControls
             }
         }
+    }
+
+    /// The shape picker and the current shape's settings.
+    @ViewBuilder
+    private var shapeControls: some View {
+        Picker("Shape", selection: Binding(get: { ui.shapeKind }, set: { store.setShapeKind($0) })) {
+            Image(systemName: "rectangle").accessibilityLabel("Rectangle").tag(ShapeKind.rectangle)
+            Image(systemName: "circle").accessibilityLabel("Ellipse").tag(ShapeKind.ellipse)
+            Image(systemName: "hexagon").accessibilityLabel("Polygon").tag(ShapeKind.polygon)
+            Image(systemName: "star").accessibilityLabel("Star").tag(ShapeKind.star)
+            Image(systemName: "line.diagonal").accessibilityLabel("Line").tag(ShapeKind.line)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 220)
+        switch ui.shapeKind {
+        case .rectangle:
+            Stepper("Corners \(Int(ui.shapeOptions.cornerRadius)) pt", value: shapeOption(\.cornerRadius), in: 0...200, step: 2)
+                .fixedSize()
+        case .polygon:
+            Stepper("\(ui.shapeOptions.sides) sides", value: shapeOption(\.sides), in: 3...12)
+                .fixedSize()
+        case .star:
+            Stepper("\(ui.shapeOptions.sides) points", value: shapeOption(\.sides), in: 3...12)
+                .fixedSize()
+            Slider(value: shapeOption(\.innerRatio), in: 0.2...0.9)
+                .frame(width: 90)
+                .accessibilityLabel("Inner radius")
+        case .ellipse, .line:
+            EmptyView()
+        }
+        Text("Shift: square, Option: from center")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+
+    private func shapeOption<T>(_ keyPath: WritableKeyPath<ShapeToolOptions, T>) -> Binding<T> {
+        Binding(
+            get: { ui.shapeOptions[keyPath: keyPath] },
+            set: { var options = ui.shapeOptions; options[keyPath: keyPath] = $0; store.setShapeOptions(options) }
+        )
     }
 
     private var snapMenu: some View {
@@ -322,6 +478,138 @@ private struct PaletteRow: View {
                 Label("Add to Palette", systemImage: "plus.circle")
             }
         }
+    }
+}
+
+/// Latching Shift and Option keys for when there is no keyboard: Shift constrains
+/// (square shapes, 45-degree lines, one-axis moves, 15-degree turns) and Option draws
+/// shapes from their center and makes a drag move a copy.
+private struct ModifierStrip: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+
+    var body: some View {
+        VStack(spacing: 12) {
+            toggle(.constrain, title: "Shift", systemImage: "shift")
+            toggle(.alternate, title: "Option", systemImage: "option")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: Capsule())
+    }
+
+    private func toggle(_ key: EditorModifiers, title: String, systemImage: String) -> some View {
+        let isOn = ui.stripModifiers.contains(key)
+        return Button {
+            var modifiers = ui.stripModifiers
+            if isOn { modifiers.remove(key) } else { modifiers.insert(key) }
+            store.setStripModifiers(modifiers)
+        } label: {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .frame(width: 36, height: 36)
+                .foregroundStyle(isOn ? Color.white : Color.primary)
+                .background(isOn ? Color.accentColor : Color.clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// The palette the Pencil's squeeze (or double tap, if set to show the palette) opens
+/// under the Pencil: the tools round the outside, undo and redo, and recent colors
+/// inside. Tapping anywhere else closes it.
+private struct PencilPalette: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    private let radius: CGFloat = 96
+    private let colorRadius: CGFloat = 50
+
+    var body: some View {
+        if let point = ui.palettePoint {
+            GeometryReader { geometry in
+                ZStack {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.hidePalette() }
+                    ring
+                        .position(clamped(point, in: geometry.size))
+                }
+            }
+            .ignoresSafeArea()
+            .transition(.opacity)
+        }
+    }
+
+    private var ring: some View {
+        let tools = ToolButton.all
+        let actions: [(title: String, systemImage: String, run: () -> Void)] = [
+            ("Undo", "arrow.uturn.backward", { store.undo() }),
+            ("Redo", "arrow.uturn.forward", { store.redo() }),
+        ]
+        let count = tools.count + actions.count
+        let colors = Array(ui.recentColors.prefix(6))
+        return ZStack {
+            Circle()
+                .fill(.regularMaterial)
+                .frame(width: (radius + 30) * 2, height: (radius + 30) * 2)
+            ForEach(Array(tools.enumerated()), id: \.offset) { index, item in
+                paletteButton(item.title, systemImage: item.systemImage, selected: ui.tool == item.tool) {
+                    store.setTool(item.tool)
+                }
+                .offset(offset(index, of: count, radius: radius))
+            }
+            ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
+                paletteButton(action.title, systemImage: action.systemImage, selected: false, action: action.run)
+                    .offset(offset(tools.count + index, of: count, radius: radius))
+            }
+            ForEach(Array(colors.enumerated()), id: \.offset) { index, color in
+                Button {
+                    store.applyPaletteFill(color)
+                    store.hidePalette()
+                } label: {
+                    Circle()
+                        .fill(color.color)
+                        .overlay(Circle().strokeBorder(.secondary, lineWidth: 1))
+                        .frame(width: 26, height: 26)
+                }
+                .accessibilityLabel("Fill \(color.hexString)")
+                .offset(offset(index, of: max(colors.count, 1), radius: colorRadius))
+            }
+            Button("Close", systemImage: "xmark") { store.hidePalette() }
+                .labelStyle(.iconOnly)
+                .font(.footnote.weight(.semibold))
+        }
+    }
+
+    private func paletteButton(_ title: String, systemImage: String, selected: Bool,
+                               action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            store.hidePalette()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .frame(width: 40, height: 40)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .background(selected ? Color.accentColor : Color.clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(title)
+    }
+
+    /// Item `index` of `count`, evenly round a circle starting at the top.
+    private func offset(_ index: Int, of count: Int, radius: CGFloat) -> CGSize {
+        let angle = -Double.pi / 2 + 2 * Double.pi * Double(index) / Double(count)
+        return CGSize(width: CGFloat(cos(angle)) * radius, height: CGFloat(sin(angle)) * radius)
+    }
+
+    /// Keeps the whole palette on screen.
+    private func clamped(_ p: CGPoint, in size: CGSize) -> CGPoint {
+        let margin = radius + 40
+        return CGPoint(x: min(max(p.x, margin), max(size.width - margin, margin)),
+                       y: min(max(p.y, margin), max(size.height - margin, margin)))
     }
 }
 

@@ -13,21 +13,30 @@ public struct InputOptions: Hashable, Sendable {
     /// on in the iOS Simulator, which has no Pencil.
     public var fingerDraws: Bool = false
     /// Touches with a major radius above this (in points) are treated as a resting palm.
-    public var palmMajorRadius: Double = 32
+    /// iPad reports finger radii in steps of about 10.4 pt, and a fingertip pressed
+    /// into a pinch often reads 41.8, so the cut sits above 52.3 and below a palm.
+    public var palmMajorRadius: Double = 56
     /// Samples closer than this many screen points to the previous one are dropped.
     public var minSampleSpacing: Double = 0.5
     /// A multi-finger tap must lift within this many seconds...
     public var tapMaxDuration: Double = 0.35
     /// ...and no finger may move further than this many screen points.
     public var tapMaxMovement: Double = 12
+    /// QuickShape: holding the Pencil this many seconds at the end of a stroke...
+    public var quickShapeDelay: Double = 0.5
+    /// ...within this many screen points snaps the stroke to a clean shape.
+    public var quickShapeStillness: Double = 4
 
-    public init(fingerDraws: Bool = false, palmMajorRadius: Double = 32, minSampleSpacing: Double = 0.5,
-                tapMaxDuration: Double = 0.35, tapMaxMovement: Double = 12) {
+    public init(fingerDraws: Bool = false, palmMajorRadius: Double = 56, minSampleSpacing: Double = 0.5,
+                tapMaxDuration: Double = 0.35, tapMaxMovement: Double = 12,
+                quickShapeDelay: Double = 0.5, quickShapeStillness: Double = 4) {
         self.fingerDraws = fingerDraws
         self.palmMajorRadius = palmMajorRadius
         self.minSampleSpacing = minSampleSpacing
         self.tapMaxDuration = tapMaxDuration
         self.tapMaxMovement = tapMaxMovement
+        self.quickShapeDelay = quickShapeDelay
+        self.quickShapeStillness = quickShapeStillness
     }
 }
 
@@ -57,6 +66,10 @@ public struct CanvasSession: Sendable {
 
     /// The pencil stroke being drawn right now, including predicted samples.
     public private(set) var liveStroke: InkStroke?
+    /// The clean shape the live stroke snapped to (QuickShape), committed on lift.
+    public private(set) var quickShape: BezierPath?
+    /// Where and when the Pencil last moved more than `quickShapeStillness`, in screen points.
+    private var stillSince: (point: Vec2, time: Double)?
     /// The last multi-finger tap command, and a counter that changes with each one.
     public private(set) var lastTapCommand: TapCommand?
     public private(set) var tapCommandCount = 0
@@ -107,7 +120,30 @@ public struct CanvasSession: Sendable {
     /// pen tool draws its rubber band to it.
     public mutating func pencilHovered(at location: Vec2?) {
         guard drawingTouch == nil else { return }
-        editor.pencilHovered(at: location.map { camera.toWorld($0) })
+        editor.pencilHovered(at: location.map { camera.toWorld($0) }, zoom: camera.zoom)
+    }
+
+    /// Checks for a QuickShape hold: the app calls this on a timer while the Pencil is
+    /// down, since a still Pencil sends no events. When the Pencil has stayed put for
+    /// `quickShapeDelay` at the end of a freehand stroke that looks like a line, arc,
+    /// ellipse, rectangle or polygon, the stroke snaps to that shape. Returns true when
+    /// it snapped. After a line snaps, its end keeps following the Pencil.
+    @discardableResult
+    public mutating func checkQuickShape(time: Double) -> Bool {
+        guard quickShape == nil, var stroke = liveStroke, let still = stillSince,
+              time - still.time >= options.quickShapeDelay,
+              let path = ShapeRecognizer.recognize(stroke.points, zoom: camera.zoom) else { return false }
+        quickShape = path
+        stroke.points = Self.preview(of: path, zoom: camera.zoom)
+        stroke.predicted = []
+        liveStroke = stroke
+        return true
+    }
+
+    /// The polyline the live stroke shows for a QuickShape.
+    private static func preview(of path: BezierPath, zoom: Double) -> [Vec2] {
+        let poly = path.flattened(tolerance: 0.25 / max(zoom, 1e-9))
+        return path.closed && poly.count > 2 ? poly + [poly[0]] : poly
     }
 
     // MARK: Touches (screen-space points, times in seconds)
@@ -127,6 +163,7 @@ public struct CanvasSession: Sendable {
             fingerOrder.removeAll()
             tap = nil
             beginPencil(touch: id, at: location)
+            stillSince = (location, time)
 
         case .finger:
             if majorRadius > options.palmMajorRadius || (drawingTouch != nil && !isFingerDrawing) {
@@ -139,6 +176,7 @@ public struct CanvasSession: Sendable {
                 // so a second finger can turn the touch into navigation.
                 trackFinger(id, at: location)
                 beginPencil(touch: id, at: location)
+                stillSince = (location, time)
                 return
             }
             guard fingerOrder.count < 2 else {
@@ -153,7 +191,8 @@ public struct CanvasSession: Sendable {
 
     /// `samples` are the coalesced locations since the last call, oldest first, ending
     /// with the current location. `predicted` are the system's predicted locations.
-    public mutating func touchMoved(id: Int, samples: [Vec2], predicted: [Vec2] = []) {
+    /// `time` (seconds, as touches report it) lets a Pencil held still trigger QuickShape.
+    public mutating func touchMoved(id: Int, samples: [Vec2], predicted: [Vec2] = [], time: Double? = nil) {
         guard let current = samples.last else { return }
         if var t = tap, let start = t.starts[id] {
             if current.distance(to: start) > options.tapMaxMovement { t.moved = true }
@@ -162,11 +201,22 @@ public struct CanvasSession: Sendable {
         guard !ignored.contains(id) else { return }
 
         if id == drawingTouch {
-            if var stroke = liveStroke {
+            if var shape = quickShape, var stroke = liveStroke {
+                // A snapped line keeps following the Pencil; other shapes stay put.
+                if !shape.closed, shape.points.count == 2, shape.points[1].inHandle == .zero {
+                    shape.points[1].position = camera.toWorld(current)
+                    quickShape = shape
+                    stroke.points = Self.preview(of: shape, zoom: camera.zoom)
+                    liveStroke = stroke
+                }
+            } else if var stroke = liveStroke {
                 let spacing = options.minSampleSpacing / camera.zoom
                 for s in samples { stroke.append(camera.toWorld(s), minSpacing: spacing) }
                 stroke.predicted = predicted.map { camera.toWorld($0) }
                 liveStroke = stroke
+                if let time, stillSince.map({ current.distance(to: $0.point) > options.quickShapeStillness }) ?? true {
+                    stillSince = (current, time)
+                }
             } else {
                 editor.pencilMoved(to: camera.toWorld(current))
             }
@@ -189,7 +239,7 @@ public struct CanvasSession: Sendable {
         if ignored.remove(id) != nil { return }
         if id == drawingTouch {
             if let location { touchMoved(id: id, samples: [location]) }
-            finishPencil(at: location)
+            finishPencil(at: location, time: time)
         }
         releaseFinger(id)
     }
@@ -229,6 +279,7 @@ public struct CanvasSession: Sendable {
 
     private mutating func beginPencil(touch: Int, at location: Vec2) {
         drawingTouch = touch
+        quickShape = nil
         let world = camera.toWorld(location)
         switch editor.tool {
         case .pencil:
@@ -238,25 +289,31 @@ public struct CanvasSession: Sendable {
             let color = style.outlineEnabled || !style.fillEnabled ? style.outline : style.fill
             liveStroke = InkStroke(id: nextStrokeID, start: world, brush: Brush(width: style.outlineWidth, color: color))
             nextStrokeID += 1
-        case .pen, .select, .directSelect:
+        case .pen, .select, .directSelect, .shape, .eraser, .scissors:
             editor.pencilBegan(at: world, zoom: camera.zoom)
         }
     }
 
-    private mutating func finishPencil(at location: Vec2?) {
-        if let stroke = liveStroke {
+    private mutating func finishPencil(at location: Vec2?, time: Double?) {
+        if let shape = quickShape {
+            editor.addPath(shape)
+        } else if let stroke = liveStroke {
             editor.addStroke(stroke.points, zoom: camera.zoom)
         } else if let id = drawingTouch {
             let world = location.map { camera.toWorld($0) } ?? fingers[id].map { camera.toWorld($0) }
-            if let world { editor.pencilEnded(at: world) } else { editor.pencilCancelled() }
+            if let world { editor.pencilEnded(at: world, time: time) } else { editor.pencilCancelled() }
         }
         liveStroke = nil
+        quickShape = nil
+        stillSince = nil
         drawingTouch = nil
     }
 
     private mutating func cancelPencil() {
         if liveStroke == nil, drawingTouch != nil { editor.pencilCancelled() }
         liveStroke = nil
+        quickShape = nil
+        stillSince = nil
         drawingTouch = nil
     }
 

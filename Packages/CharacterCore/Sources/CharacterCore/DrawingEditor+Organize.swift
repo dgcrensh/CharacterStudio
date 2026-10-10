@@ -1,0 +1,455 @@
+import Foundation
+
+/// How `arrange` moves the selection in draw order.
+public enum ArrangeMove: Hashable, Sendable, CaseIterable {
+    case bringToFront
+    case bringForward
+    case sendBackward
+    case sendToBack
+}
+
+/// Isolation, hide and lock, arranging, duplicating, the clipboard, the scissors and
+/// Pencil tool switching. Each command is one undo step.
+extension DrawingEditor {
+    // MARK: Isolation
+
+    /// Edits `part` on its own: the rest is dimmed and can't be touched, and new shapes
+    /// join this part, until `exitIsolation`.
+    public mutating func isolate(part id: Int) {
+        guard drawing.partIndex(id) != nil else { return }
+        cancelGesture()
+        if let pen = penPath, pen.part != id { penFinish() }
+        isolatedPart = id
+        if drawing.shapeRefs(in: selection).contains(where: { $0.part != id }) { selection = .none }
+    }
+
+    public mutating func exitIsolation() {
+        isolatedPart = nil
+    }
+
+    // MARK: Hide and lock
+
+    /// True when the selection is art that can be hidden or locked.
+    public var canHideOrLockSelection: Bool { !drawing.shapeIndices(in: selection).isEmpty }
+
+    public var hasHiddenArt: Bool {
+        drawing.parts.contains { $0.isHidden || $0.shapes.contains(where: \.isHidden) }
+    }
+
+    public var hasLockedArt: Bool {
+        drawing.parts.contains { $0.isLocked || $0.shapes.contains(where: \.isLocked) }
+    }
+
+    /// Hides the selected part or shapes and deselects them.
+    public mutating func hideSelection() {
+        changeSelectedFlags { $0.isHidden = true } part: { $0.isHidden = true }
+    }
+
+    /// Locks the selected part or shapes and deselects them.
+    public mutating func lockSelection() {
+        changeSelectedFlags { $0.isLocked = true } part: { $0.isLocked = true }
+    }
+
+    public mutating func setPartHidden(_ id: Int, _ hidden: Bool) {
+        changePart(id) { $0.isHidden = hidden }
+    }
+
+    public mutating func setPartLocked(_ id: Int, _ locked: Bool) {
+        changePart(id) { $0.isLocked = locked }
+    }
+
+    /// Shows every hidden part and shape.
+    public mutating func showAll() {
+        changeEverything { $0.isHidden = false } part: { $0.isHidden = false }
+    }
+
+    /// Unlocks every locked part and shape.
+    public mutating func unlockAll() {
+        changeEverything { $0.isLocked = false } part: { $0.isLocked = false }
+    }
+
+    private mutating func changeSelectedFlags(_ shapeChange: (inout VectorShape) -> Void, part partChange: (inout Part) -> Void) {
+        let targets = drawing.shapeIndices(in: selection)
+        guard !targets.isEmpty else { return }
+        cancelGesture()
+        let before = drawing
+        if case .part(let id) = selection, let i = drawing.partIndex(id) {
+            partChange(&drawing.parts[i])
+        } else {
+            for (p, s) in targets { shapeChange(&drawing.parts[p].shapes[s]) }
+        }
+        selection = .none
+        dropUneditableIsolation()
+        commit(from: before)
+    }
+
+    private mutating func changePart(_ id: Int, _ change: (inout Part) -> Void) {
+        guard let i = drawing.partIndex(id) else { return }
+        cancelGesture()
+        let before = drawing
+        change(&drawing.parts[i])
+        // Hidden or locked art can't stay selected.
+        let selected = drawing.shapeIndices(in: selection)
+        if selected.contains(where: { !drawing.parts[$0.0].isEditable($0.1) }) { selection = .none }
+        dropUneditableIsolation()
+        commit(from: before)
+    }
+
+    private mutating func changeEverything(_ shapeChange: (inout VectorShape) -> Void, part partChange: (inout Part) -> Void) {
+        cancelGesture()
+        let before = drawing
+        for p in drawing.parts.indices {
+            partChange(&drawing.parts[p])
+            for s in drawing.parts[p].shapes.indices { shapeChange(&drawing.parts[p].shapes[s]) }
+        }
+        commit(from: before)
+    }
+
+    /// Isolation ends when its part is hidden.
+    private mutating func dropUneditableIsolation() {
+        if let id = isolatedPart, let i = drawing.partIndex(id), drawing.parts[i].isHidden { isolatedPart = nil }
+    }
+
+    // MARK: Arrange
+
+    /// True when the selection is a part or shapes that can change draw order.
+    public var canArrange: Bool { !drawing.shapeIndices(in: selection).isEmpty }
+
+    /// Moves a selected part among the parts, or selected shapes within their own parts.
+    public mutating func arrange(_ move: ArrangeMove) {
+        guard canArrange else { return }
+        cancelGesture()
+        let before = drawing
+        if case .part(let id) = selection {
+            drawing.parts = Self.arranged(drawing.parts, move) { $0.id == id }
+        } else {
+            let refs = Set(drawing.shapeRefs(in: selection))
+            for p in drawing.parts.indices {
+                let partID = drawing.parts[p].id
+                drawing.parts[p].shapes = Self.arranged(drawing.parts[p].shapes, move) {
+                    refs.contains(ShapeRef(part: partID, shape: $0.id))
+                }
+            }
+        }
+        commit(from: before)
+    }
+
+    /// `items` (back to front) with the selected ones moved; the rest keep their order.
+    static func arranged<T>(_ items: [T], _ move: ArrangeMove, isSelected: (T) -> Bool) -> [T] {
+        var out = items
+        switch move {
+        case .bringToFront:
+            out = items.filter { !isSelected($0) } + items.filter(isSelected)
+        case .sendToBack:
+            out = items.filter(isSelected) + items.filter { !isSelected($0) }
+        case .bringForward:
+            var i = out.count - 2
+            while i >= 0 {
+                if isSelected(out[i]), !isSelected(out[i + 1]) { out.swapAt(i, i + 1) }
+                i -= 1
+            }
+        case .sendBackward:
+            var i = 1
+            while i < out.count {
+                if isSelected(out[i]), !isSelected(out[i - 1]) { out.swapAt(i, i - 1) }
+                i += 1
+            }
+        }
+        return out
+    }
+
+    /// Reorders the parts to `ids`, listed front to back as the layers panel shows them.
+    public mutating func setPartOrder(frontToBack ids: [Int]) {
+        guard ids.count == drawing.parts.count, Set(ids) == Set(drawing.parts.map(\.id)) else { return }
+        let reordered = ids.reversed().compactMap { id in drawing.parts.first { $0.id == id } }
+        guard reordered.map(\.id) != drawing.parts.map(\.id) else { return }
+        cancelGesture()
+        let before = drawing
+        drawing.parts = reordered
+        commit(from: before)
+    }
+
+    /// True when part `id` has a part below it to merge into.
+    public func canMergePartDown(_ id: Int) -> Bool { (drawing.partIndex(id) ?? 0) > 0 }
+
+    /// Moves part `id`'s shapes into the part below it (keeping how they stack) and
+    /// removes it. The merged part keeps the lower part's name and pivot.
+    public mutating func mergePartDown(_ id: Int) {
+        guard let i = drawing.partIndex(id), i > 0 else { return }
+        cancelGesture()
+        let before = drawing
+        let wasIsolated = isolatedPart == id
+        let target = drawing.parts[i - 1].id
+        drawing.parts[i - 1].shapes += drawing.parts[i].shapes
+        drawing.parts.remove(at: i)
+        if wasIsolated { isolatedPart = target }
+        selection = .part(target)
+        commit(from: before)
+    }
+
+    /// True when the selection is shapes (not a whole part) that can move to another part.
+    public var canMoveSelectedShapes: Bool {
+        switch selection {
+        case .shape, .shapes: !drawing.shapeIndices(in: selection).isEmpty
+        default: false
+        }
+    }
+
+    /// Moves the selected shapes into a new part above the topmost part they came from.
+    public mutating func moveSelectionToNewPart() {
+        guard canMoveSelectedShapes else { return }
+        cancelGesture()
+        let before = drawing
+        let refs = Set(drawing.shapeRefs(in: selection))
+        let topIndex = drawing.shapeIndices(in: selection).map(\.0).max() ?? 0
+        var kept: [Part] = []
+        var moved: [VectorShape] = []
+        var insertAt = 0
+        for (i, part) in drawing.parts.enumerated() {
+            var remaining = part
+            remaining.shapes = part.shapes.filter { !refs.contains(ShapeRef(part: part.id, shape: $0.id)) }
+            moved += part.shapes.filter { refs.contains(ShapeRef(part: part.id, shape: $0.id)) }
+            if !remaining.shapes.isEmpty { kept.append(remaining) }
+            if i == topIndex { insertAt = kept.count }
+        }
+        drawing.parts = kept
+        let id = drawing.makeID()
+        var part = Part(id: id, name: drawing.uniquePartName("Part \(kept.count + 1)"), shapes: moved)
+        part.pivot = part.bounds.center
+        drawing.parts.insert(part, at: insertAt)
+        selection = .part(id)
+        commit(from: before)
+    }
+
+    /// Moves the selection into part `id`, on top of its shapes. A whole selected part
+    /// is merged into it and removed.
+    public mutating func moveSelection(toPart id: Int) {
+        guard drawing.partIndex(id) != nil else { return }
+        let refs = Set(drawing.shapeRefs(in: selection))
+        guard !refs.isEmpty, refs.contains(where: { $0.part != id }) else { return }
+        cancelGesture()
+        let before = drawing
+        let wasIsolated = isolatedPart != nil
+        var moved: [VectorShape] = []
+        for p in drawing.parts.indices where drawing.parts[p].id != id {
+            let partID = drawing.parts[p].id
+            moved += drawing.parts[p].shapes.filter { refs.contains(ShapeRef(part: partID, shape: $0.id)) }
+            drawing.parts[p].shapes.removeAll { refs.contains(ShapeRef(part: partID, shape: $0.id)) }
+        }
+        drawing.parts.removeAll { $0.shapes.isEmpty && $0.id != id }
+        guard let target = drawing.partIndex(id) else { return }
+        drawing.parts[target].shapes += moved
+        // Moving an isolated part's art into another part carries isolation along.
+        if wasIsolated, isolatedPart == nil { isolatedPart = id }
+        selection = .covering(Set(moved.map { ShapeRef(part: id, shape: $0.id) }))
+        commit(from: before)
+    }
+
+    // MARK: Duplicate
+
+    /// Copies the selection `offset` points away and selects the copies, as one undo step.
+    public mutating func duplicateSelection(offset: Vec2 = Vec2(10, 10)) {
+        cancelGesture()
+        let before = drawing
+        guard duplicateInPlace(offset: offset) else { return }
+        commit(from: before)
+    }
+
+    /// Copies the selection, moved by `offset`, and selects the copies. A part's copy
+    /// goes just above it; shape copies go just above the topmost original in each
+    /// part. Does not record undo. False when there is nothing to copy.
+    @discardableResult
+    mutating func duplicateInPlace(offset: Vec2) -> Bool {
+        let shift = Affine2D.translation(offset)
+        if case .part(let id) = selection, isolatedPart == nil, let i = drawing.partIndex(id) {
+            var copy = drawing.parts[i]
+            copy.id = drawing.makeID()
+            copy.name = drawing.uniquePartName(copy.name)
+            for s in copy.shapes.indices {
+                copy.shapes[s].id = drawing.makeID()
+                copy.shapes[s].apply(shift)
+            }
+            copy.pivot = shift.apply(copy.pivot)
+            drawing.parts.insert(copy, at: i + 1)
+            selection = .part(copy.id)
+            return true
+        }
+        let targets = drawing.shapeIndices(in: selection)
+        guard !targets.isEmpty else { return false }
+        var copies: Set<ShapeRef> = []
+        for p in Set(targets.map(\.0)) {
+            let indices = targets.filter { $0.0 == p }.map(\.1).sorted()
+            var insertAt = (indices.last ?? 0) + 1
+            for s in indices {
+                var copy = drawing.parts[p].shapes[s]
+                copy.id = drawing.makeID()
+                copy.apply(shift)
+                drawing.parts[p].shapes.insert(copy, at: insertAt)
+                insertAt += 1
+                copies.insert(ShapeRef(part: drawing.parts[p].id, shape: copy.id))
+            }
+        }
+        let saved = style
+        selection = .covering(copies)
+        style = saved
+        return true
+    }
+
+    // MARK: Clipboard
+
+    /// The pasteboard type for copied art: character file JSON holding the copied parts.
+    public static let clipboardType = "com.dgcrensh.characterstudio.art"
+
+    /// The selection as character file JSON (only the parts and shapes copied), for the
+    /// pasteboard, so it pastes into any character. Nil when nothing is selected.
+    public func copySelection() -> String? {
+        var clip = Drawing()
+        clip.name = drawing.name
+        let kind: String
+        if case .part(let id) = selection, isolatedPart == nil {
+            guard let i = drawing.partIndex(id) else { return nil }
+            clip.parts = [drawing.parts[i]]
+            kind = "parts"
+        } else {
+            let refs = Set(drawing.shapeRefs(in: selection))
+            for part in drawing.parts {
+                var copy = part
+                copy.shapes = part.shapes.filter { refs.contains(ShapeRef(part: part.id, shape: $0.id)) }
+                if !copy.shapes.isEmpty { clip.parts.append(copy) }
+            }
+            kind = "shapes"
+        }
+        guard !clip.parts.isEmpty, case .object(var members) = CharacterFormat.encode(clip) else { return nil }
+        members.append((key: "clipboard", value: .string(kind)))
+        return JSONValue.object(members).formatted()
+    }
+
+    /// Copies the selection, then deletes it.
+    public mutating func cutSelection() -> String? {
+        guard let text = copySelection() else { return nil }
+        deleteSelection()
+        return text
+    }
+
+    /// Pastes character file JSON (from `copySelection`, or a whole `character.json`).
+    /// Copied shapes join the isolated or selected part; copied parts arrive as new
+    /// parts on top. A paste that would land exactly on art already there is moved 10
+    /// points down and right. The pasted art is selected. False when `text` holds no art.
+    @discardableResult
+    public mutating func paste(_ text: String) -> Bool {
+        guard let json = try? JSONValue(parsing: text), let decoded = try? CharacterFormat.decode(json) else { return false }
+        let parts = decoded.drawing.parts.filter { !$0.shapes.isEmpty }
+        guard !parts.isEmpty else { return false }
+        cancelGesture()
+        let before = drawing
+
+        let offset = pasteOffset(for: parts[0].shapes[0].path)
+        let shift = Affine2D.translation(offset)
+        let shapesOnly = json["clipboard"] == JSONValue.string("shapes")
+        var refs: Set<ShapeRef> = []
+        if let target = shapesOnly ? selectedPartID : isolatedPart, let p = drawing.partIndex(target) {
+            for part in parts {
+                for shape in part.shapes {
+                    let copy = pastedCopy(of: shape, moved: shift)
+                    drawing.parts[p].shapes.append(copy)
+                    refs.insert(ShapeRef(part: target, shape: copy.id))
+                }
+            }
+            selection = .covering(refs)
+        } else {
+            var added: [Int] = []
+            for part in parts {
+                var copy = Part(id: drawing.makeID(), name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
+                for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift)) }
+                drawing.parts.append(copy)
+                added.append(copy.id)
+                for shape in copy.shapes { refs.insert(ShapeRef(part: copy.id, shape: shape.id)) }
+            }
+            selection = added.count == 1 ? .part(added[0]) : .covering(refs)
+        }
+        commit(from: before)
+        return true
+    }
+
+    /// A visible, unlocked copy of `shape` with a fresh id.
+    private mutating func pastedCopy(of shape: VectorShape, moved shift: Affine2D) -> VectorShape {
+        var copy = shape
+        copy.id = drawing.makeID()
+        copy.apply(shift)
+        copy.isHidden = false
+        copy.isLocked = false
+        return copy
+    }
+
+    /// Steps of 10 points down and right until the pasted path no longer sits exactly
+    /// on an existing shape.
+    private func pasteOffset(for path: BezierPath) -> Vec2 {
+        let existing = drawing.parts.flatMap { $0.shapes.map { $0.path.bounds() } }
+        let bounds = path.bounds()
+        func same(_ a: Rect, _ b: Rect) -> Bool {
+            a.minPoint.isApproximately(b.minPoint, tolerance: 0.01) && a.maxPoint.isApproximately(b.maxPoint, tolerance: 0.01)
+        }
+        var offset = Vec2.zero
+        for _ in 0..<50 {
+            let moved = Rect(minPoint: bounds.minPoint + offset, maxPoint: bounds.maxPoint + offset)
+            guard existing.contains(where: { same($0, moved) }) else { break }
+            offset += Vec2(10, 10)
+        }
+        return offset
+    }
+
+    // MARK: Scissors
+
+    /// Cuts shape `ref` at parameter `t` of segment `segment`, reusing the split command:
+    /// a closed path opens there, an open path becomes two. The pieces are selected. A
+    /// cut that leaves an open path with no outline gives it one, so it stays visible.
+    mutating func cut(_ ref: ShapeRef, segment: Int, t: Double) {
+        guard let idx = drawing.indices(ref) else { return }
+        let shape = drawing.parts[idx.0].shapes[idx.1]
+        var path = shape.path
+        guard segment >= 0, segment < path.segmentCount else { return }
+        let index: Int
+        if t < 0.02 {
+            index = segment
+        } else if t > 0.98 {
+            index = (segment + 1) % path.points.count
+        } else {
+            index = path.insertPoint(segment: segment, t: t)
+        }
+        guard let pieces = path.split(at: index) else { return }
+        let before = drawing
+        var first = shape
+        first.path = pieces[0]
+        if first.stroke == nil { first.stroke = StrokeStyle(color: style.outline, width: style.outlineWidth) }
+        drawing.parts[idx.0].shapes[idx.1] = first
+        var refs: Set<ShapeRef> = [ref]
+        for (k, piece) in pieces.dropFirst().enumerated() {
+            var copy = first
+            copy.id = drawing.makeID()
+            copy.path = piece
+            drawing.parts[idx.0].shapes.insert(copy, at: idx.1 + 1 + k)
+            refs.insert(ShapeRef(part: ref.part, shape: copy.id))
+        }
+        let saved = style
+        selection = .covering(refs)
+        style = saved
+        commit(from: before)
+    }
+
+    // MARK: Pencil tool switching
+
+    /// Goes back to the tool used before this one (the Pencil's double tap).
+    public mutating func switchToPreviousTool() {
+        guard let previous = previousTool else { return }
+        tool = previous
+    }
+
+    /// Switches to the eraser, or from the eraser back to the previous tool.
+    public mutating func toggleEraser() {
+        if tool == .eraser {
+            tool = previousTool ?? .pencil
+        } else {
+            tool = .eraser
+        }
+    }
+}

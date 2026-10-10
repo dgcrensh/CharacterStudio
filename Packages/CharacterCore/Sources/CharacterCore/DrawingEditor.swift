@@ -10,6 +10,23 @@ public enum Tool: String, Hashable, Sendable, CaseIterable {
     case select
     /// Edit the anchors and handles of the tapped shapes.
     case directSelect
+    /// Drag out rectangles, ellipses, polygons, stars and lines.
+    case shape
+    /// Delete every shape the Pencil passes over.
+    case eraser
+    /// Tap an outline to cut the path there.
+    case scissors
+}
+
+/// Modifier keys, from a hardware keyboard or the on-screen modifier strip.
+public struct EditorModifiers: OptionSet, Hashable, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    /// Shift: square and circle shapes, 45-degree lines, moves along one axis, 15-degree rotation.
+    public static let constrain = EditorModifiers(rawValue: 1)
+    /// Option: shapes grow from their center, and dragging a selection drags a copy.
+    public static let alternate = EditorModifiers(rawValue: 2)
 }
 
 /// Style for new shapes, and the style controls applied to the selection.
@@ -39,6 +56,11 @@ public enum EditorMetrics {
     public static let anchorHit = 16.0
     public static let curveHit = 12.0
     public static let pivotHit = 14.0
+    /// The eraser's reach around the Pencil tip.
+    public static let eraserRadius = 10.0
+    /// Two taps closer than this in time (seconds) and space (screen points) are a double tap.
+    public static let doubleTapTime = 0.4
+    public static let doubleTapDistance = 20.0
     /// How close a drag must come to an anchor or grid line to snap, in screen points.
     public static let snapRadius = 8.0
 }
@@ -61,7 +83,11 @@ public struct PenPath: Hashable, Sendable {
 /// `addStroke`. Every change made by a finished gesture or command is one undo step.
 public struct DrawingEditor: Sendable {
     public var drawing = Drawing() {
-        didSet { revision &+= 1 }
+        didSet {
+            revision &+= 1
+            // Isolation ends when its part goes (deleted, erased, merged or undone away).
+            if let id = isolatedPart, drawing.partIndex(id) == nil { isolatedPart = nil }
+        }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
     public private(set) var revision = 0
@@ -88,8 +114,24 @@ public struct DrawingEditor: Sendable {
             cancelGesture()
             if oldValue == .pen { penFinish() }
             penCursor = nil
+            previousTool = oldValue
+            lastTap = nil
         }
     }
+    /// The tool before the current one, for the Pencil's double tap.
+    public private(set) var previousTool: Tool?
+    /// What the shape tool draws, and its settings.
+    public var shapeKind: ShapeKind = .rectangle
+    public var shapeOptions = ShapeToolOptions()
+    /// Held modifier keys (hardware keyboard or the modifier strip).
+    public var modifiers: EditorModifiers = []
+    /// The part being edited on its own: everything else is dimmed and can't be touched,
+    /// and new shapes join this part.
+    public internal(set) var isolatedPart: Int?
+    /// Fill and outline colors used lately, newest first, for the squeeze palette.
+    public internal(set) var recentColors: [RGBAColor] = []
+    /// Set by a run of color changes from one control, so a picker drag adds one recent color.
+    var recentColorSource: String?
     public var style = ShapeStyle()
     /// 0 keeps strokes close to the Pencil path; 1 smooths them a lot.
     public var smoothing = 0.4
@@ -109,9 +151,17 @@ public struct DrawingEditor: Sendable {
     public private(set) var penPath: PenPath?
     /// Where the Pencil hovers, for the pen's rubber band.
     public private(set) var penCursor: Vec2?
+    /// Where the Pencil hovers in any tool, and the zoom then, for hover feedback.
+    public private(set) var hoverPoint: Vec2?
+    public private(set) var hoverZoom = 1.0
 
     private var gesture: Gesture?
     private var gestureZoom = 1.0
+    /// The last tap with a time, for spotting a double tap.
+    private var lastTap: (point: Vec2, time: Double)?
+    /// The state to undo back to when the gesture's own `before` is not it: an
+    /// Option-drag copies the selection first, and undo removes the copy too.
+    private var undoBase: Drawing?
 
     public init() {}
 
@@ -133,7 +183,8 @@ public struct DrawingEditor: Sendable {
 
     /// The part new shapes would join: the selected part, or the first selected shape's.
     var selectedPartID: Int? {
-        switch selection {
+        if let isolatedPart { return isolatedPart }
+        return switch selection {
         case .part(let id), .shape(let id, _): id
         case .shapes(let refs): refs.min()?.part
         case .none, .reference: nil
@@ -167,6 +218,8 @@ public struct DrawingEditor: Sendable {
         case penFinish
         case penClose
         case penJoin(ShapeRef, PathEnd)
+        /// A scissors press on an outline.
+        case cut(ShapeRef, segment: Int, t: Double)
         case empty
     }
 
@@ -188,12 +241,16 @@ public struct DrawingEditor: Sendable {
         case handle(ShapeRef, index: Int, side: HandleSide, before: Drawing, grab: Vec2)
         case marquee(start: Vec2, additive: Bool, baseShapes: Set<ShapeRef>, baseAnchors: Set<Int>)
         case penPlace(ShapeRef, index: Int, before: Drawing, penBefore: PenPath?)
+        /// The shape tool's drag; `ref` is the shape once the drag has made one.
+        case shapeDraw(start: Vec2, ref: ShapeRef?, before: Drawing)
+        case erase(before: Drawing, last: Vec2)
         /// A drag that does nothing (for example, from a pen shortcut target).
         case idle
     }
 
     public mutating func pencilBegan(at p: Vec2, zoom: Double) {
         gestureZoom = max(zoom, 1e-9)
+        hoverPoint = nil
         let px = 1 / gestureZoom
         switch tool {
         case .pencil:
@@ -204,12 +261,59 @@ public struct DrawingEditor: Sendable {
             gesture = beginSelect(at: p, px: px)
         case .directSelect:
             gesture = beginDirectSelect(at: p, px: px)
+        case .shape:
+            gesture = .shapeDraw(start: snapped(p), ref: nil, before: drawing)
+        case .eraser:
+            gesture = .erase(before: drawing, last: p)
+            eraseAlong(p, p)
+        case .scissors:
+            if let cut = cutTarget(at: p, zoom: gestureZoom) {
+                gesture = .pending(.cut(cut.ref, segment: cut.segment, t: cut.t), start: p)
+            } else {
+                gesture = .pending(.empty, start: p)
+            }
         }
     }
 
-    /// The Pencil hovering above the screen (or `nil` once it leaves). Only the pen uses it.
-    public mutating func pencilHovered(at p: Vec2?) {
+    /// The Pencil hovering above the screen (or `nil` once it leaves), at `zoom`. The pen
+    /// draws its rubber band to it; other tools highlight what a touch there would hit.
+    public mutating func pencilHovered(at p: Vec2?, zoom: Double = 1) {
         penCursor = tool == .pen ? p : nil
+        hoverPoint = p
+        hoverZoom = max(zoom, 1e-9)
+    }
+
+    /// The shape a Pencil touch at the hover point would select, erase or cut.
+    public var hoverTarget: ShapeRef? {
+        guard gesture == nil, let p = hoverPoint else { return nil }
+        switch tool {
+        case .select, .directSelect, .eraser:
+            let reach = (tool == .eraser ? EditorMetrics.eraserRadius : EditorMetrics.shapeHit) / hoverZoom
+            return drawing.hitTest(p, tolerance: reach, within: isolatedPart).map { ShapeRef(part: $0.part, shape: $0.shape) }
+        case .scissors:
+            return cutTarget(at: p, zoom: hoverZoom)?.ref
+        case .pencil, .pen, .shape:
+            return nil
+        }
+    }
+
+    /// Where the scissors would cut if the Pencil touched down at the hover point.
+    public var scissorsPreview: Vec2? {
+        guard tool == .scissors, gesture == nil, let p = hoverPoint, let cut = cutTarget(at: p, zoom: hoverZoom),
+              let path = drawing.shape(cut.ref)?.path else { return nil }
+        return path.segment(cut.segment).point(at: cut.t)
+    }
+
+    /// The outline nearest `p` that the scissors can cut, within reach.
+    func cutTarget(at p: Vec2, zoom: Double) -> (ref: ShapeRef, segment: Int, t: Double)? {
+        var best: (ref: ShapeRef, segment: Int, t: Double, distance: Double)?
+        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+            guard let shape = drawing.shape(ref), let near = shape.path.nearestSegment(to: p),
+                  near.distance <= EditorMetrics.curveHit / zoom + (shape.stroke?.width ?? 0) / 2,
+                  near.distance < (best?.distance ?? .infinity) else { continue }
+            best = (ref, near.segment, near.t, near.distance)
+        }
+        return best.map { (ref: $0.ref, segment: $0.segment, t: $0.t) }
     }
 
     public mutating func pencilMoved(to p: Vec2) {
@@ -221,7 +325,10 @@ public struct DrawingEditor: Sendable {
             pencilMoved(to: p)
 
         case .transform(let kind, let target, let before, let start):
+            let nextID = drawing.nextID
             drawing = before.applying(transform(kind, from: start, to: p, target: target, before: before), to: target)
+            // A duplicating drag made ids `before` does not know about.
+            drawing.nextID = max(drawing.nextID, nextID)
 
         case .pivot(let target, _, let grab, _):
             let q = snapped(p + grab)
@@ -272,21 +379,41 @@ public struct DrawingEditor: Sendable {
             }
             drawing.parts[idx.0].shapes[idx.1].path.points[index] = point
 
+        case .shapeDraw(let start, let ref, let before):
+            self.gesture = .shapeDraw(start: start, ref: drawShape(from: start, to: p, ref: ref), before: before)
+
+        case .erase(let before, let last):
+            eraseAlong(last, p)
+            self.gesture = .erase(before: before, last: p)
+
         case .idle:
             break
         }
     }
 
-    public mutating func pencilEnded(at p: Vec2) {
+    /// The Pencil lifted at `p`. `time` (seconds) lets two quick taps count as a double
+    /// tap; without it every tap is a single tap.
+    public mutating func pencilEnded(at p: Vec2, time: Double? = nil) {
         pencilMoved(to: p)
         guard let gesture else { return }
         self.gesture = nil
+        if case .pending = gesture {} else { lastTap = nil }
         switch gesture {
         case .pending(let pending, let start):
+            let isDouble = isDoubleTap(at: start, time: time)
             tap(pending, at: start)
+            if isDouble {
+                doubleTap(at: start)
+                lastTap = nil
+            } else {
+                lastTap = time.map { (point: start, time: $0) }
+            }
+            return
         case .transform(_, _, let before, _), .pivot(_, let before, _, _), .anchors(_, _, let before, _),
-             .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _):
-            commit(from: before)
+             .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _),
+             .shapeDraw(_, _, let before), .erase(let before, _):
+            commit(from: undoBase ?? before)
+            undoBase = nil
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
             if let rect = marquee { finishMarquee(rect, additive: additive, baseShapes: baseShapes, baseAnchors: baseAnchors) }
             marquee = nil
@@ -302,18 +429,20 @@ public struct DrawingEditor: Sendable {
     mutating func cancelGesture() {
         guard let gesture else { return }
         self.gesture = nil
+        // Ids handed out by the cancelled gesture stay used.
+        let nextID = drawing.nextID
+        defer { drawing.nextID = max(drawing.nextID, nextID) }
         switch gesture {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
-             .handle(_, _, _, let before, _):
-            drawing = before
+             .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _):
+            drawing = undoBase ?? before
+            undoBase = nil
+            validateSelection()
         case .pivot(_, let before, _, let original):
             drawing = before
             customPivot = original
         case .penPlace(_, _, let before, let penBefore):
-            // Ids handed out by the cancelled gesture stay used.
-            let nextID = drawing.nextID
             drawing = before
-            drawing.nextID = max(nextID, before.nextID)
             penPath = penBefore
         case .marquee:
             marquee = nil
@@ -355,17 +484,34 @@ public struct DrawingEditor: Sendable {
                 return .pending(.selectionBody, start: p)
             }
         }
-        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px) {
+        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart) {
             return .pending(.shape(ShapeRef(part: hit.part, shape: hit.shape)), start: p)
         }
         return .pending(.empty, start: p)
+    }
+
+    private func isDoubleTap(at p: Vec2, time: Double?) -> Bool {
+        guard let time, let last = lastTap else { return false }
+        return time - last.time <= EditorMetrics.doubleTapTime &&
+            p.distance(to: last.point) <= EditorMetrics.doubleTapDistance / gestureZoom
+    }
+
+    /// With the select tool, double-tapping a part isolates it, and double-tapping
+    /// empty canvas leaves isolation.
+    private mutating func doubleTap(at p: Vec2) {
+        guard tool == .select else { return }
+        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart) {
+            if isolatedPart != hit.part { isolate(part: hit.part) }
+        } else if isolatedPart != nil {
+            exitIsolation()
+        }
     }
 
     /// Tapping a shape selects its part; tapping again inside the selected part
     /// selects the single shape. Tapping empty canvas clears the selection. With
     /// `addToSelection`, tapping toggles single shapes in and out of the selection.
     private mutating func tapSelect(at p: Vec2) {
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom) else {
+        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart) else {
             if !addToSelection { selection = .none }
             return
         }
@@ -399,10 +545,8 @@ public struct DrawingEditor: Sendable {
             }
         }
         var refs: Set<ShapeRef> = []
-        for part in drawing.parts {
-            for shape in part.shapes where marqueeTouches(shape, rect) {
-                refs.insert(ShapeRef(part: part.id, shape: shape.id))
-            }
+        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+            if let shape = drawing.shape(ref), marqueeTouches(shape, rect) { refs.insert(ref) }
         }
         if additive { refs.formUnion(baseShapes) }
         if tool == .select {
@@ -453,7 +597,7 @@ public struct DrawingEditor: Sendable {
         if let picked = pickAnchorOrCurve(at: p, among: refs, px: px) {
             return .pending(picked, start: p)
         }
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px) else {
+        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart) else {
             return .pending(.empty, start: p)
         }
         let ref = ShapeRef(part: hit.part, shape: hit.shape)
@@ -520,15 +664,12 @@ public struct DrawingEditor: Sendable {
     /// The nearest end of any open path other than `excluded`.
     private func openEndpoint(near p: Vec2, reach: Double, excluding excluded: ShapeRef?) -> (ref: ShapeRef, end: PathEnd)? {
         var best: (ref: ShapeRef, end: PathEnd, distance: Double)?
-        for part in drawing.parts {
-            for shape in part.shapes where !shape.path.closed && !shape.path.points.isEmpty {
-                let ref = ShapeRef(part: part.id, shape: shape.id)
-                if ref == excluded { continue }
-                for end in [PathEnd.start, .end] {
-                    guard let position = shape.path.endPoint(end) else { continue }
-                    let d = position.distance(to: p)
-                    if d <= reach, d < (best?.distance ?? .infinity) { best = (ref, end, d) }
-                }
+        for ref in drawing.editableShapeRefs(within: isolatedPart) where ref != excluded {
+            guard let shape = drawing.shape(ref), !shape.path.closed, !shape.path.points.isEmpty else { continue }
+            for end in [PathEnd.start, .end] {
+                guard let position = shape.path.endPoint(end) else { continue }
+                let d = position.distance(to: p)
+                if d <= reach, d < (best?.distance ?? .infinity) { best = (ref, end, d) }
             }
         }
         return best.map { (ref: $0.ref, end: $0.end) }
@@ -567,7 +708,7 @@ public struct DrawingEditor: Sendable {
         shape.fill = style.fillEnabled ? style.fill : nil
         // Outlined while open so the path is visible; closing may drop the outline.
         shape.stroke = StrokeStyle(color: style.outline, width: style.outlineWidth)
-        if autoJoinSelectedPart, let target = selectedPartID, let p = drawing.partIndex(target) {
+        if autoJoinSelectedPart || isolatedPart != nil, let target = selectedPartID, let p = drawing.partIndex(target) {
             drawing.parts[p].shapes.append(shape)
             penPath = PenPath(part: target, shape: shape.id, fromStart: false, createdPart: false)
             return ShapeRef(part: target, shape: shape.id)
@@ -638,7 +779,7 @@ public struct DrawingEditor: Sendable {
     private mutating func startDrag(_ pending: Pending, from start: Vec2) -> Gesture {
         switch pending {
         case .selectionBody:
-            return .transform(.move, target: selection, before: drawing, start: start)
+            return beginMove(from: start)
         case .shape(let ref):
             guard tool == .select || tool == .directSelect else { return .idle }
             if !drawing.shapeRefs(in: selection).contains(ref) {
@@ -648,7 +789,7 @@ public struct DrawingEditor: Sendable {
                     selection = .shape(part: ref.part, shape: ref.shape)
                 }
             }
-            return .transform(.move, target: selection, before: drawing, start: start)
+            return beginMove(from: start)
         case .pivot:
             return .pivot(target: selection, before: drawing, grab: (pivot ?? start) - start, originalCustom: customPivot)
         case .anchor(let ref, let i):
@@ -663,13 +804,28 @@ public struct DrawingEditor: Sendable {
         case .curve(let ref, let segment, let t, _):
             narrowSelection(to: ref)
             return .segment(ref, index: segment, t: t, before: drawing, start: start)
+        case .cut:
+            return .idle
         case .empty:
+            guard tool == .select || tool == .directSelect else { return .idle }
             marquee = Rect(from: start, to: start)
             return .marquee(start: start, additive: addToSelection,
                             baseShapes: Set(drawing.shapeRefs(in: selection)), baseAnchors: selectedAnchors)
         case .penFinish, .penClose, .penJoin:
             return .idle
         }
+    }
+
+    /// Moves the selection, or with the alternate modifier (Option) a copy of it, which
+    /// stays selected. Copy and move are one undo step.
+    private mutating func beginMove(from start: Vec2) -> Gesture {
+        var isReference = false
+        if case .reference = selection { isReference = true }
+        if modifiers.contains(.alternate), !isReference {
+            let original = drawing
+            if duplicateInPlace(offset: .zero) { undoBase = original }
+        }
+        return .transform(.move, target: selection, before: drawing, start: start)
     }
 
     /// Makes `ref` the only selected shape, keeping the anchor selection if it already was.
@@ -715,13 +871,17 @@ public struct DrawingEditor: Sendable {
                 }
             case .handle:
                 break
-            case .empty, .selectionBody, .pivot, .penFinish, .penClose, .penJoin:
+            case .empty, .selectionBody, .pivot, .penFinish, .penClose, .penJoin, .cut:
                 if !selectedAnchors.isEmpty {
                     selectedAnchors = []
                 } else if !addToSelection {
                     selection = .none
                 }
             }
+        case .scissors:
+            if case .cut(let ref, let segment, let t) = pending { cut(ref, segment: segment, t: t) }
+        case .shape, .eraser:
+            break
         }
     }
 
@@ -730,6 +890,8 @@ public struct DrawingEditor: Sendable {
         switch kind {
         case .move:
             var delta = p - start
+            // Constrained moves follow the axis the drag leans to.
+            if modifiers.contains(.constrain) { delta = abs(delta.x) >= abs(delta.y) ? Vec2(delta.x, 0) : Vec2(0, delta.y) }
             if snap.isEnabled, let frame = before.frame(of: target) {
                 delta = Snapper.snapTranslation(delta, of: frame.corners + [frame.center], settings: snap,
                                                 anchors: snapAnchors(excluding: moving, moving: nil), radius: snapRadius)
@@ -750,7 +912,8 @@ public struct DrawingEditor: Sendable {
         case .rotate(let center):
             let v0 = start - center, v1 = p - center
             guard v0.lengthSquared > 1e-12, v1.lengthSquared > 1e-12 else { return .identity }
-            let angle = atan2(v1.y, v1.x) - atan2(v0.y, v0.x)
+            var angle = atan2(v1.y, v1.x) - atan2(v0.y, v0.x)
+            if modifiers.contains(.constrain) { angle = ShapePrimitives.snapAngle(angle, step: .pi / 12) }
             return Affine2D.translation(center) * Affine2D.rotation(angle) * Affine2D.translation(-center)
         }
     }
@@ -763,7 +926,7 @@ public struct DrawingEditor: Sendable {
         guard snap.isEnabled, snap.toAnchors else { return [] }
         var out: [Vec2] = []
         for part in drawing.parts {
-            for shape in part.shapes {
+            for (index, shape) in part.shapes.enumerated() where part.isShown(index) {
                 let ref = ShapeRef(part: part.id, shape: shape.id)
                 if excluding.contains(ref) { continue }
                 for (i, point) in shape.path.points.enumerated() {
@@ -808,10 +971,21 @@ public struct DrawingEditor: Sendable {
     /// overlaps it joins that part; otherwise it starts a new part.
     public mutating func addStroke(_ points: [Vec2], zoom: Double) {
         guard !points.isEmpty else { return }
-        let path = CurveFitter.fit(points, options: .forSmoothing(smoothing, zoom: zoom))
-        guard !path.points.isEmpty else { return }
+        addPath(CurveFitter.fit(points, options: .forSmoothing(smoothing, zoom: zoom)))
+    }
 
+    /// Adds a finished path (a fitted stroke or a QuickShape) in the current style as
+    /// one undo step, placed as `addStroke` places strokes.
+    public mutating func addPath(_ path: BezierPath) {
+        guard !path.points.isEmpty else { return }
         let before = drawing
+        insertNewShape(styledShape(path), joinNeedsOverlap: true)
+        commit(from: before)
+    }
+
+    /// A new shape with `path` in the current style. A closed path is filled; an open
+    /// one, or one with fill off, is outlined so it stays visible.
+    mutating func styledShape(_ path: BezierPath) -> VectorShape {
         let outline = StrokeStyle(color: style.outline, width: style.outlineWidth)
         var shape = VectorShape(id: drawing.makeID(), path: path)
         if path.closed {
@@ -820,16 +994,69 @@ public struct DrawingEditor: Sendable {
         } else {
             shape.stroke = outline
         }
+        return shape
+    }
 
-        if autoJoinSelectedPart, let target = selectedPartID, let p = drawing.partIndex(target),
-           drawing.parts[p].bounds.intersects(shape.bounds) {
+    /// Adds `shape` to the isolated part, or with auto-join to the selected part (when
+    /// `joinNeedsOverlap`, only if it overlaps it), or else to a new part on top. Does
+    /// not record undo.
+    @discardableResult
+    mutating func insertNewShape(_ shape: VectorShape, joinNeedsOverlap: Bool) -> ShapeRef {
+        if let target = isolatedPart, let p = drawing.partIndex(target) {
             drawing.parts[p].shapes.append(shape)
-        } else {
-            let id = drawing.makeID()
-            let name = drawing.uniquePartName("Part \(drawing.parts.count + 1)")
-            drawing.parts.append(Part(id: id, name: name, shapes: [shape], pivot: shape.bounds.center))
+            return ShapeRef(part: target, shape: shape.id)
         }
-        commit(from: before)
+        if autoJoinSelectedPart, let target = selectedPartID, let p = drawing.partIndex(target),
+           !joinNeedsOverlap || drawing.parts[p].bounds.intersects(shape.bounds) {
+            drawing.parts[p].shapes.append(shape)
+            return ShapeRef(part: target, shape: shape.id)
+        }
+        let id = drawing.makeID()
+        let name = drawing.uniquePartName("Part \(drawing.parts.count + 1)")
+        drawing.parts.append(Part(id: id, name: name, shapes: [shape], pivot: shape.bounds.center))
+        return ShapeRef(part: id, shape: shape.id)
+    }
+
+    // MARK: Shape tool
+
+    /// Builds the shape for a drag from `start` to `p`, creating it on the first call.
+    private mutating func drawShape(from start: Vec2, to p: Vec2, ref: ShapeRef?) -> ShapeRef? {
+        let end = snapped(p, excluding: ref.map { [$0] } ?? [])
+        guard let path = ShapePrimitives.path(shapeKind, from: start, to: end, options: shapeOptions,
+                                              modifiers: modifiers, minimumSize: EditorMetrics.tapSlop / gestureZoom)
+        else { return ref }
+        if let ref, let idx = drawing.indices(ref) {
+            drawing.parts[idx.0].shapes[idx.1].path = path
+            // A part made by this drag keeps its pivot in the middle; one it joined keeps its own.
+            if drawing.parts[idx.0].shapes.count == 1 { drawing.parts[idx.0].pivot = drawing.parts[idx.0].bounds.center }
+            return ref
+        }
+        let new = insertNewShape(styledShape(path), joinNeedsOverlap: false)
+        let saved = style
+        selection = .shape(part: new.part, shape: new.shape)
+        style = saved
+        return new
+    }
+
+    // MARK: Eraser
+
+    /// Deletes every editable shape within the eraser's reach of the segment `a` to `b`.
+    /// Does not record undo.
+    private mutating func eraseAlong(_ a: Vec2, _ b: Vec2) {
+        let radius = EditorMetrics.eraserRadius / gestureZoom
+        let steps = max(1, Int((a.distance(to: b) / (radius / 2)).rounded(.up)))
+        var doomed: [ShapeRef] = []
+        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+            guard let shape = drawing.shape(ref) else { continue }
+            for i in 0...steps where shape.contains(Vec2.lerp(a, b, Double(i) / Double(steps)), tolerance: radius) {
+                doomed.append(ref)
+                break
+            }
+        }
+        guard !doomed.isEmpty else { return }
+        for ref in doomed { removeShape(ref) }
+        validateSelection()
+        if let pen = penPath, drawing.indices(part: pen.part, shape: pen.shape) == nil { penPath = nil }
     }
 
     // MARK: Commands
@@ -893,7 +1120,10 @@ public struct DrawingEditor: Sendable {
         return result
     }
 
-    public mutating func setFill(_ color: RGBAColor) {
+    /// `continuous` marks a change from a control that sends many (a color picker drag),
+    /// so the run adds one recent color, not one per step.
+    public mutating func setFill(_ color: RGBAColor, continuous: Bool = false) {
+        noteRecentColor(color, source: continuous ? "fill" : nil)
         style.fill = color
         style.fillEnabled = true
         restyleSelection(key: "fill") { shape in
@@ -914,7 +1144,8 @@ public struct DrawingEditor: Sendable {
         }
     }
 
-    public mutating func setOutline(_ color: RGBAColor) {
+    public mutating func setOutline(_ color: RGBAColor, continuous: Bool = false) {
+        noteRecentColor(color, source: continuous ? "outline" : nil)
         style.outline = color
         style.outlineEnabled = true
         let width = style.outlineWidth
@@ -942,6 +1173,16 @@ public struct DrawingEditor: Sendable {
                 shape.stroke = nil
             }
         }
+    }
+
+    private mutating func noteRecentColor(_ color: RGBAColor, source: String?) {
+        if let source, source == recentColorSource, !recentColors.isEmpty {
+            recentColors.removeFirst()
+        }
+        recentColorSource = source
+        recentColors.removeAll { $0 == color }
+        recentColors.insert(color, at: 0)
+        if recentColors.count > 8 { recentColors.removeLast(recentColors.count - 8) }
     }
 
     public mutating func addToPalette(_ color: RGBAColor) {
@@ -978,9 +1219,11 @@ public struct DrawingEditor: Sendable {
     }
 
     /// Selects a whole part, as tapping it with the select tool does.
+    /// Hidden and locked parts can't be selected; selecting a part outside isolation ends it.
     public mutating func selectPart(_ id: Int) {
-        guard drawing.partIndex(id) != nil else { return }
+        guard let i = drawing.partIndex(id), !drawing.parts[i].isHidden, !drawing.parts[i].isLocked else { return }
         cancelGesture()
+        if let isolated = isolatedPart, isolated != id { isolatedPart = nil }
         selection = .part(id)
     }
 
@@ -1061,6 +1304,8 @@ public struct DrawingEditor: Sendable {
     }
 
     mutating func commit(from before: Drawing, key: String? = nil) {
+        // Any other edit ends a run of color changes.
+        if key == nil { recentColorSource = nil }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }
@@ -1075,7 +1320,7 @@ public struct DrawingEditor: Sendable {
         if let pen = penPath, drawing.indices(part: pen.part, shape: pen.shape) == nil { penPath = nil }
     }
 
-    private mutating func validateSelection() {
+    mutating func validateSelection() {
         if !drawing.exists(selection) { selection = .none }
         let count = activeShape.flatMap { drawing.shape($0)?.path.points.count } ?? 0
         let valid = selectedAnchors.filter { $0 < count }

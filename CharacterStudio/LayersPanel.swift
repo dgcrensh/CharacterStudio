@@ -31,10 +31,17 @@ struct LayersPanel: View {
                         Label(id, systemImage: "line.diagonal")
                             .font(.subheadline.weight(.semibold))
                             .padding(.leading, CGFloat(depth) * 18)
+                            .moveDisabled(true)
                     case .part(let part, let depth):
                         partRow(part)
                             .padding(.leading, CGFloat(depth) * 18)
                     }
+                }
+                // Drag a part to change the draw order.
+                .onMove { from, to in
+                    var moved = rows
+                    moved.move(fromOffsets: from, toOffset: to)
+                    store.setPartOrder(frontToBack: moved.compactMap(\.partID))
                 }
                 if ui.layers.bones.allSatisfy({ $0.parts.isEmpty }) {
                     Text("Draw with the pencil or pen to add a part.")
@@ -43,7 +50,7 @@ struct LayersPanel: View {
             } header: {
                 Text("Skeleton")
             } footer: {
-                Text("Parts are listed front to back. Bones arrive in the next milestone; until then every part sits under the root bone.")
+                Text("Parts are listed front to back; drag one to reorder. The eye hides a part and the lock stops taps reaching it. Bones arrive in a later milestone; until then every part sits under the root bone.")
             }
 
             Section {
@@ -98,25 +105,60 @@ struct LayersPanel: View {
     }
 
     private func partRow(_ part: LayerTree.PartLayer) -> some View {
-        Button {
-            store.selectPart(part.id)
-        } label: {
-            HStack {
-                Image(systemName: "square.on.circle")
-                Text(part.name).lineLimit(1)
-                Spacer()
-                Text(part.shapeCount == 1 ? "1 shape" : "\(part.shapeCount) shapes")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if ui.selectedPart == part.id {
-                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                }
+        HStack(spacing: 12) {
+            Button(part.isHidden ? "Show" : "Hide", systemImage: part.isHidden ? "eye.slash" : "eye") {
+                store.setPartHidden(part.id, !part.isHidden)
             }
-            .contentShape(Rectangle())
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+            Button(part.isLocked ? "Unlock" : "Lock", systemImage: part.isLocked ? "lock.fill" : "lock.open") {
+                store.setPartLocked(part.id, !part.isLocked)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .foregroundStyle(part.isLocked ? Color.primary : Color.secondary)
+
+            Button {
+                store.selectPart(part.id)
+            } label: {
+                HStack {
+                    Text(part.name).lineLimit(1)
+                        .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+                    if ui.isolatedPart == part.id {
+                        Image(systemName: "scope").foregroundStyle(Color.accentColor)
+                    }
+                    Spacer()
+                    if part.hasHiddenOrLockedShapes {
+                        Image(systemName: "eye.trianglebadge.exclamationmark")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Some shapes are hidden or locked")
+                    }
+                    Text(part.shapeCount == 1 ? "1 shape" : "\(part.shapeCount) shapes")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if ui.selectedPart == part.id {
+                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(part.isHidden || part.isLocked)
         }
-        .buttonStyle(.plain)
         .contextMenu {
             Button("Rename", systemImage: "pencil") { startRenaming(part) }
+            if ui.isolatedPart == part.id {
+                Button("Exit Isolation", systemImage: "scope") { store.exitIsolation() }
+            } else {
+                Button("Isolate", systemImage: "scope") {
+                    store.isolate(part: part.id)
+                    dismiss()
+                }
+            }
+            if store.canMergePartDown(part.id) {
+                Button("Merge Down", systemImage: "arrow.down.to.line") { store.mergePartDown(part.id) }
+            }
             Button("Delete", systemImage: "trash", role: .destructive) { store.deletePart(part.id) }
         }
         .swipeActions {
@@ -143,6 +185,11 @@ struct LayersPanel: View {
             case .bone(let id, _): "bone-\(id)"
             case .part(let part, _): "part-\(part.id)"
             }
+        }
+
+        var partID: Int? {
+            if case .part(let part, _) = self { return part.id }
+            return nil
         }
     }
 

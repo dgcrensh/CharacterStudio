@@ -109,6 +109,8 @@
       "properties": {
         "type": { "const": "vector" },
         "pivot": { "description": "The part's own pivot, independent of the bone origin.", "$ref": "#/$defs/vec2" },
+        "hidden": { "description": "Editor hint: the part is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
+        "locked": { "description": "Editor hint: the part can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "shapes": {
           "description": "Back to front.",
           "type": "array",
@@ -131,6 +133,8 @@
             "width": { "type": "number", "minimum": 0 }
           }
         },
+        "hidden": { "description": "Editor hint: the shape is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
+        "locked": { "description": "Editor hint: the shape can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "points": {
           "description": "Cubic Bézier anchors. Segment i runs from point i (p + out) to point i+1 (p + in); closed paths also join the last point to the first.",
           "type": "array",
