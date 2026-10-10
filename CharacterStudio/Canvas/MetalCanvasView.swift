@@ -90,12 +90,14 @@ final class MetalCanvasView: UIView {
             return
         }
         needsRender = false
-        renderer?.render(
+        let drawn = renderer?.render(
             session: store.session,
             viewSize: bounds.size,
             scale: contentScaleFactor,
             darkMode: traitCollection.userInterfaceStyle == .dark
-        )
+        ) ?? true
+        // A dropped frame is retried on the next tick; otherwise the overlay could stay stale.
+        if !drawn { needsRender = true }
     }
 
     @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {

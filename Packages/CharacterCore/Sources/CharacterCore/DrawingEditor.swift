@@ -160,6 +160,9 @@ public struct DrawingEditor: Sendable {
         case shape(ShapeRef)
         case pivot
         case anchor(ShapeRef, Int)
+        /// A Bézier handle of the selected anchor. Like every press it needs to leave
+        /// the tap slop before it moves, so a tap on a handle changes nothing.
+        case handle(ShapeRef, index: Int, side: HandleSide)
         case curve(ShapeRef, segment: Int, t: Double, insertsOnTap: Bool)
         case penFinish
         case penClose
@@ -181,7 +184,8 @@ public struct DrawingEditor: Sendable {
         case pivot(target: Selection, before: Drawing, grab: Vec2, originalCustom: Vec2?)
         case anchors(ShapeRef, primary: Int, before: Drawing, grab: Vec2)
         case segment(ShapeRef, index: Int, t: Double, before: Drawing, start: Vec2)
-        case handle(ShapeRef, index: Int, side: HandleSide, before: Drawing)
+        /// `grab` is the handle's offset from the press, so it does not jump to the Pencil tip.
+        case handle(ShapeRef, index: Int, side: HandleSide, before: Drawing, grab: Vec2)
         case marquee(start: Vec2, additive: Bool, baseShapes: Set<ShapeRef>, baseAnchors: Set<Int>)
         case penPlace(ShapeRef, index: Int, before: Drawing, penBefore: PenPath?)
         /// A drag that does nothing (for example, from a pen shortcut target).
@@ -243,9 +247,10 @@ public struct DrawingEditor: Sendable {
             path.reshapeSegment(index, t: t, by: p - start)
             drawing.parts[idx.0].shapes[idx.1].path = path
 
-        case .handle(let ref, let index, let side, _):
-            guard let idx = drawing.indices(ref) else { return }
-            drawing.parts[idx.0].shapes[idx.1].path.setHandle(index, side, to: p)
+        case .handle(let ref, let index, let side, _, let grab):
+            guard let idx = drawing.indices(ref),
+                  drawing.parts[idx.0].shapes[idx.1].path.points.indices.contains(index) else { return }
+            drawing.parts[idx.0].shapes[idx.1].path.setHandle(index, side, to: p + grab)
 
         case .marquee(let start, _, _, _):
             marquee = Rect(from: start, to: p)
@@ -280,7 +285,7 @@ public struct DrawingEditor: Sendable {
         case .pending(let pending, let start):
             tap(pending, at: start)
         case .transform(_, _, let before, _), .pivot(_, let before, _, _), .anchors(_, _, let before, _),
-             .segment(_, _, _, let before, _), .handle(_, _, _, let before), .penPlace(_, _, let before, _):
+             .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _):
             commit(from: before)
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
             if let rect = marquee { finishMarquee(rect, additive: additive, baseShapes: baseShapes, baseAnchors: baseAnchors) }
@@ -299,7 +304,7 @@ public struct DrawingEditor: Sendable {
         self.gesture = nil
         switch gesture {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
-             .handle(_, _, _, let before):
+             .handle(_, _, _, let before, _):
             drawing = before
         case .pivot(_, let before, _, let original):
             drawing = before
@@ -436,7 +441,12 @@ public struct DrawingEditor: Sendable {
             let handles = visibleHandles(of: path).filter { path.points[$0.index].position.distance(to: $0.position) > 1e-6 }
             if let h = handles.min(by: { $0.position.distance(to: p) < $1.position.distance(to: p) }),
                h.position.distance(to: p) <= EditorMetrics.anchorHit * px {
-                return .handle(ref, index: h.index, side: h.side, before: drawing)
+                // A short handle sits close to its anchor; a press nearer the anchor than
+                // the handle means the anchor, so it can still be grabbed.
+                let anchorDistance = path.points.map { $0.position.distance(to: p) }.min() ?? .infinity
+                if h.position.distance(to: p) <= anchorDistance {
+                    return .pending(.handle(ref, index: h.index, side: h.side), start: p)
+                }
             }
         }
         let refs = drawing.shapeRefs(in: selection)
@@ -646,6 +656,10 @@ public struct DrawingEditor: Sendable {
             narrowSelection(to: ref)
             if !selectedAnchors.contains(i) { selectedAnchors = addToSelection ? selectedAnchors.union([i]) : [i] }
             return .anchors(ref, primary: i, before: drawing, grab: shape.path.points[i].position - start)
+        case .handle(let ref, let index, let side):
+            guard let points = drawing.shape(ref)?.path.points, points.indices.contains(index) else { return .idle }
+            let position = side == .incoming ? points[index].inControl : points[index].outControl
+            return .handle(ref, index: index, side: side, before: drawing, grab: position - start)
         case .curve(let ref, let segment, let t, _):
             narrowSelection(to: ref)
             return .segment(ref, index: segment, t: t, before: drawing, start: start)
@@ -699,6 +713,8 @@ public struct DrawingEditor: Sendable {
                 } else {
                     narrowSelection(to: ref)
                 }
+            case .handle:
+                break
             case .empty, .selectionBody, .pivot, .penFinish, .penClose, .penJoin:
                 if !selectedAnchors.isEmpty {
                     selectedAnchors = []
