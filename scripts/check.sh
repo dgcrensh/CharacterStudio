@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Runs the same three checks as CI (.github/workflows/ci.yml), on a Mac.
+#
+#   scripts/check.sh            core tests, schema check, iPad Simulator build
+#   scripts/check.sh core       just one of: core, schema, app
+#
+# Keep this in step with ci.yml when either changes.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+core() {
+  echo "==> CharacterCore tests"
+  swift test --package-path Packages/CharacterCore
+}
+
+schema() {
+  echo "==> File format schema"
+  # A private venv, because Homebrew's Python refuses a global pip install.
+  if [ ! -x .venv/bin/python ]; then
+    python3 -m venv .venv
+    .venv/bin/pip install --quiet "jsonschema>=4.18"
+  fi
+  .venv/bin/python Schema/validate.py
+}
+
+app() {
+  echo "==> App build (iPad Simulator)"
+  xcodebuild build \
+    -project CharacterStudio.xcodeproj \
+    -scheme CharacterStudio \
+    -destination 'generic/platform=iOS Simulator' \
+    CODE_SIGNING_ALLOWED=NO \
+    -quiet
+}
+
+if [ $# -eq 0 ]; then
+  set -- core schema app
+fi
+for step in "$@"; do
+  case "$step" in
+    core|schema|app) "$step" ;;
+    *) echo "Unknown step: $step (expected core, schema or app)" >&2; exit 2 ;;
+  esac
+done
+echo "==> All checks passed"

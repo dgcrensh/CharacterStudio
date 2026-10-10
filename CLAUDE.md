@@ -1,0 +1,50 @@
+# CLAUDE.md
+
+Character Studio is a personal iPad app (SwiftUI + Metal) for drawing 2D cutout characters with the Apple Pencil, rigging them with bones, and saving them as open JSON. See [README.md](README.md) for the user-facing behaviour of each milestone and [Schema/README.md](Schema/README.md) for the file format.
+
+## Layout
+
+- `CharacterStudio/`: the app target. SwiftUI shell, panels, the Metal canvas (`Canvas/`), and the `.charstudio` document (`Document/`). Shaders are compiled at launch from `Canvas/ShaderSource.swift`; there are no `.metal` files.
+- `Packages/CharacterCore/`: a UI-free Swift package with everything that can be tested: geometry, camera, curve fitting, Bézier paths, the `Drawing` model, `DrawingEditor` and its commands, undo, tessellation, touch routing, snapping and the JSON file format. The app links it as a local package.
+- `Schema/`: JSON Schema for `character.json`, the `robo.charstudio` example and `validate.py`.
+- `.github/workflows/ci.yml`: the three CI jobs. `scripts/check.sh` runs the same three locally.
+
+## Rules of the codebase
+
+- **Logic goes in CharacterCore, not the app.** CharacterCore imports only Foundation (no UIKit, SwiftUI, Metal or CoreGraphics) because CI tests it on Linux. Editing behaviour, input routing and file I/O belong there with unit tests; the app should stay a thin layer that forwards touches and draws what the core produces.
+- **Swift 6 language mode** with strict concurrency, in both the package and the app.
+- **The file format is stable byte for byte.** `JSONValue` keeps key order and numbers are written with at most 4 decimals, and `DocumentTests` re-saves `Schema/examples/robo.charstudio` and expects identical bytes. When changing the format: update `character-0.1.schema.json`, `Schema/README.md` and the example together, keep new keys optional so older files still read, and add a step to `CharacterFormat.migrations` if the version changes.
+- **Undo** stores `Drawing` snapshots (copy-on-write); one user gesture or command is one undo step. Ids are never reused within a session.
+- Coordinates are points with y down; angles are degrees, clockwise on screen; colors are `#RRGGBBAA`.
+- When a change alters what the user sees, update the matching milestone notes in `README.md`.
+
+## Building and testing on a Mac
+
+Requirements: **Xcode 26** (the app's deployment target is iPadOS 26, which needs the iOS 26 SDK) with an iOS Simulator runtime installed (Xcode > Settings > Components). Python 3 for the schema check.
+
+Run everything CI runs, from the repo root:
+
+```sh
+scripts/check.sh              # core tests, schema check, iPad Simulator build
+scripts/check.sh core         # or one step: core, schema, app
+```
+
+The steps, if you want to run them by hand:
+
+| CI job | Local command |
+| --- | --- |
+| CharacterCore tests (Linux, `swift:6.1`) | `swift test --package-path Packages/CharacterCore` |
+| File format schema | `python3 -m venv .venv && .venv/bin/pip install "jsonschema>=4.18" && .venv/bin/python Schema/validate.py` |
+| App build (iPad Simulator, `macos-latest`) | `xcodebuild build -project CharacterStudio.xcodeproj -scheme CharacterStudio -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO` |
+
+Notes:
+
+- `swift test` on a Mac uses Xcode's toolchain and Apple's Foundation; CI uses Linux's swift-corelibs-foundation. They rarely differ, but formatting, `Decimal` and some string APIs can. To reproduce the Linux job exactly: `docker run --rm -v "$PWD":/src -w /src swift:6.1 swift test --package-path Packages/CharacterCore`.
+- The CharacterStudio scheme also lists `CharacterCoreTests` as its test target, so Cmd-U in Xcode runs the same tests. From the command line that needs a concrete simulator: `xcrun simctl list devices available | grep iPad` to pick one, then `xcodebuild test -project CharacterStudio.xcodeproj -scheme CharacterStudio -destination 'platform=iOS Simulator,name=<iPad name>'`.
+- The schema check uses a `.venv` in the repo (git-ignored) because Homebrew's Python refuses a global `pip install`.
+- Running on a real iPad needs your personal team under Signing & Capabilities; CI builds with signing off and never runs the app.
+- In the Simulator there is no Pencil: a single finger (the mouse) draws, and Option-drag gives two fingers for pan, zoom and rotate.
+
+## In the cloud (no Xcode)
+
+Cloud sessions run on Linux with no Xcode, so only the core tests and the schema check can run there, and only if a Swift toolchain is installed. The app target cannot be built off a Mac; CI's `app-build` job is the check for it. Say so plainly rather than claiming an app change was built.

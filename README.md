@@ -8,7 +8,7 @@ Spec: [Character Studio: Project Spec](https://claude.ai/code/artifact/ffebbfb2-
 
 | Path | What it is |
 | --- | --- |
-| `CharacterStudio.xcodeproj` | The iPad app project (Xcode 16 or later, iPadOS 26 deployment target). |
+| `CharacterStudio.xcodeproj` | The iPad app project (Xcode 26 or later, iPadOS 26 deployment target). |
 | `CharacterStudio/` | App sources: SwiftUI shell, Metal canvas view, renderer, shaders. |
 | `CharacterStudio/Document/` | The `.charstudio` document type and its thumbnail. |
 | `Config/Info.plist` | Document type and exported type declarations (merged with Xcode's generated Info.plist). |
@@ -30,7 +30,7 @@ cd Packages/CharacterCore
 swift test
 ```
 
-Or open the package in Xcode and press Cmd-U.
+Or open the package in Xcode and press Cmd-U. To run everything CI runs (core tests, schema check, iPad Simulator build), use `scripts/check.sh`; see [CLAUDE.md](CLAUDE.md#building-and-testing-on-a-mac).
 
 ## Milestones
 
