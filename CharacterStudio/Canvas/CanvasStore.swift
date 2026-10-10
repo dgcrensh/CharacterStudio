@@ -86,6 +86,14 @@ final class EditorUIState {
     var canAddJointCap = false
     var wigglePart: Int?
     var canWiggle = false
+
+    // Workspace
+    var outlineView = false
+    var ghostsUnselected = false
+    /// The character frame, if the character has one.
+    var frame: CharacterFrame?
+    /// True when there is visible art (or a shown frame) to export.
+    var canExport = false
 }
 
 /// Owns the canvas session and connects SwiftUI controls to the Metal view.
@@ -116,6 +124,7 @@ final class CanvasStore {
     /// shake), not an edit made elsewhere.
     private var sentDocuments: [CharacterPackage] = []
     private var seenTapCommands = 0
+    private var toastCount = 0
 
     init(package: CharacterPackage = CharacterPackage()) {
         var options = InputOptions()
@@ -243,6 +252,10 @@ final class CanvasStore {
         update(\.canAddJointCap, editor.canAddJointCap)
         update(\.wigglePart, editor.wigglePart)
         update(\.canWiggle, editor.wiggleCandidate != nil || editor.wigglePart != nil)
+        update(\.outlineView, editor.outlineView)
+        update(\.ghostsUnselected, editor.ghostsUnselected)
+        update(\.frame, editor.drawing.frame)
+        update(\.canExport, editor.drawing.exportArea() != nil)
         update(\.layers, LayerTree(drawing: editor.drawing))
         if case .part(let id) = editor.selection {
             update(\.selectedPart, id)
@@ -256,11 +269,16 @@ final class CanvasStore {
 
         if session.tapCommandCount != seenTapCommands {
             seenTapCommands = session.tapCommandCount
-            let text = session.lastTapCommand == .redo ? "Redo" : "Undo"
-            ui.toast = (text, seenTapCommands)
+            showToast(session.lastTapCommand == .redo ? "Redo" : "Undo")
         }
         updateDocument()
         onChange?()
+    }
+
+    /// Shows a short message over the canvas.
+    func showToast(_ text: String) {
+        toastCount += 1
+        ui.toast = (text, toastCount)
     }
 
     private func update<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<EditorUIState, T>, _ value: T) {
@@ -389,6 +407,74 @@ final class CanvasStore {
     /// Starts or stops the wiggle preview of the selected part. The renderer keeps
     /// drawing while it rocks, timed by the same clock.
     func toggleWiggle() { edit { $0.editor.toggleWiggle(time: CACurrentMediaTime()) } }
+
+    // MARK: View options and the character frame
+
+    func setOutlineView(_ on: Bool) { edit { $0.editor.outlineView = on } }
+    func setGhostsUnselected(_ on: Bool) { edit { $0.editor.ghostsUnselected = on } }
+    func fitFrame() { edit { $0.editor.fitFrame() } }
+    func removeFrame() { edit { $0.editor.removeFrame() } }
+
+    /// Shows or hides the frame; a new one goes round the art, or mid-view when there is none.
+    func setFrameShown(_ on: Bool) {
+        let center = session.camera.toWorld(Vec2(viewSize) / 2)
+        edit { $0.editor.setFrameShown(on, center: center) }
+    }
+
+    /// A numeric frame edit; edits of one field in a row are one undo step.
+    func updateFrame(_ field: String, _ change: (inout CharacterFrame) -> Void) {
+        edit { $0.editor.updateFrame(coalescingKey: field, change) }
+    }
+
+    /// Fits the shown frame, or else the visible art, in the view.
+    func zoomToFit() {
+        guard let area = session.editor.drawing.exportArea(margin: 0) else { return }
+        session.zoom(toFit: area, viewSize: Vec2(viewSize))
+        onChange?()
+    }
+
+    // MARK: Import and export
+
+    /// Reads SVG art into new parts on top, selects them and fits them in the view.
+    /// Returns an error message when nothing could be imported.
+    func importSVG(_ data: Data, name: String) -> String? {
+        let text = String(decoding: data, as: UTF8.self)
+        let result: SVGImportResult
+        do {
+            result = try SVGImporter.parse(text, name: name)
+        } catch {
+            return (error as? SVGImportError)?.description ?? error.localizedDescription
+        }
+        edit { _ = $0.editor.importParts(result.parts) }
+        let editor = session.editor
+        let bounds = editor.drawing.shapeIndices(in: editor.selection).reduce(Rect.null) {
+            $0.union(editor.drawing.parts[$1.0].shapes[$1.1].bounds)
+        }
+        if !bounds.isNull {
+            session.zoom(toFit: bounds, viewSize: Vec2(viewSize))
+            onChange?()
+        }
+        let parts = result.parts.count == 1 ? "1 part" : "\(result.parts.count) parts"
+        var message = "Imported \(parts)"
+        if !result.skipped.isEmpty {
+            let skipped = result.skipped.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
+            message += "; skipped " + skipped.joined(separator: ", ")
+        }
+        showToast(message)
+        return nil
+    }
+
+    /// The art as SVG, over the shown frame or the visible art.
+    func svgData() -> Data? {
+        session.editor.svgDocument().map { Data($0.utf8) }
+    }
+
+    /// The art as a transparent PNG at `scale` pixels per point, over the same area as SVG.
+    func pngData(scale: Double) -> Data? {
+        let drawing = session.editor.drawing
+        guard let area = drawing.exportArea() else { return nil }
+        return ThumbnailRenderer.exportPNG(for: drawing, area: area, scale: scale)
+    }
 
     // MARK: Clipboard
 

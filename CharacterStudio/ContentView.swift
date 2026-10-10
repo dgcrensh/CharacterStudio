@@ -76,6 +76,11 @@ private struct ToolBar: View {
     @State private var showingLayers = false
     @State private var showingInspector = false
     @State private var showingAppearance = false
+    @State private var showingFrame = false
+    @State private var importingSVG = false
+    @State private var exporting = false
+    @State private var exportFile = ExportFile()
+    @State private var importError: String?
 
     var body: some View {
         // On a short screen (landscape) the strip scrolls rather than running off the edge.
@@ -92,7 +97,46 @@ private struct ToolBar: View {
         .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
         .popover(isPresented: $showingAppearance) { AppearancePanel(store: store, ui: ui) }
         .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
+        .popover(isPresented: $showingFrame) { FramePanel(store: store, ui: ui) }
+        // The importer and exporter sit on separate views: SwiftUI shows only one file
+        // panel modifier per view.
+        .background {
+            Color.clear.fileImporter(isPresented: $importingSVG, allowedContentTypes: [.svg]) { result in
+                guard case .success(let url) = result else { return }
+                importSVG(from: url)
+            }
+        }
+        .overlay {
+            Color.clear
+                .allowsHitTesting(false)
+                .fileExporter(isPresented: $exporting, document: exportFile, contentType: exportFile.type,
+                              defaultFilename: exportFile.name) { _ in }
+        }
+        .alert("Couldn't Import SVG", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
+        }
         .padding(.vertical, 16)
+    }
+
+    private func importSVG(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            importError = store.importSVG(data, name: url.deletingPathExtension().lastPathComponent)
+        } catch {
+            importError = error.localizedDescription
+        }
+    }
+
+    /// Offers the exported file to save in Files.
+    private func export(_ data: Data?, type: UTType) {
+        guard let data else { return }
+        let name = ui.characterName.isEmpty ? "Character" : ui.characterName
+        exportFile = ExportFile(data: data, type: type, name: name)
+        exporting = true
     }
 
     private var strip: some View {
@@ -112,12 +156,55 @@ private struct ToolBar: View {
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
             Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
+            ViewMenu(store: store, ui: ui, showingFrame: $showingFrame)
             Menu {
-                Button("Reset View", systemImage: "scope") { store.resetView() }
+                Button("Import SVG", systemImage: "square.and.arrow.down") { importingSVG = true }
+                Button("Export SVG", systemImage: "square.and.arrow.up") { export(store.svgData(), type: .svg) }
+                    .disabled(!ui.canExport)
+                Menu("Export PNG", systemImage: "photo") {
+                    ForEach([1, 2, 4], id: \.self) { scale in
+                        Button("\(scale)x") { export(store.pngData(scale: Double(scale)), type: .png) }
+                    }
+                }
+                .disabled(!ui.canExport)
+                Divider()
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) { store.clear() }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
+        }
+    }
+}
+
+/// How the canvas shows the art: the outline view, ghosting, the character frame and
+/// fitting the view.
+private struct ViewMenu: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    @Binding var showingFrame: Bool
+
+    var body: some View {
+        Menu {
+            Toggle(isOn: Binding(get: { ui.outlineView }, set: { store.setOutlineView($0) })) {
+                Label("Outline View", systemImage: "square.dashed")
+            }
+            Toggle(isOn: Binding(get: { ui.ghostsUnselected }, set: { store.setGhostsUnselected($0) })) {
+                Label("Ghost Unselected", systemImage: "circle.lefthalf.filled")
+            }
+            Divider()
+            Toggle(isOn: Binding(get: { ui.frame.map { !$0.isHidden } ?? false }, set: { store.setFrameShown($0) })) {
+                Label("Character Frame", systemImage: "rectangle.dashed")
+            }
+            Button("Frame Settings", systemImage: "slider.horizontal.below.rectangle") {
+                if ui.frame == nil { store.setFrameShown(true) }
+                showingFrame = true
+            }
+            Divider()
+            Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") { store.zoomToFit() }
+                .disabled(!ui.canExport)
+            Button("Reset View", systemImage: "scope") { store.resetView() }
+        } label: {
+            Label("View", systemImage: ui.outlineView ? "eye.square.fill" : "eye.square")
         }
     }
 }
@@ -752,9 +839,10 @@ private struct ToastView: View {
         }
         .allowsHitTesting(false)
         .task(id: ui.toast?.count) {
-            guard ui.toast != nil else { return }
+            guard let toast = ui.toast else { return }
             withAnimation(.easeOut(duration: 0.15)) { visible = true }
-            try? await Task.sleep(for: .milliseconds(700))
+            // Longer messages (an import summary) stay up long enough to read.
+            try? await Task.sleep(for: .milliseconds(toast.text.count > 12 ? 2500 : 700))
             withAnimation(.easeIn(duration: 0.3)) { visible = false }
         }
     }

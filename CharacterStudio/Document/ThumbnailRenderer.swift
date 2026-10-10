@@ -4,16 +4,16 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Draws the character's art into the package's `thumbnail.png` with Core Graphics.
-/// Safe to call off the main thread, where documents are written.
+/// Draws the character's art into the package's `thumbnail.png`, and into PNG exports,
+/// with Core Graphics. Safe to call off the main thread, where documents are written.
 enum ThumbnailRenderer {
+    /// The longest side an exported PNG may have, in pixels.
+    static let maxExportSide = 8192.0
+
     static func png(for drawing: Drawing, size: Int = 512) -> Data? {
         let bounds = drawing.parts.reduce(Rect.null) { $0.union($1.bounds) }
         guard !bounds.isNull, max(bounds.width, bounds.height) > 0 else { return nil }
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
+        guard let context = makeContext(width: size, height: size) else { return nil }
 
         // Fit the art with a margin; flip so y points down like the canvas.
         let side = Double(size)
@@ -23,11 +23,37 @@ enum ThumbnailRenderer {
         context.translateBy(x: CGFloat(side / 2), y: CGFloat(side / 2))
         context.scaleBy(x: CGFloat(k), y: CGFloat(k))
         context.translateBy(x: CGFloat(-bounds.center.x), y: CGFloat(-bounds.center.y))
+        drawArt(drawing, in: context, tolerance: 0.5 / k, skipHidden: false)
+        return encode(context)
+    }
 
-        let tolerance = 0.5 / k
+    /// The visible art over `area` (world points) on a transparent background, at
+    /// `scale` pixels per point (less if the image would pass `maxExportSide`).
+    static func exportPNG(for drawing: Drawing, area: Rect, scale: Double) -> Data? {
+        guard !area.isNull, area.width > 0, area.height > 0, scale > 0 else { return nil }
+        let k = min(scale, maxExportSide / max(area.width, area.height))
+        let width = max(Int((area.width * k).rounded()), 1), height = max(Int((area.height * k).rounded()), 1)
+        guard let context = makeContext(width: width, height: height) else { return nil }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: CGFloat(k), y: CGFloat(-k))
+        context.translateBy(x: CGFloat(-area.minPoint.x), y: CGFloat(-area.minPoint.y))
+        drawArt(drawing, in: context, tolerance: 0.25 / k, skipHidden: true)
+        return encode(context)
+    }
+
+    private static func makeContext(width: Int, height: Int) -> CGContext? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                         space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    }
+
+    /// Draws every part back to front. Hidden art is left out when `skipHidden` is set.
+    private static func drawArt(_ drawing: Drawing, in context: CGContext, tolerance: Double, skipHidden: Bool) {
         for part in drawing.parts {
             for (index, shape) in part.shapes.enumerated() {
+                if skipHidden, !part.isShown(index) { continue }
                 if let base = part.clipBase(of: index) {
+                    if skipHidden, !part.isShown(base) { continue }
                     // Clipped shapes draw only where their base draws.
                     context.saveGState()
                     context.addPath(clipMask(part.shapes[base], tolerance: tolerance))
@@ -39,7 +65,9 @@ enum ThumbnailRenderer {
                 }
             }
         }
+    }
 
+    private static func encode(_ context: CGContext) -> Data? {
         guard let image = context.makeImage() else { return nil }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString, 1, nil)

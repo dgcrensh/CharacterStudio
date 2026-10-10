@@ -79,6 +79,19 @@
       "description": "Editor-only reference images, bottom to top. Not part of the character: animation tools should ignore them.",
       "type": "array",
       "items": { "$ref": "#/$defs/reference" }
+    },
+    "frame": {
+      "description": "Optional editor hint: the target box the character is drawn for (top-left x, y and size, in world space) and the y of the ground line it stands on. Also the area the editor exports. Written only when set.",
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "ground": { "description": "Defaults to the bottom of the box.", "type": "number" },
+        "hidden": { "description": "Written only when true: the editor doesn't show the frame.", "type": "boolean" }
+      }
     }
   },
   "$defs": {

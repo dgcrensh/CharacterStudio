@@ -174,6 +174,10 @@ public struct DrawingEditor: Sendable {
     public var boneMode: BoneToolMode = .draw
     /// Draws the bones in every tool, not just the bone tool.
     public var showsBones = false
+    /// Draws every shape as a thin wireframe instead of its fill and outline.
+    public var outlineView = false
+    /// Dims everything but the selection (see `ghostFocus`).
+    public var ghostsUnselected = false
     public var symmetry = SymmetrySettings()
     /// The part rocking about its pivot for the wiggle preview, and when it started.
     public internal(set) var wigglePart: Int?

@@ -127,5 +127,6 @@
       "opacity": 0.35,
       "hidden": false
     }
-  ]
+  ],
+  "frame": { "x": -90, "y": -170, "width": 180, "height": 190, "ground": 8 }
 }
