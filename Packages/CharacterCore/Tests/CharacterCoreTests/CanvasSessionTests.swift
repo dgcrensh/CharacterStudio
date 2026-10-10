@@ -67,6 +67,21 @@ final class CanvasSessionTests: XCTestCase {
         XCTAssertTrue(s.camera.toScreen(.zero).isApproximately(Vec2(550, 400), tolerance: 1e-9))
     }
 
+    func testTwoFingersPinchZoomAboutTheirMidpoint() {
+        var s = session()
+        s.touchBegan(id: 1, kind: .finger, location: Vec2(400, 400))
+        s.touchBegan(id: 2, kind: .finger, location: Vec2(600, 400))
+        s.touchMoved(id: 1, samples: [Vec2(300, 400)])
+        s.touchMoved(id: 2, samples: [Vec2(700, 400)])
+        XCTAssertEqual(s.camera.zoom, 2, accuracy: 1e-9)
+        // The world origin was under the fingers' midpoint and stays there.
+        XCTAssertTrue(s.camera.toScreen(.zero).isApproximately(Vec2(500, 400), tolerance: 1e-9))
+        s.touchEnded(id: 1)
+        s.touchEnded(id: 2)
+        XCTAssertEqual(s.camera.zoom, 2, accuracy: 1e-9)
+        XCTAssertFalse(s.editor.canUndo)
+    }
+
     func testThirdFingerIsIgnored() {
         var s = session()
         s.touchBegan(id: 1, kind: .finger, location: Vec2(400, 400))

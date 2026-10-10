@@ -112,6 +112,16 @@ final class MetalCanvasView: UIView {
 
     // MARK: Touches
 
+    /// Navigation is the canvas's own: `CanvasSession` pans, zooms and rotates with two
+    /// fingers. UIKit also asks the touched view before a recognizer on one of its
+    /// ancestors begins, such as the document's pinch-to-close (the zoom transition back
+    /// to the browser) or the edge swipe back. Those would cancel a two-finger pinch's
+    /// touches, so over the canvas only its own recognizers may begin. The back button
+    /// still closes the document.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer.view === self && super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
     private func kind(of touch: UITouch) -> TouchKind? {
         switch touch.type {
         case .pencil: .pencil
