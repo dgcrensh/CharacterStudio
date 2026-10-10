@@ -8,8 +8,13 @@ public enum EditorOverlay {
     public static let handleFill = RGBAColor.white
     /// The eraser's ring and the outline of what it would delete.
     public static let eraserColor = RGBAColor(r: 0.9, g: 0.25, b: 0.2)
+    /// Bones that aren't selected, and the symmetry axis.
+    public static let boneColor = RGBAColor(r: 0.45, g: 0.42, b: 0.58)
+    public static let symmetryColor = RGBAColor(r: 0.85, g: 0.35, b: 0.75, a: 0.8)
 
-    public static func vertices(for editor: DrawingEditor, zoom: Double) -> [Float] {
+    /// `viewRect` (world space) bounds lines that run across the whole view, such as the
+    /// symmetry axis.
+    public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil) -> [Float] {
         var out: [Float] = []
         let px = 1 / max(zoom, 1e-9)
         let drawing = editor.drawing
@@ -69,6 +74,71 @@ public enum EditorOverlay {
             }
             CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
         }
+        // The symmetry axis, and what symmetry will add for a shape or pen path in progress.
+        if editor.symmetry.isEnabled {
+            let axis = editor.symmetry.axis
+            let view = viewRect ?? Rect(points: drawing.parts.map(\.bounds).flatMap { $0.isNull ? [] : $0.corners })
+            let pad = 40 * px
+            let top = (view.isNull ? -1000 : view.minPoint.y) - pad, bottom = (view.isNull ? 1000 : view.maxPoint.y) + pad
+            // Dashed, so it reads as a guide rather than art.
+            let dash = 12 * px
+            var y = top
+            while y < bottom {
+                line(Vec2(axis, y), Vec2(axis, min(y + dash, bottom)), width: 1.5, color: symmetryColor)
+                y += dash * 2
+            }
+            for path in editor.mirrorPreview {
+                let poly = path.flattened(tolerance: 0.5 * px)
+                CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                          width: 1.5 * px, color: symmetryColor, to: &out)
+            }
+        }
+
+        // The skeleton, in the bone tool or when bones are shown everywhere.
+        if editor.tool == .bone || editor.showsBones {
+            let hover = editor.hoverBone
+            if let id = editor.selectedBone, editor.tool == .bone {
+                // The selected bone's parts, so it's clear what moves with it.
+                for part in drawing.parts where part.bone == id && !part.isHidden {
+                    for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
+                        outline(of: ShapeRef(part: part.id, shape: shape.id), color: accent.withAlpha(0.5))
+                    }
+                }
+            }
+            for bone in drawing.bones {
+                let selected = bone.id == editor.selectedBone
+                let hovered = hover?.bone == bone.id
+                let color = selected ? accent : boneColor
+                // A line to the parent's tip when the bone doesn't start there.
+                if let parent = bone.parent.flatMap({ drawing.bone($0) }), parent.tail.distance(to: bone.head) > 1e-6 {
+                    var dashY = 0.0
+                    let d = bone.head - parent.tail, len = d.length, step = 6 * px
+                    while dashY < len {
+                        line(parent.tail + d * (dashY / len), parent.tail + d * (min(dashY + step, len) / len),
+                             width: 1, color: boneColor)
+                        dashY += step * 2
+                    }
+                }
+                let outlinePoints = BoneMetrics.outline(of: bone, zoom: zoom)
+                let fill = selected ? accent.withAlpha(0.35) : boneColor.withAlpha(0.25)
+                // A soft fill down the middle of the bone (one capsule, so nothing overlaps and darkens).
+                let w = BoneMetrics.halfWidth(of: bone, zoom: zoom)
+                if bone.length > 1e-6 {
+                    let d = bone.tail - bone.head
+                    CapsuleTessellator.append(points: [bone.head + d * 0.15, bone.head + d * 0.55], width: w * 1.1,
+                                              color: fill, to: &out)
+                }
+                let ring = outlinePoints + [outlinePoints[0]]
+                CapsuleTessellator.append(points: ring, width: (selected || hovered ? 2 : 1.5) * px, color: color, to: &out)
+                let jointRadius = 4.5
+                for (handle, point) in [(BoneHandle.head, bone.head), (.tail, bone.tail)] {
+                    let lit = hovered && hover?.handle == handle
+                    dot(point, radius: lit ? jointRadius + 2 : jointRadius, color: color)
+                    dot(point, radius: (lit ? jointRadius + 2 : jointRadius) - 1.5, color: handleFill)
+                }
+            }
+        }
+
         if let target = editor.hoverTarget, !drawing.shapeRefs(in: editor.selection).contains(target) || editor.tool == .eraser {
             outline(of: target, color: editor.tool == .eraser ? eraserColor : accent)
         }
@@ -82,13 +152,20 @@ public enum EditorOverlay {
                 ring(hover, radius: EditorMetrics.eraserRadius * px, color: eraserColor)
             case .scissors:
                 if let cut = editor.scissorsPreview { ringDot(cut, radius: 6) }
-            case .pen, .select, .directSelect, .shape:
+            case .pen, .select, .directSelect, .shape, .bone:
                 break
             }
         }
 
+        // A selected part's pivot shows in every tool (the select tool draws its own, draggable).
+        if editor.tool != .select, case .part(let id) = editor.selection, let part = drawing.part(id), !part.shapes.isEmpty {
+            line(part.pivot - Vec2(8 * px, 0), part.pivot + Vec2(8 * px, 0), width: 1.5)
+            line(part.pivot - Vec2(0, 8 * px), part.pivot + Vec2(0, 8 * px), width: 1.5)
+            ringDot(part.pivot, radius: 3.5)
+        }
+
         switch editor.tool {
-        case .pencil, .shape, .eraser:
+        case .pencil, .shape, .eraser, .bone:
             break
 
         case .scissors:

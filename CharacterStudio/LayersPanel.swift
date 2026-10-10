@@ -11,6 +11,7 @@ struct LayersPanel: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var renaming: LayerTree.PartLayer?
+    @State private var renamingBone: LayerTree.BoneLayer?
     @State private var newName = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var importingFile = false
@@ -24,33 +25,45 @@ struct LayersPanel: View {
             }
 
             Section {
-                let rows = Self.rows(ui.layers.bones)
-                ForEach(rows) { row in
+                ForEach(Self.rows(ui.layers.bones)) { row in
                     switch row {
-                    case .bone(let id, let depth):
-                        Label(id, systemImage: "line.diagonal")
-                            .font(.subheadline.weight(.semibold))
+                    case .bone(let bone, let depth):
+                        boneRow(bone)
                             .padding(.leading, CGFloat(depth) * 18)
-                            .moveDisabled(true)
                     case .part(let part, let depth):
-                        partRow(part)
+                        skeletonPartRow(part)
                             .padding(.leading, CGFloat(depth) * 18)
                     }
                 }
-                // Drag a part to change the draw order.
-                .onMove { from, to in
-                    var moved = rows
-                    moved.move(fromOffsets: from, toOffset: to)
-                    store.setPartOrder(frontToBack: moved.compactMap(\.partID))
-                }
-                if ui.layers.bones.allSatisfy({ $0.parts.isEmpty }) {
-                    Text("Draw with the pencil or pen to add a part.")
+                if ui.bones.isEmpty {
+                    Text("Draw bones with the Bones tool.")
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Skeleton")
             } footer: {
-                Text("Parts are listed front to back; drag one to reorder. The eye hides a part and the lock stops taps reaching it. Bones arrive in a later milestone; until then every part sits under the root bone.")
+                Text("Each part sits under the bone it moves with. Tap a bone to select it with the Bones tool; long-press a bone or part to rename, re-parent or move it.")
+            }
+
+            Section {
+                let parts = ui.layers.drawOrder
+                ForEach(parts) { part in
+                    partRow(part)
+                }
+                // Drag a part to change the draw order.
+                .onMove { from, to in
+                    var moved = parts
+                    moved.move(fromOffsets: from, toOffset: to)
+                    store.setPartOrder(frontToBack: moved.map(\.id))
+                }
+                if parts.isEmpty {
+                    Text("Draw with the pencil or pen to add a part.")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Draw Order")
+            } footer: {
+                Text("Parts are listed front to back, whatever bone they are on; drag one to reorder. The eye hides a part and the lock stops taps reaching it.")
             }
 
             Section {
@@ -84,6 +97,15 @@ struct LayersPanel: View {
                 if let part = renaming { store.renamePart(part.id, to: newName) }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Bone", isPresented: Binding(get: { renamingBone != nil }, set: { if !$0 { renamingBone = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                if let id = renamingBone?.bone { store.renameBone(id, to: newName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Name a left or right bone with .L or .R (Arm.L) so mirroring finds its partner.")
         }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
@@ -167,6 +189,75 @@ struct LayersPanel: View {
         }
     }
 
+    /// A bone in the skeleton tree. The root can't be selected, renamed or moved.
+    @ViewBuilder
+    private func boneRow(_ bone: LayerTree.BoneLayer) -> some View {
+        if let id = bone.bone {
+            Button {
+                store.selectBone(id)
+            } label: {
+                HStack {
+                    Label(bone.id, systemImage: "line.diagonal")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if ui.selectedBone == id {
+                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("Rename", systemImage: "pencil") {
+                    newName = bone.id
+                    renamingBone = bone
+                }
+                Menu("Parent", systemImage: "arrow.turn.left.up") {
+                    Button(CharacterFormat.rootBone) { store.setBoneParent(id, parent: nil) }
+                    ForEach(store.possibleParents(of: id)) { parent in
+                        Button(parent.name) { store.setBoneParent(id, parent: parent.id) }
+                    }
+                }
+                Button("Mirror", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                    store.mirrorBone(id)
+                }
+                Button("Delete", systemImage: "trash", role: .destructive) { store.deleteBone(id) }
+            }
+        } else {
+            Label(bone.id, systemImage: "circle.circle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// A part under its bone: tap to select it, long-press to move it to another bone.
+    private func skeletonPartRow(_ part: LayerTree.PartLayer) -> some View {
+        Button {
+            store.selectPart(part.id)
+        } label: {
+            HStack {
+                Label(part.name, systemImage: "square.on.circle")
+                    .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+                Spacer()
+                if ui.selectedPart == part.id {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(part.isHidden || part.isLocked)
+        .contextMenu {
+            Menu("Move to Bone", systemImage: "arrow.right.square") {
+                Button(CharacterFormat.rootBone) { store.setPartBone(part.id, bone: nil) }
+                ForEach(ui.bones) { bone in
+                    Button(bone.name) { store.setPartBone(part.id, bone: bone.id) }
+                }
+            }
+            Button("Rename", systemImage: "pencil") { startRenaming(part) }
+        }
+    }
+
     private func startRenaming(_ part: LayerTree.PartLayer) {
         newName = part.name
         renaming = part
@@ -177,26 +268,21 @@ struct LayersPanel: View {
     }
 
     private enum Row: Identifiable {
-        case bone(id: String, depth: Int)
+        case bone(LayerTree.BoneLayer, depth: Int)
         case part(LayerTree.PartLayer, depth: Int)
 
         var id: String {
             switch self {
-            case .bone(let id, _): "bone-\(id)"
+            case .bone(let bone, _): "bone-\(bone.bone.map(String.init) ?? "root")"
             case .part(let part, _): "part-\(part.id)"
             }
-        }
-
-        var partID: Int? {
-            if case .part(let part, _) = self { return part.id }
-            return nil
         }
     }
 
     /// The tree flattened into indented rows: each bone, then its parts, then its children.
     private static func rows(_ bones: [LayerTree.BoneLayer], depth: Int = 0) -> [Row] {
         bones.flatMap { bone in
-            [Row.bone(id: bone.id, depth: depth)] +
+            [Row.bone(bone, depth: depth)] +
                 bone.parts.map { Row.part($0, depth: depth + 1) } +
                 rows(bone.children, depth: depth + 1)
         }

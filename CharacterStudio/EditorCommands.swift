@@ -28,6 +28,8 @@ struct EditorCommands: Commands {
                 .keyboardShortcut("v")
             Button("Duplicate") { store?.duplicate() }
                 .keyboardShortcut("d")
+            Button("Duplicate Mirrored") { store?.duplicateMirrored() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
             Button("Delete") { store?.deleteSelection() }
                 .keyboardShortcut(.delete, modifiers: [])
         }
@@ -72,6 +74,7 @@ struct EditorCommands: Commands {
             tool(.shape, "Shapes", key: "m")
             tool(.eraser, "Eraser", key: "e")
             tool(.scissors, "Scissors", key: "c")
+            tool(.bone, "Bones", key: "b")
         }
     }
 

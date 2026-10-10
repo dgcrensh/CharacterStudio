@@ -1,5 +1,6 @@
 import CharacterCore
 import Observation
+import QuartzCore
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -66,6 +67,25 @@ final class EditorUIState {
     var recentColors: [RGBAColor] = []
     /// Where the Pencil squeeze (or double tap) palette is open, in canvas points.
     var palettePoint: CGPoint?
+
+    // Skeleton
+    var selectedBone: Int?
+    var selectedBoneName = ""
+    /// The bones the selected bone can move under (not itself or its children).
+    var possibleParents: [Bone] = []
+    var selectedBoneParent: Int?
+    /// Every bone, in skeleton order, for menus.
+    var bones: [Bone] = []
+    var boneMode: BoneToolMode = .draw
+    var showsBones = false
+    var canAttachPart = false
+    var selectedPartName = ""
+    var canSnapPivotToBone = false
+    var symmetry = SymmetrySettings()
+    var canDuplicateMirrored = false
+    var canAddJointCap = false
+    var wigglePart: Int?
+    var canWiggle = false
 }
 
 /// Owns the canvas session and connects SwiftUI controls to the Metal view.
@@ -207,6 +227,22 @@ final class CanvasStore {
         update(\.hasHiddenArt, editor.hasHiddenArt)
         update(\.hasLockedArt, editor.hasLockedArt)
         update(\.recentColors, editor.recentColors)
+        update(\.selectedBone, editor.selectedBone)
+        let bone = editor.selectedBone.flatMap { editor.drawing.bone($0) }
+        update(\.selectedBoneName, bone?.name ?? "")
+        update(\.selectedBoneParent, bone?.parent)
+        update(\.possibleParents, bone.map { editor.possibleParents(of: $0.id) } ?? [])
+        update(\.bones, editor.drawing.bones)
+        update(\.boneMode, editor.boneMode)
+        update(\.showsBones, editor.showsBones)
+        update(\.canAttachPart, editor.canAttachSelectedPart)
+        update(\.selectedPartName, editor.selectedPart.flatMap { editor.drawing.part($0)?.name } ?? "")
+        update(\.canSnapPivotToBone, editor.canSnapPivotToBone)
+        update(\.symmetry, editor.symmetry)
+        update(\.canDuplicateMirrored, editor.canDuplicateMirrored)
+        update(\.canAddJointCap, editor.canAddJointCap)
+        update(\.wigglePart, editor.wigglePart)
+        update(\.canWiggle, editor.wiggleCandidate != nil || editor.wigglePart != nil)
         update(\.layers, LayerTree(drawing: editor.drawing))
         if case .part(let id) = editor.selection {
             update(\.selectedPart, id)
@@ -313,6 +349,46 @@ final class CanvasStore {
         guard let id = ui.selectedPart else { return }
         isolate(part: id)
     }
+
+    // MARK: Skeleton
+
+    func selectBone(_ id: Int) {
+        edit {
+            $0.editor.tool = .bone
+            $0.editor.selectedBone = id
+        }
+    }
+
+    func possibleParents(of id: Int) -> [Bone] { session.editor.possibleParents(of: id) }
+    func setBoneMode(_ mode: BoneToolMode) { edit { $0.editor.boneMode = mode } }
+    func setShowsBones(_ on: Bool) { edit { $0.editor.showsBones = on } }
+    func renameBone(_ id: Int, to name: String) { edit { $0.editor.renameBone(id, to: name) } }
+    func setBoneParent(_ id: Int, parent: Int?) { edit { $0.editor.setBoneParent(id, parent: parent) } }
+    func deleteBone(_ id: Int) { edit { $0.editor.deleteBone(id) } }
+    func mirrorSelectedBone() { edit { $0.editor.mirrorSelectedBone() } }
+    func setPartBone(_ id: Int, bone: Int?) { edit { $0.editor.setPartBone(id, bone: bone) } }
+    func attachSelectedPart() { edit { $0.editor.attachSelectedPartToSelectedBone() } }
+    func snapPivotToBone() { edit { $0.editor.snapPivotToBone() } }
+
+    /// Mirrors a bone and the bones below it; selects it first.
+    func mirrorBone(_ id: Int) {
+        edit {
+            $0.editor.selectedBone = id
+            $0.editor.mirrorSelectedBone()
+        }
+    }
+
+    // MARK: Symmetry, wiggle and joints
+
+    func setSymmetryEnabled(_ on: Bool) { edit { $0.editor.symmetry.isEnabled = on } }
+    func centerSymmetryAxis() { edit { $0.editor.centerSymmetryAxis() } }
+    func resetSymmetryAxis() { edit { $0.editor.symmetry.axis = 0 } }
+    func duplicateMirrored() { edit { $0.editor.duplicateMirrored() } }
+    func addJointCap() { edit { $0.editor.addJointCap() } }
+
+    /// Starts or stops the wiggle preview of the selected part. The renderer keeps
+    /// drawing while it rocks, timed by the same clock.
+    func toggleWiggle() { edit { $0.editor.toggleWiggle(time: CACurrentMediaTime()) } }
 
     // MARK: Clipboard
 

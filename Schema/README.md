@@ -19,15 +19,25 @@ A character is a `.charstudio` package (a folder that Files shows as one documen
 
 ## Structure
 
-- `bones`: the bone tree. The app writes only the `root` bone so far.
-- `slots`: one per part, on the bone the part binds to (`root` so far). A slot's id is the part's name, kept unique by the editor.
+- `bones`: the bone tree, parents before children, starting with `root`. See [Skeleton](#skeleton).
+- `slots`: one per part, on the bone the part moves with (`root` for a part on no bone). A slot's id is the part's name, kept unique by the editor.
 - `drawOrder`: slot ids from back to front.
-- `skins.default[slot][attachment]`: a `vector` attachment with the part's `pivot` and its `shapes`, back to front. Attachment coordinates are in the bone's space; with only the root bone that is world space.
+- `skins.default[slot][attachment]`: a `vector` attachment with the part's `pivot` and its `shapes`, back to front. Attachment coordinates (points, handles, `pivot`, gradient points) are in the space of the slot's bone; on `root` that is world space.
 - Attachments and shapes may carry `hidden: true` and `locked: true`, editor hints written only when set: the editor doesn't draw hidden art and doesn't let taps reach locked art. Animation tools should draw both as usual.
 - A shape is `closed`, an optional `fill`, an optional `stroke` (`color`, `width`) and `points`. Each point has the anchor `p`, handles `in` and `out` as offsets from `p`, `smooth: false` on corner points, and `symmetric: true` on points whose handles are kept equally long (both optional editor hints). `weights` (`[bone, weight]` pairs) are reserved for two-bone binding.
 - `poses` and `animations` are reserved and empty so far.
 - `palette`: the character's reusable colors. Plain `#RRGGBBAA` strings come first, then global colors as `{ "name", "color" }` (0.2).
 - `references`: editor-only reference images, bottom to top, with placement (`x`, `y` center, `rotation`, `scale`), `opacity` and `hidden`. Animation tools should ignore them.
+
+## Skeleton
+
+Bones were always part of 0.1 and 0.2; the app now writes them. A file with only `root` reads as before.
+
+- `root` has `parent: null`, `length: 0` and no transform: its space is world space. Every other bone has an `id` (its name, unique and never `root`), a `parent` id, a `length`, and its rest pose as `x`, `y` (where its head sits in the parent's space), `rotation` (degrees clockwise, relative to the parent) and `scaleX`, `scaleY` (always 1 from the app).
+- A bone's space has its origin at its head with +x along the bone toward its tail and +y to the bone's right on screen. Its world transform is the parent's transform, then a translation to (`x`, `y`), a rotation and the scale.
+- A bone's tail is at (`length`, 0) in its own space. Children don't have to start at the tail: a sibling-style branch starts wherever its `x`, `y` says.
+- Readers should place a bone with an unknown parent on `root`, and a slot on an unknown bone on `root` too. Two bones with the same id are an error.
+- Names ending in `.L`/`.R` (also `_L`, `-L`, ` L` and `Left`/`Right` words) mark sides for mirroring. The character faces the viewer, so its left side (`.L`) is on the right of the screen.
 
 ## Appearance (0.2)
 

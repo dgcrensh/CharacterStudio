@@ -90,6 +90,15 @@ public struct CanvasSession: Sendable {
 
     public var isNavigating: Bool { navigation != nil }
     public var isDrawing: Bool { liveStroke != nil }
+
+    /// The live stroke's mirror image while symmetry is on, for drawing as a preview.
+    public var mirroredLiveStroke: InkStroke? {
+        guard editor.symmetry.isEnabled, var stroke = liveStroke else { return nil }
+        let symmetry = editor.symmetry
+        stroke.points = stroke.points.map(symmetry.mirror)
+        stroke.predicted = stroke.predicted.map(symmetry.mirror)
+        return stroke
+    }
     /// True while the Pencil (or the Simulator's drawing finger) is down.
     public var isPencilActive: Bool { drawingTouch != nil }
 
@@ -303,7 +312,7 @@ public struct CanvasSession: Sendable {
             }
             liveStroke = stroke
             nextStrokeID += 1
-        case .pen, .select, .directSelect, .shape, .eraser, .scissors:
+        case .pen, .select, .directSelect, .shape, .eraser, .scissors, .bone:
             editor.pencilBegan(at: world, zoom: camera.zoom)
         }
     }

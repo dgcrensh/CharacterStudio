@@ -131,13 +131,24 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertFalse(mouth.path.closed)
         XCTAssertNil(mouth.fill)
         XCTAssertEqual(mouth.path.points.map(\.width), [0.3, 1.4, 0.3])
+        // The head sits on the neck, at the top of the spine; the arms branch off the spine.
+        XCTAssertEqual(d.bones.map(\.name), ["Spine", "Neck", "Arm.L", "Arm.R"])
+        XCTAssertEqual(d.bones[1].parent, d.bones[0].id)
+        XCTAssertEqual(d.bones[3].parent, d.bones[0].id)
+        XCTAssertTrue(d.bones[1].head.isApproximately(Vec2(0, -90), tolerance: 1e-9))
+        XCTAssertTrue(d.bones[3].tail.isApproximately(Vec2(-76, -80), tolerance: 1e-9))
+        XCTAssertNil(d.parts[0].bone)
+        XCTAssertEqual(d.parts[1].bone, d.bones[1].id)
+        // Its art is stored in the neck's space and read back into world space.
+        XCTAssertTrue(d.parts[1].pivot.isApproximately(Vec2(0, -110), tolerance: 1e-9))
+        XCTAssertTrue(d.parts[1].shapes[0].path.points[0].position.isApproximately(Vec2(0, -150), tolerance: 1e-9))
         XCTAssertEqual(d.references.count, 1)
         XCTAssertEqual(d.references[0].rotation, .pi / 2, accuracy: 1e-12)
         XCTAssertEqual(d.references[0].opacity, 0.35)
         XCTAssertEqual(package.referenceImages[d.references[0].id]?.count, try exampleFiles("robo.charstudio")["references/reference-1.png"]?.count)
         // Every id is distinct.
         let ids = d.parts.map(\.id) + d.parts.flatMap { $0.shapes.map(\.id) } + d.references.map(\.id) +
-            d.globalColors.map(\.id)
+            d.globalColors.map(\.id) + d.bones.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count)
         XCTAssertGreaterThan(d.nextID, ids.max()!)
     }
@@ -283,7 +294,7 @@ final class CharacterFormatTests: XCTestCase {
 }
 
 final class LayerTests: XCTestCase {
-    func testLayerTreeListsPartsFrontToBackUnderTheRoot() {
+    func testLayerTreeListsPartsFrontToBackUnderTheRootWithoutBones() {
         var d = Drawing()
         d.parts = [Part(id: 1, name: "Back"), Part(id: 2, name: "Front", shapes: [VectorShape(id: 3, path: BezierPath())])]
         d.references = [ReferenceImage(id: 4, name: "Under", size: Vec2(1, 1), center: .zero),

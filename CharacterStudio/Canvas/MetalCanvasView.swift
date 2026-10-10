@@ -113,7 +113,8 @@ final class MetalCanvasView: UIView {
             darkMode: traitCollection.userInterfaceStyle == .dark
         ) ?? true
         // A dropped frame is retried on the next tick; otherwise the overlay could stay stale.
-        if !drawn { needsRender = true }
+        // The wiggle preview animates, so it keeps the display link ticking.
+        if !drawn || store.session.editor.wigglePart != nil { needsRender = true }
     }
 
     @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {

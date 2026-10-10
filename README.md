@@ -37,7 +37,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 1. **Canvas and ink**: Metal canvas, pan, zoom, rotate, low-latency Pencil strokes, palm rejection.
 2. **Vector shapes**: curve fitting, filled shapes with outlines, point editing, selection, undo, solid colors, reference images.
 3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
-4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order.
+4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
 6. Polish and export: SVG export, slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below.)
 
@@ -86,7 +86,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 **Using it**
 
 - **Documents:** the app opens to the Files browser. Tap **+** (Create Document) for a new character, or open an existing `.charstudio`. Characters autosave a moment after each change; tap the back arrow to return to the browser, and tap the title to rename the file. Documents live wherever you browse to (On My iPad, iCloud Drive), and each has its own undo history.
-- **Layers** (stacked squares button, replacing the photo button): the character's name, then the skeleton tree. Every part sits under the **root** bone for now, listed front to back. Tap a part to select it; long-press or swipe for Rename and Delete. Part names must be unique, so a clash gets a number added. The **Reference Images** section has the import buttons and the per-reference controls from milestone 2.
+- **Layers** (stacked squares button, replacing the photo button): the character's name, then the skeleton tree. Parts are listed under their bones (milestone 4). Tap a part to select it; long-press or swipe for Rename and Delete. Part names must be unique, so a clash gets a number added. The **Reference Images** section has the import buttons and the per-reference controls from milestone 2.
 - **Reference images** now save inside the document, at their imported resolution (JPEG for photos, PNG when they have transparency).
 - To look inside a file, copy it to a Mac and choose Show Package Contents; `character.json` is plain, readable JSON.
 
@@ -147,3 +147,27 @@ Tier 2 of the full-editor plan, done as one file format bump to **0.2**. Older 0
 - **Pressure:** `CanvasSession` records each sample's force as a fraction of the most the Pencil reports; after fitting, each anchor takes the averaged pressure near where it was drawn (`PressureWidth`). Fingers report no pressure, so the Simulator always draws even outlines.
 - **Format 0.2** keeps widths on the centerline (`w` per point) rather than outlining strokes into filled shapes, so line weight stays right when bones bend a path. Every new key is optional and written only when it differs from its default; see [Schema/README.md](Schema/README.md#appearance-02). `fill` and outline `color` still hold the actual color when a gradient or global color applies, for readers that don't know them.
 - The thumbnail uses the same stroker, and Core Graphics for gradients and clipping.
+
+## Milestone 4 notes (skeleton)
+
+Milestone 4 with three items from the full-editor plan: mirror drawing (#18), joint-aware drawing (#19) and pivot snapping (#21). The file format stays 0.2; bones were always part of it.
+
+**Using it**
+
+- **Bones tool** (the figure at the bottom of the tool strip, or B). This is Setup mode: moving bones doesn't move the art. In **Draw**, drag on empty canvas to draw a bone from its joint to its tip. Start a drag on a bone's tip to chain a child from it, or on its head to branch a sibling. New bones snap to existing joints, the symmetry axis and (with Snap on) the grid. Shift keeps a bone at 15-degree steps. In **Adjust**, drag a bone's tip to turn and stretch it (its children follow), its head to move just that joint, or its middle to move it with everything below it. Tap a bone to select it; tap empty canvas to deselect; Delete removes it (its children and parts move to its parent).
+- **Context bar** for the selected bone: its name (rename and press Return; names stay unique), its **Parent**, **Mirror Bone** (copies it, the bones below it and the parts on them to the other side of the symmetry axis with `.L`/`.R` names) and **Delete Bone**. With a part also selected, **Attach [part] to [bone]** binds it.
+- **Layers** now has a **Skeleton** section: the bone tree with each part under the bone it moves with. Tap a bone to select it; long-press it to Rename, change its Parent, Mirror or Delete. Long-press a part for **Move to Bone**. The **Draw Order** section lists every part front to back whatever its bone; drag to reorder.
+- **Show Bones:** bones are drawn whenever the Bones tool is on. The selected bone's parts are outlined, and a dashed line links a bone to its parent's tip when it doesn't start there.
+- **Mirror drawing** (Symmetry menu on the Pencil, Pen, Shapes and Bones tools): strokes, pen paths, shapes and bones are copied across a vertical axis as you draw, as part of the same undo step. Turn on **Mirror Drawing**, then **Center Axis on Selection** to put the axis through the middle of the selection (or **Reset Axis** to put it back at x = 0). A dashed line shows the axis and a faint preview shows the copy. Bones drawn on one side get `.L` and `.R` names and their partners' parents.
+- **Duplicate Mirrored** (Edit menu, Shift-Cmd-D): a mirrored copy of the selection. A whole part named `Arm.L` becomes `Arm.R` on the mirrored bone; selected shapes are copied within their part.
+- **Joint checks** (Select tool, with a part selected): **Wiggle** rocks the part 30 degrees each way about its pivot, with the parts on the bones below it, to show gaps at the joint. It only changes the view. **Joint Cap** adds a circle at the pivot sized to the limb's width there, behind the part's shapes, with the part's style. **Pivot to Bone** moves the pivot onto the head of the part's bone.
+- **Pivot snapping:** dragging a pivot snaps to bone joints, other parts' pivots and anchors (and the grid with Snap on). The selected part's pivot is shown in every tool.
+- **Keyboard:** B picks the Bones tool; Shift-Cmd-D duplicates mirrored.
+
+**How it works**
+
+- **Skeleton** (CharacterCore): `Bone` keeps each bone's head and tail in world space; `Drawing.bones` lists them parents first and `Part.bone` binds a part. `DrawingEditor+Bones` holds the bone gestures, renaming, re-parenting, mirroring, the symmetry axis, Duplicate Mirrored, wiggle and the joint cap, all with tests (`SkeletonTests`). `SideName` reads and flips `.L`/`.R`, `_L`/`_R` and `Left`/`Right` names.
+- **Format:** the encoder writes each bone relative to its parent (`x`, `y`, `rotation`, `length`) and each attachment in its bone's space, and the decoder turns them back into world space. Parts on bones the file doesn't have (a pasted part) are saved on `root`. The example's robot now has a Spine, Neck and both arms, with the head on the neck. See [Schema/README.md](Schema/README.md#skeleton).
+- **Mirror drawing** reflects the finished stroke, path or shape with the axis transform; the symmetry axis is editor state, not saved.
+- **Wiggle** is display-only: the renderer redraws every frame from `DrawingEditor.displayDrawing(at:)`, which rotates the part and the parts on bones below it about the pivot; the saved drawing never changes.
+- **Joint cap** radius is half the narrowest chord through the pivot across the part's closed shapes, so it fills the limb at the joint.
