@@ -16,11 +16,9 @@ struct ContentView: View {
         CanvasRepresentable(store: store)
             .ignoresSafeArea()
             .overlay(alignment: .top) {
-                TopBars(store: store, ui: store.ui)
-                    // The canvas ignores the safe area, but its overlays do not: they are laid
-                    // out below the status bar and the inline navigation bar (about 74 pt on
-                    // iPad), which is what pushed the toolbar far from the top edge.
-                    .ignoresSafeArea(.container, edges: .top)
+                // Laid out below the navigation bar, which holds the tool bar.
+                ContextBar(store: store, ui: store.ui)
+                    .padding(.top, 8)
             }
             .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
             .overlay { ToastView(ui: store.ui) }
@@ -37,9 +35,13 @@ struct ContentView: View {
             .persistentSystemOverlays(.hidden)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarRole(.editor)
-            // The bar keeps its back button and title menu, but no longer paints a band over
-            // the canvas and the controls that now sit in the same strip.
+            // The bar keeps its back button and title menu, but paints no band over the canvas.
+            // The tool bar lives in the bar itself: a view floated under the navigation bar
+            // never receives touches, because the bar sits above it.
             .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) { ToolBar(store: store, ui: store.ui) }
+            }
             .onAppear {
                 let document = $document
                 store.onDocumentChange = { document.wrappedValue.package = $0 }
@@ -47,36 +49,6 @@ struct ContentView: View {
             .onChange(of: document.package) { _, package in
                 store.documentChanged(package)
             }
-    }
-}
-
-/// The tool bar and the context bar, `topInset` below the top edge of the screen, the
-/// way the style bar sits 16 pt above the bottom.
-private struct TopBars: View {
-    let store: CanvasStore
-    let ui: EditorUIState
-
-    /// Matches `StyleBar`'s bottom padding.
-    private let topInset: CGFloat = 16
-    /// Room the navigation bar's back button and document title keep at the leading edge.
-    private let navigationItemsWidth: CGFloat = 280
-
-    var body: some View {
-        VStack(spacing: 8) {
-            // The tool bar shares a strip with the navigation bar's items. Centered when
-            // there is room on both sides, else pushed to the trailing edge, so it never
-            // covers the back button or the title.
-            ViewThatFits(in: .horizontal) {
-                ToolBar(store: store, ui: ui)
-                    .padding(.horizontal, navigationItemsWidth)
-                ToolBar(store: store, ui: ui)
-                    .padding(.leading, navigationItemsWidth)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                ToolBar(store: store, ui: ui)
-            }
-            ContextBar(store: store, ui: ui)
-        }
-        .padding(.top, topInset)
     }
 }
 
