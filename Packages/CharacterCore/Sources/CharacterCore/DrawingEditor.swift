@@ -184,7 +184,7 @@ public struct DrawingEditor: Sendable {
     /// The part new shapes would join: the selected part, or the first selected shape's.
     var selectedPartID: Int? {
         if let isolatedPart { return isolatedPart }
-        switch selection {
+        return switch selection {
         case .part(let id), .shape(let id, _): id
         case .shapes(let refs): refs.min()?.part
         case .none, .reference: nil
