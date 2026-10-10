@@ -15,10 +15,9 @@ struct ContentView: View {
     var body: some View {
         CanvasRepresentable(store: store)
             .ignoresSafeArea()
-            .overlay(alignment: .top) {
-                // Laid out below the navigation bar, which holds the tool bar.
-                ContextBar(store: store, ui: store.ui)
-                    .padding(.top, 8)
+            .overlay(alignment: .leading) {
+                ToolBar(store: store, ui: store.ui)
+                    .padding(.leading, 16)
             }
             .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
             .overlay { ToastView(ui: store.ui) }
@@ -36,11 +35,15 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarRole(.editor)
             // The bar keeps its back button and title menu, but paints no band over the canvas.
-            // The tool bar lives in the bar itself: a view floated under the navigation bar
-            // never receives touches, because the bar sits above it.
+            // The context bar lives in the bar itself: a view floated under the navigation bar
+            // never receives touches, because the bar sits above it. It goes at the trailing
+            // edge, not `.principal`: in a document's editor bar the principal slot is the
+            // title, and a tap anywhere in it opens the rename menu.
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) { ToolBar(store: store, ui: store.ui) }
+                ToolbarItem(placement: .topBarTrailing) { ContextBar(store: store, ui: store.ui) }
+                    // The context bar draws its own capsule, like the tool and style bars.
+                    .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 let document = $document
@@ -52,7 +55,8 @@ struct ContentView: View {
     }
 }
 
-/// Tools, undo and redo, selection actions, layers and view commands.
+/// Tools, undo and redo, selection actions, layers and view commands, in a vertical
+/// strip down the leading edge of the canvas.
 private struct ToolBar: View {
     let store: CanvasStore
     let ui: EditorUIState
@@ -60,18 +64,14 @@ private struct ToolBar: View {
     @State private var showingInspector = false
 
     var body: some View {
-        HStack(spacing: 16) {
-            Picker("Tool", selection: Binding(get: { ui.tool }, set: { store.setTool($0) })) {
-                Image(systemName: "pencil.tip").accessibilityLabel("Pencil").tag(Tool.pencil)
-                Image(systemName: "pencil.and.outline").accessibilityLabel("Pen").tag(Tool.pen)
-                Image(systemName: "cursorarrow").accessibilityLabel("Select").tag(Tool.select)
-                Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                    .accessibilityLabel("Direct Select").tag(Tool.directSelect)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 224)
+        VStack(spacing: 12) {
+            ToolButton(store: store, ui: ui, tool: .pencil, title: "Pencil", systemImage: "pencil.tip")
+            ToolButton(store: store, ui: ui, tool: .pen, title: "Pen", systemImage: "pencil.and.outline")
+            ToolButton(store: store, ui: ui, tool: .select, title: "Select", systemImage: "cursorarrow")
+            ToolButton(store: store, ui: ui, tool: .directSelect, title: "Direct Select",
+                       systemImage: "point.topleft.down.to.point.bottomright.curvepath")
 
-            Divider().frame(height: 24)
+            Divider().frame(width: 24)
             Button("Undo", systemImage: "arrow.uturn.backward") { store.undo() }
                 .disabled(!ui.canUndo)
             Button("Redo", systemImage: "arrow.uturn.forward") { store.redo() }
@@ -81,7 +81,7 @@ private struct ToolBar: View {
                 Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
             }
 
-            Divider().frame(height: 24)
+            Divider().frame(width: 24)
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
                 .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
@@ -94,14 +94,37 @@ private struct ToolBar: View {
             }
         }
         .labelStyle(.iconOnly)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
+        .font(.title3)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 16)
         .background(.regularMaterial, in: Capsule())
     }
 }
 
+/// One tool in the tool strip, highlighted while it is the current tool.
+private struct ToolButton: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    let tool: Tool
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        let isCurrent = ui.tool == tool
+        Button { store.setTool(tool) } label: {
+            Image(systemName: systemImage)
+                .frame(width: 40, height: 40)
+                .foregroundStyle(isCurrent ? Color.white : Color.primary)
+                .background(isCurrent ? Color.accentColor : Color.clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+    }
+}
+
 /// Controls for the current tool: pen Done, the Add toggle, snapping, the point type
-/// control and path commands, flips and nudging.
+/// control and path commands, flips and nudging. It sits in the navigation bar.
 private struct ContextBar: View {
     let store: CanvasStore
     let ui: EditorUIState
@@ -114,7 +137,6 @@ private struct ContextBar: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
-        .padding(.horizontal, 16)
     }
 
     private var controls: some View {
