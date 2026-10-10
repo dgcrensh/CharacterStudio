@@ -37,10 +37,14 @@ struct ContentView: View {
             .toolbarRole(.editor)
             // The bar keeps its back button and title menu, but paints no band over the canvas.
             // The tool bar lives in the bar itself: a view floated under the navigation bar
-            // never receives touches, because the bar sits above it.
+            // never receives touches, because the bar sits above it. It goes at the trailing
+            // edge, not `.principal`: in a document's editor bar the principal slot is the
+            // title, and a tap anywhere in it opens the rename menu.
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) { ToolBar(store: store, ui: store.ui) }
+                ToolbarItem(placement: .topBarTrailing) { ToolBar(store: store, ui: store.ui) }
+                    // The tool bar draws its own capsule, like the context and style bars.
+                    .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 let document = $document
