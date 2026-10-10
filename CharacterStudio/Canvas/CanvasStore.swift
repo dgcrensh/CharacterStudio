@@ -2,6 +2,7 @@ import CharacterCore
 import Observation
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// The editor state SwiftUI controls show. Refreshed from the session after each
 /// gesture and command, never per touch sample.
@@ -43,6 +44,21 @@ final class EditorUIState {
     /// A short message such as "Undo" after a multi-finger tap, with a counter so
     /// repeats re-show it.
     var toast: (text: String, count: Int)?
+    var shapeKind: ShapeKind = .rectangle
+    var shapeOptions = ShapeToolOptions()
+    /// The on-screen modifier strip's latched keys.
+    var stripModifiers: EditorModifiers = []
+    /// The isolated part's id and name, while isolating.
+    var isolatedPart: Int?
+    var isolatedPartName = ""
+    var canArrange = false
+    var canHideOrLock = false
+    var canMoveShapes = false
+    var hasHiddenArt = false
+    var hasLockedArt = false
+    var recentColors: [RGBAColor] = []
+    /// Where the Pencil squeeze (or double tap) palette is open, in canvas points.
+    var palettePoint: CGPoint?
 }
 
 /// Owns the canvas session and connects SwiftUI controls to the Metal view.
@@ -155,6 +171,17 @@ final class CanvasStore {
         update(\.smoothing, editor.smoothing)
         update(\.palette, editor.drawing.palette)
         update(\.characterName, editor.drawing.name)
+        update(\.shapeKind, editor.shapeKind)
+        update(\.shapeOptions, editor.shapeOptions)
+        update(\.isolatedPart, editor.isolatedPart)
+        let isolatedName = editor.isolatedPart.flatMap { id in editor.drawing.parts.first { $0.id == id }?.name } ?? ""
+        update(\.isolatedPartName, isolatedName)
+        update(\.canArrange, editor.canArrange)
+        update(\.canHideOrLock, editor.canHideOrLockSelection)
+        update(\.canMoveShapes, editor.canMoveSelectedShapes)
+        update(\.hasHiddenArt, editor.hasHiddenArt)
+        update(\.hasLockedArt, editor.hasLockedArt)
+        update(\.recentColors, editor.recentColors)
         update(\.layers, LayerTree(drawing: editor.drawing))
         if case .part(let id) = editor.selection {
             update(\.selectedPart, id)
@@ -211,6 +238,93 @@ final class CanvasStore {
     func setAnchorY(_ y: Double) { edit { $0.editor.setSelectedAnchorsPosition(y: y) } }
     func clear() { edit { $0.clear() } }
     func deselect() { edit { $0.editor.selection = .none } }
+    func setShapeKind(_ kind: ShapeKind) { edit { $0.editor.shapeKind = kind } }
+    func setShapeOptions(_ options: ShapeToolOptions) { edit { $0.editor.shapeOptions = options } }
+    func switchToPreviousTool() { edit { $0.editor.switchToPreviousTool() } }
+    func toggleEraser() { edit { $0.editor.toggleEraser() } }
+
+    // MARK: Modifiers
+
+    /// Keys held on a hardware keyboard, read at each touch.
+    private var keyboardModifiers: EditorModifiers = []
+
+    func setStripModifiers(_ modifiers: EditorModifiers) {
+        ui.stripModifiers = modifiers
+        applyModifiers()
+    }
+
+    func setKeyboardModifiers(_ flags: UIKeyModifierFlags) {
+        var modifiers: EditorModifiers = []
+        if flags.contains(.shift) { modifiers.insert(.constrain) }
+        if flags.contains(.alternate) { modifiers.insert(.alternate) }
+        keyboardModifiers = modifiers
+        applyModifiers()
+    }
+
+    private func applyModifiers() {
+        session.editor.modifiers = ui.stripModifiers.union(keyboardModifiers)
+    }
+
+    // MARK: Organize
+
+    func duplicate() { edit { $0.editor.duplicateSelection() } }
+    func arrange(_ move: ArrangeMove) { edit { $0.editor.arrange(move) } }
+    func hideSelection() { edit { $0.editor.hideSelection() } }
+    func lockSelection() { edit { $0.editor.lockSelection() } }
+    func showAll() { edit { $0.editor.showAll() } }
+    func unlockAll() { edit { $0.editor.unlockAll() } }
+    func setPartHidden(_ id: Int, _ hidden: Bool) { edit { $0.editor.setPartHidden(id, hidden) } }
+    func setPartLocked(_ id: Int, _ locked: Bool) { edit { $0.editor.setPartLocked(id, locked) } }
+    func isolate(part id: Int) { edit { $0.editor.isolate(part: id) } }
+    func exitIsolation() { edit { $0.editor.exitIsolation() } }
+    func mergePartDown(_ id: Int) { edit { $0.editor.mergePartDown(id) } }
+    func moveSelectionToNewPart() { edit { $0.editor.moveSelectionToNewPart() } }
+    func moveSelection(toPart id: Int) { edit { $0.editor.moveSelection(toPart: id) } }
+    func setPartOrder(frontToBack ids: [Int]) { edit { $0.editor.setPartOrder(frontToBack: ids) } }
+    func canMergePartDown(_ id: Int) -> Bool { session.editor.canMergePartDown(id) }
+
+    /// Isolates the selected part (or the part of the selected shapes).
+    func isolateSelection() {
+        guard let id = ui.selectedPart else { return }
+        isolate(part: id)
+    }
+
+    // MARK: Clipboard
+
+    /// Puts the selection on the pasteboard as character file JSON, under the app's own
+    /// type and as plain JSON, so it pastes into any character (and reads anywhere).
+    func copy() {
+        guard let text = session.editor.copySelection() else { return }
+        Self.putOnPasteboard(text)
+    }
+
+    func cut() {
+        var text: String?
+        edit { text = $0.editor.cutSelection() }
+        if let text { Self.putOnPasteboard(text) }
+    }
+
+    func paste() {
+        let board = UIPasteboard.general
+        let data = board.data(forPasteboardType: DrawingEditor.clipboardType)
+            ?? board.data(forPasteboardType: UTType.json.identifier)
+        guard let text = data.flatMap({ String(data: $0, encoding: .utf8) }) ?? board.string else { return }
+        edit { _ = $0.editor.paste(text) }
+    }
+
+    private static func putOnPasteboard(_ text: String) {
+        let data = Data(text.utf8)
+        UIPasteboard.general.setItems([[DrawingEditor.clipboardType: data, UTType.json.identifier: data]])
+    }
+
+    // MARK: Pencil palette
+
+    func showPalette(at point: CGPoint?) {
+        let size = viewSize
+        ui.palettePoint = point ?? CGPoint(x: size.width / 2, y: size.height / 2)
+    }
+
+    func hidePalette() { ui.palettePoint = nil }
 
     func resetView() {
         session.resetView(viewSize: Vec2(viewSize))
@@ -219,9 +333,9 @@ final class CanvasStore {
 
     // MARK: Style
 
-    func setFill(_ color: Color) { edit { $0.editor.setFill(RGBAColor(color)) } }
+    func setFill(_ color: Color) { edit { $0.editor.setFill(RGBAColor(color), continuous: true) } }
     func setFillEnabled(_ on: Bool) { edit { $0.editor.setFillEnabled(on) } }
-    func setOutline(_ color: Color) { edit { $0.editor.setOutline(RGBAColor(color, opaque: true)) } }
+    func setOutline(_ color: Color) { edit { $0.editor.setOutline(RGBAColor(color, opaque: true), continuous: true) } }
     func setOutlineWidth(_ width: Double) { edit { $0.editor.setOutlineWidth(width) } }
     func setOutlineEnabled(_ on: Bool) { edit { $0.editor.setOutlineEnabled(on) } }
     func setSmoothing(_ amount: Double) { edit { $0.editor.smoothing = amount } }

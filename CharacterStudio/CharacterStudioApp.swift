@@ -8,5 +8,6 @@ struct CharacterStudioApp: App {
         DocumentGroup(newDocument: CharacterDocument()) { file in
             ContentView(document: file.$document)
         }
+        .commands { EditorCommands() }
     }
 }

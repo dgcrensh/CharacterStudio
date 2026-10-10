@@ -16,7 +16,8 @@ private struct CanvasUniforms {
 }
 
 /// Draws the canvas: dot grid, reference images, the art, the live stroke, then the
-/// editing overlay.
+/// editing overlay. Hidden shapes are skipped. In isolation the other parts are drawn
+/// first under a veil of the background color, then the isolated part on top.
 ///
 /// Rendering is 4x multisampled into memoryless targets and resolved into the
 /// drawable. Shapes are filled with stencil-then-cover (any freehand outline fills
@@ -59,11 +60,14 @@ final class CanvasRenderer {
     private enum ArtOp {
         case fill(fanStart: Int, fanCount: Int, coverStart: Int, color: SIMD4<Float>)
         case outline(start: Int, count: Int)
+        /// Dims everything drawn before it: the parts outside isolation.
+        case veil
     }
 
     private var shapeCache: [Int: ShapeGeometry] = [:]
     private var artRevision = -1
     private var artTolerance = 0.0
+    private var artIsolation: Int?
     private var artOps: [ArtOp] = []
     private var fillBuffer: (any MTLBuffer)?
     private var capsuleBuffer: (any MTLBuffer)?
@@ -211,7 +215,9 @@ final class CanvasRenderer {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         drawReferences(editor.drawing.references, encoder: encoder, uniforms: &uniforms)
-        drawArt(encoder: encoder, uniforms: &uniforms)
+        let w = Double(viewSize.width), h = Double(viewSize.height)
+        let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
+        drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen))
 
         // The live stroke and the overlay change every frame, so they are built fresh.
         encoder.setDepthStencilState(plainState)
@@ -259,18 +265,25 @@ final class CanvasRenderer {
         // Flatten finely enough for the current zoom, in power-of-two steps.
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let tolerance = 0.2 / bucket
-        guard editor.revision != artRevision || tolerance != artTolerance else { return }
+        guard editor.revision != artRevision || tolerance != artTolerance || editor.isolatedPart != artIsolation else { return }
         artRevision = editor.revision
         artTolerance = tolerance
+        artIsolation = editor.isolatedPart
 
         var fills: [Float] = []
         var capsules: [Float] = []
         var ops: [ArtOp] = []
         var live: Set<Int> = []
 
-        for part in editor.drawing.parts {
-            for shape in part.shapes {
+        var parts = editor.drawing.parts
+        if let isolated = editor.isolatedPart {
+            parts = parts.filter { $0.id != isolated } + parts.filter { $0.id == isolated }
+        }
+        for part in parts {
+            if part.id == editor.isolatedPart { ops.append(.veil) }
+            for (index, shape) in part.shapes.enumerated() {
                 live.insert(shape.id)
+                guard part.isShown(index) else { continue }
                 let geometry: ShapeGeometry
                 if let cached = shapeCache[shape.id], cached.shape == shape, cached.tolerance == tolerance {
                     geometry = cached
@@ -321,10 +334,24 @@ final class CanvasRenderer {
         return ShapeGeometry(shape: shape, tolerance: tolerance, fan: fan, cover: cover, outline: outline)
     }
 
-    private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms) {
+    private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms, viewRect: Rect) {
         var strokeStateSet = false
         for op in artOps {
             switch op {
+            case .veil:
+                strokeStateSet = false
+                var cover: [Float] = []
+                FillTessellator.appendCover(viewRect, to: &cover)
+                guard !cover.isEmpty else { continue }
+                let bg = uniforms.background
+                var color = SIMD4<Float>(bg.x * 0.7, bg.y * 0.7, bg.z * 0.7, 0.7)
+                encoder.setRenderPipelineState(fillCoverPipeline)
+                encoder.setDepthStencilState(plainState)
+                encoder.setVertexBytes(cover, length: cover.count * MemoryLayout<Float>.stride, index: 0)
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+                encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: cover.count / FillTessellator.floatsPerVertex)
+
             case .fill(let fanStart, let fanCount, let coverStart, var color):
                 guard let fillBuffer else { continue }
                 strokeStateSet = false

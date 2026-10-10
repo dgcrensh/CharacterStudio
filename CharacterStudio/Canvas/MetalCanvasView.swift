@@ -22,6 +22,9 @@ final class MetalCanvasView: UIView {
     /// Stable small integer ids for live `UITouch` objects.
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextTouchID = 1
+    /// Polls for a QuickShape hold while a stroke is drawn: a Pencil held still sends
+    /// no events of its own to react to.
+    private var quickShapeWatch: Task<Void, Never>?
 
     init(store: CanvasStore) {
         self.store = store
@@ -30,8 +33,12 @@ final class MetalCanvasView: UIView {
         renderer?.attach(to: metalLayer)
         renderer?.referenceImage = { [weak store] id in store?.referenceImage(id) }
         isMultipleTouchEnabled = true
-        // Pencil (and pointer) hover drives the pen tool's rubber band.
+        // Pencil (and pointer) hover drives the pen tool's rubber band and the hover highlights.
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        // The Pencil's double tap and squeeze.
+        let pencil = UIPencilInteraction()
+        pencil.delegate = self
+        addInteraction(pencil)
         isOpaque = true
         backgroundColor = .systemBackground
         store.onChange = { [weak self] in self?.setNeedsRender() }
@@ -135,6 +142,9 @@ final class MetalCanvasView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Shift and Option on a hardware keyboard constrain and duplicate.
+        if let event { store.setKeyboardModifiers(event.modifierFlags) }
+        if store.ui.palettePoint != nil { store.hidePalette() }
         for touch in touches {
             guard let touchKind = kind(of: touch) else { continue }
             let id = nextTouchID
@@ -148,7 +158,27 @@ final class MetalCanvasView: UIView {
                 time: touch.timestamp
             )
         }
+        if store.session.isDrawing, quickShapeWatch == nil { watchForQuickShape() }
         setNeedsRender()
+    }
+
+    private func watchForQuickShape() {
+        quickShapeWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, self.store.session.isDrawing else { break }
+                // Touch timestamps count from system start, like systemUptime.
+                if self.store.session.checkQuickShape(time: ProcessInfo.processInfo.systemUptime) {
+                    self.setNeedsRender()
+                }
+            }
+            if !Task.isCancelled { self?.quickShapeWatch = nil }
+        }
+    }
+
+    private func stopWatchingForQuickShape() {
+        quickShapeWatch?.cancel()
+        quickShapeWatch = nil
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -159,7 +189,8 @@ final class MetalCanvasView: UIView {
             store.session.touchMoved(
                 id: id,
                 samples: (coalesced.isEmpty ? [touch] : coalesced).map(location(of:)),
-                predicted: predicted.map(location(of:))
+                predicted: predicted.map(location(of:)),
+                time: touch.timestamp
             )
         }
         setNeedsRender()
@@ -170,6 +201,7 @@ final class MetalCanvasView: UIView {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             store.session.touchEnded(id: id, location: location(of: touch), time: touch.timestamp)
         }
+        if !store.session.isDrawing { stopWatchingForQuickShape() }
         // Gestures and taps finish here, so the controls catch up now.
         store.refresh()
     }
@@ -179,6 +211,39 @@ final class MetalCanvasView: UIView {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             store.session.touchCancelled(id: id)
         }
+        if !store.session.isDrawing { stopWatchingForQuickShape() }
         store.refresh()
+    }
+}
+
+// MARK: Pencil double tap and squeeze
+
+extension MetalCanvasView: UIPencilInteractionDelegate {
+    /// Double tap follows the user's setting in Settings > Apple Pencil: switch to the
+    /// eraser and back, switch to the previous tool, or show the palette.
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        switch UIPencilInteraction.preferredTapAction {
+        case .switchEraser:
+            store.toggleEraser()
+        case .switchPrevious:
+            store.switchToPreviousTool()
+        case .showColorPalette, .showInkAttributes, .showContextualPalette:
+            store.showPalette(at: tap.hoverPose?.location)
+        default:
+            return
+        }
+        setNeedsRender()
+    }
+
+    /// Squeeze (Apple Pencil Pro) opens the palette under the Pencil, unless the user
+    /// set squeeze to do nothing or to run a shortcut.
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard squeeze.phase == .ended else { return }
+        switch UIPencilInteraction.preferredSqueezeAction {
+        case .ignore, .runSystemShortcut:
+            return
+        default:
+            store.showPalette(at: squeeze.hoverPose?.location)
+        }
     }
 }

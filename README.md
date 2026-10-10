@@ -39,7 +39,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 3. **Document** (this milestone): JSON model, save and open in Files, layer tree, schema v0.1.
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order.
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
-6. Polish and export: double-tap, squeeze and hover, SVG export, slots and skins in the file, sample characters.
+6. Polish and export: SVG export, slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below.)
 
 ## Milestone 1 notes
 
@@ -97,3 +97,31 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 - **App:** a SwiftUI `DocumentGroup` with a `FileDocument` that reads and writes the package folder. The editor keeps its own undo stack and hands the drawing to the document after each finished gesture or command, which marks it edited for autosave.
 - Ids are never reused within a session (undo no longer rewinds the id counter), which also fixes a milestone 2 bug where importing a second reference after undoing the first could show the first image.
 - **Tests** cover the JSON reader and writer, a byte-for-byte re-save of the example, round trips of editor drawings, draw order, version checks, error paths, and the layer tree. CI also validates the example against the schema.
+
+## Editor completeness notes
+
+The everyday editing gaps from the full-editor plan, with no change to the file format beyond two optional editor hints.
+
+**Using it**
+
+- **Tools:** the left strip now has Pencil, Pen, **Shapes**, Select, Direct Select, **Eraser** and **Scissors**, then undo, redo and a new **Edit** menu. On a short screen the strip scrolls.
+- **Shapes:** pick rectangle, ellipse, polygon, star or line in the context bar and drag. Rectangles and ellipses span the drag; polygons and stars grow from where you press with a corner toward the Pencil; lines run from press to lift. The context bar sets the rectangle's corner radius, the polygon's sides, and the star's points and inner radius. Every shape is an ordinary Bézier path, so Direct Select edits it like anything drawn by hand.
+- **QuickShape:** draw with the Pencil tool and hold the Pencil still for half a second at the end of the stroke. A rough line, arc, ellipse (a circle when nearly round), rectangle, triangle or polygon of up to six sides snaps to a clean one; a snapped line keeps following the Pencil until you lift. Strokes that match nothing stay as drawn.
+- **Eraser:** drag across shapes to delete every shape you touch (one undo step). **Scissors:** tap an outline to cut it there: a closed shape opens at that point, an open path becomes two. Hover shows where the cut will land.
+- **Edit menu:** Duplicate (a copy 10 points down and right), Cut, Copy, Paste, Delete; Arrange (bring to front, forward, backward, send to back) for shapes within their part or for a whole part among parts; Move to New Part and Move to Part for selected shapes; Hide, Lock, Show All, Unlock All; Isolate Part.
+- **Copy and paste** put the selection on the pasteboard as the character file's own JSON, so it pastes into another character. Copied shapes paste into the selected part; a copied part pastes as a new part. Pasting on top of the original moves the copy 10 points so it is visible.
+- **Hide and lock:** per part with the eye and lock in the Layers panel, or per selection from the Edit menu. Hidden art isn't drawn; locked art is drawn but taps, marquees, the eraser and scissors pass through it. Both are saved with the character.
+- **Isolation:** double-tap a part with Select (or Isolate in the Edit menu or a layer's menu) to edit just that part. The rest is dimmed and can't be touched, and new strokes, pen paths and shapes join the isolated part. The context bar's Exit button, Escape, or a double tap on empty canvas leaves.
+- **Layers:** drag a part to change the draw order; a part's menu adds Isolate and Merge Down.
+- **Shift and Option:** a strip on the right edge latches them for when there is no keyboard, and a hardware keyboard's own keys work too. Shift makes squares and circles, 45-degree lines, one-axis moves and 15-degree rotation steps. Option draws shapes from their center and makes a Select drag move a copy (Option-drag to duplicate).
+- **Apple Pencil:** double tap follows the setting in Settings > Apple Pencil (switch to the eraser and back, switch to the previous tool, or show the palette). Squeeze (Apple Pencil Pro) opens a palette under the Pencil with every tool, undo and redo, and the colors you used last. Hovering shows the brush size with the Pencil tool, the eraser's reach, and an outline on the shape a touch would select, erase or cut.
+- **Keyboard:** V, A, P, N, M, E and C pick Select, Direct Select, Pen, Pencil, Shapes, Eraser and Scissors; Cmd-Z and Shift-Cmd-Z undo and redo; Cmd-X, C, V and D cut, copy, paste and duplicate; Delete deletes; Cmd-] and Cmd-[ (with Shift for front and back) arrange; Cmd-3 and Cmd-2 hide and lock (with Option to show or unlock all); Shift-Cmd-I isolates and Escape exits; arrow keys nudge. Hold Cmd to see the list. Space-drag panning is not in yet.
+
+**How it works**
+
+- All of it lives in CharacterCore with tests: `ShapePrimitives` (shape paths and drag modifiers), `ShapeRecognizer` (QuickShape), and `DrawingEditor` with the new tools and `DrawingEditor+Organize` (isolation, hide and lock, arrange, duplicate, clipboard, scissors, tool switching). The app forwards touches, modifier keys, Pencil interactions and the pasteboard.
+- **QuickShape** classifies by size-relative tolerances: a closed loop first looks for three corners or four right-angled ones (Douglas-Peucker), then for an ellipse with the same area moments as the stroke that stays within 9% of it all round, then for a polygon. An open stroke is a line when it strays under 6% of its length from the chord, else an arc through its ends and middle. A still Pencil sends no events, so the canvas polls `CanvasSession.checkQuickShape` while a stroke is drawn.
+- **Hide and lock** are optional `hidden` and `locked` keys on attachments and shapes, written only when true, so existing files and the example are unchanged byte for byte and the format stays 0.1. `Drawing.hitTest` and every tool skip hidden and locked art.
+- **Isolation** is editor state, not saved. The renderer draws the other parts, then a 70% veil of the background color, then the isolated part on top.
+- **Duplicate, paste and Option-drag** give every copy fresh ids. An Option-drag records the state before the copy, so one undo removes the copy and the move together.
+
