@@ -236,7 +236,7 @@ final class CharacterFormatTests: XCTestCase {
             XCTAssertEqual(error as? CharacterFileError,
                            .invalid(path: "skins.default.Head.Head.shapes[0].points[1].p", problem: "is missing"))
         }
-        let badColor = try json(#"{ "formatVersion": "0.1.0", "palette": ["#12"] }"#)
+        let badColor = try json(##"{ "formatVersion": "0.1.0", "palette": ["#12"] }"##)
         XCTAssertThrowsError(try CharacterFormat.decode(badColor)) { error in
             XCTAssertEqual(error as? CharacterFileError, .invalid(path: "palette[0]", problem: "is not a #RRGGBBAA color"))
         }
