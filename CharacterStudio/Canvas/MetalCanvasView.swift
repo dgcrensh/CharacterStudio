@@ -249,9 +249,14 @@ final class MetalCanvasView: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         // A cancelled touch means something else took it; name the culprits when debugging.
-        let takers = touches.flatMap { $0.gestureRecognizers ?? [] }
-            .filter { $0.view !== self && ($0.state == .began || $0.state == .changed || $0.state == .ended) }
-            .map { String(describing: type(of: $0)) }
+        var takers: [String] = []
+        for touch in touches {
+            for recognizer in touch.gestureRecognizers ?? [] where recognizer.view !== self {
+                let state = recognizer.state
+                guard state == .began || state == .changed || state == .ended else { continue }
+                takers.append(String(describing: type(of: recognizer)))
+            }
+        }
         touchLog.debug("Touches cancelled; recognizers: \(takers, privacy: .public)")
         for touch in touches {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
