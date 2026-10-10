@@ -78,6 +78,12 @@ public enum SVGWriter {
         return d
     }
 
+    /// Path data for the outlined parts of a path: the whole path, or one open
+    /// subpath per run of stroked segments when some segments are bare.
+    static func strokeData(_ path: BezierPath) -> String {
+        path.hasUnstrokedSegments ? path.strokedRuns().map(pathData).joined() : pathData(path)
+    }
+
     /// Path data for triangles (three points each).
     static func triangleData(_ triangles: [Vec2]) -> String {
         var d = ""
@@ -148,8 +154,8 @@ public enum SVGWriter {
                         let triangles = Stroker.triangles(for: base.path, style: stroke, widthScale: scale,
                                                           tolerance: SVGWriter.tolerance)
                         lines.append("      <path d=\"\(SVGWriter.triangleData(triangles))\" fill=\"#FFFFFF\"/>")
-                    } else {
-                        lines.append("      <path d=\"\(d)\" fill=\"none\" stroke=\"#FFFFFF\"" +
+                    } else if !base.path.strokedRuns().isEmpty {
+                        lines.append("      <path d=\"\(SVGWriter.strokeData(base.path))\" fill=\"none\" stroke=\"#FFFFFF\"" +
                             strokeAttributes(stroke, widthScale: scale) + "/>")
                     }
                 }
@@ -181,7 +187,7 @@ public enum SVGWriter {
             let encloses = shape.path.closed && shape.path.flattened(tolerance: SVGWriter.tolerance).count >= 3
             let alignment = encloses ? stroke.alignment : .center
             let strokeAlpha = stroke.color.a * opacity
-            if alignment == .center, !shape.path.hasVariableWidth {
+            if alignment == .center, !shape.path.hasVariableWidth, !shape.path.hasUnstrokedSegments {
                 var line = indent + "<path d=\"\(d)\" \(fill) stroke=\"\(SVGWriter.rgb(stroke.color))\""
                 if strokeAlpha < 1 { line += " stroke-opacity=\"\(SVGWriter.number(strokeAlpha))\"" }
                 body.append(line + strokeAttributes(stroke, widthScale: 1) + "/>")
@@ -218,7 +224,10 @@ public enum SVGWriter {
                 guard !triangles.isEmpty else { return }
                 body.append(indent + "<path d=\"\(SVGWriter.triangleData(triangles))\" fill=\"" + paint + limit + "/>")
             } else {
-                var line = indent + "<path d=\"\(d)\" fill=\"none\" stroke=\"\(SVGWriter.rgb(stroke.color))\""
+                let strokeData = SVGWriter.strokeData(shape.path)
+                guard !strokeData.isEmpty else { return }
+                var line = indent + "<path d=\"\(strokeData)\" fill=\"none\" " +
+                    "stroke=\"\(SVGWriter.rgb(stroke.color))\""
                 if strokeAlpha < 1 { line += " stroke-opacity=\"\(SVGWriter.number(strokeAlpha))\"" }
                 body.append(line + strokeAttributes(stroke, widthScale: scale) + limit + "/>")
             }

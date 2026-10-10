@@ -57,6 +57,41 @@ extension DrawingEditor {
         }
     }
 
+    // MARK: Edge outlines
+
+    /// The segments of the point-edited shape whose two end anchors are both selected.
+    public var selectedEdges: [Int] {
+        guard let ref = activeShape, let path = drawing.shape(ref)?.path, selectedAnchors.count >= 2 else { return [] }
+        let n = path.points.count
+        return (0..<path.segmentCount).filter { selectedAnchors.contains($0) && selectedAnchors.contains(($0 + 1) % n) }
+    }
+
+    /// Whether the selected edges are outlined: false only when every one is bare,
+    /// nil when no edge is selected.
+    public var selectedEdgesStroked: Bool? {
+        guard let ref = activeShape, let path = drawing.shape(ref)?.path else { return nil }
+        let edges = selectedEdges
+        guard !edges.isEmpty else { return nil }
+        return edges.contains { path.points[$0].stroked }
+    }
+
+    /// Turns the outline on or off along the selected edges. A bare edge keeps its
+    /// fill, so the shape still covers what lies beneath it there.
+    public mutating func setSelectedEdgesStroked(_ stroked: Bool) {
+        guard let ref = activeShape else { return }
+        let edges = selectedEdges
+        guard !edges.isEmpty else { return }
+        editShape(ref) { shape in
+            for i in edges { shape.path.points[i].stroked = stroked }
+        }
+    }
+
+    /// Hides the outline on the selected edges, or shows it again when they are all bare.
+    public mutating func toggleSelectedEdgesStroked() {
+        guard let stroked = selectedEdgesStroked else { return }
+        setSelectedEdgesStroked(!stroked)
+    }
+
     // MARK: Split and join
 
     public var canSplitAtSelectedAnchor: Bool {

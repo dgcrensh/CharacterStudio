@@ -5,6 +5,7 @@ import Foundation
 /// The pieces overlap, so they are drawn as a union (the canvas marks the stencil
 /// with them, then paints the marked area once), which keeps translucent outlines
 /// even. Widths may differ at each point; each segment blends between its ends.
+/// Segments marked unstroked get no outline; the runs between them end in caps.
 ///
 /// Every triangle is wound counter-clockwise on a y-up plane (positive signed area),
 /// so a non-zero fill of all of them is also their union.
@@ -17,11 +18,14 @@ public enum Stroker {
     /// `tolerance` is the flattening tolerance in points.
     public static func triangles(for path: BezierPath, style: StrokeStyle, widthScale: Double = 1,
                                  tolerance: Double) -> [Vec2] {
-        let flat = path.flattenedWithWidths(tolerance: tolerance)
-        let radii = flat.widths.map { max($0, 0) * style.width * widthScale / 2 }
         var out: [Vec2] = []
-        appendTriangles(points: flat.points, radii: radii, closed: path.closed && flat.points.count > 2,
-                        style: style, tolerance: tolerance, into: &out)
+        // Bare segments are skipped: each outlined run is stroked as an open path with caps.
+        for run in path.strokedRuns() {
+            let flat = run.flattenedWithWidths(tolerance: tolerance)
+            let radii = flat.widths.map { max($0, 0) * style.width * widthScale / 2 }
+            appendTriangles(points: flat.points, radii: radii, closed: run.closed && flat.points.count > 2,
+                            style: style, tolerance: tolerance, into: &out)
+        }
         return out
     }
 

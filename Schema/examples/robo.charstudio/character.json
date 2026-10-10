@@ -35,7 +35,7 @@
               },
               "stroke": { "color": "#222222FF", "global": "Ink", "width": 3, "join": "miter" },
               "points": [
-                { "p": [-30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [-30, -90], "in": [0, 0], "out": [0, 0], "smooth": false, "stroked": false },
                 { "p": [30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
                 { "p": [36, -10], "in": [0, -20], "out": [-8, 14] },
                 { "p": [0, 8], "in": [18, 0], "out": [-18, 0] },

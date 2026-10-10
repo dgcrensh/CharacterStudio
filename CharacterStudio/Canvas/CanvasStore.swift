@@ -23,6 +23,8 @@ final class EditorUIState {
     var anchorCount = 0
     /// The handle mode the selected anchors share, if they do.
     var anchorMode: HandleMode?
+    /// Whether the edges between the selected anchors are outlined (nil when none is selected).
+    var edgesStroked: Bool?
     var canSplit = false
     var canJoin = false
     var canTransform = false
@@ -207,6 +209,7 @@ final class CanvasStore {
         update(\.canDeleteAnchor, editingPoints && editor.canDeleteSelectedAnchor)
         update(\.anchorCount, editingPoints ? editor.selectedAnchors.count : 0)
         update(\.anchorMode, editingPoints ? editor.selectedAnchorMode : nil)
+        update(\.edgesStroked, editingPoints ? editor.selectedEdgesStroked : nil)
         update(\.canSplit, editingPoints && editor.canSplitAtSelectedAnchor)
         update(\.canJoin, editor.canJoinSelection)
         update(\.canTransform, editor.canTransformSelection)
@@ -299,6 +302,7 @@ final class CanvasStore {
     func deleteSelectedAnchors() { edit { $0.editor.deleteSelectedAnchors() } }
     func setAnchorMode(_ mode: HandleMode) { edit { $0.editor.setSelectedAnchorMode(mode) } }
     func breakAnchorHandles() { edit { $0.editor.breakSelectedAnchorHandles() } }
+    func toggleEdgeOutline() { edit { $0.editor.toggleSelectedEdgesStroked() } }
     func splitAtAnchor() { edit { $0.editor.splitAtSelectedAnchor() } }
     func joinPaths() { edit { $0.editor.joinSelection() } }
     func penDone() { edit { $0.editor.penFinish() } }

@@ -538,6 +538,12 @@ private struct ContextBar: View {
         .pickerStyle(.segmented)
         .frame(width: 260)
         Button("Break Handles", systemImage: "slash.circle") { store.breakAnchorHandles() }
+        // Acts on the edges between selected anchors; a bare edge keeps its fill.
+        Button(ui.edgesStroked == false ? "Show Edge Outline" : "Hide Edge Outline",
+               systemImage: ui.edgesStroked == false ? "eye" : "eye.slash") {
+            store.toggleEdgeOutline()
+        }
+        .disabled(ui.edgesStroked == nil)
         Button("Split", systemImage: "scissors") { store.splitAtAnchor() }
             .disabled(!ui.canSplit)
         Button("Delete Point", systemImage: "minus.circle") { store.deleteSelectedAnchors() }
