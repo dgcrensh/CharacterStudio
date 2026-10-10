@@ -28,6 +28,7 @@ final class MetalCanvasView: UIView {
         self.renderer = CanvasRenderer()
         super.init(frame: .zero)
         renderer?.attach(to: metalLayer)
+        renderer?.referenceImage = { [weak store] id in store?.referenceImages[id] }
         isMultipleTouchEnabled = true
         isOpaque = true
         backgroundColor = .systemBackground
@@ -119,7 +120,8 @@ final class MetalCanvasView: UIView {
                 id: id,
                 kind: touchKind,
                 location: location(of: touch),
-                majorRadius: Double(touch.majorRadius)
+                majorRadius: Double(touch.majorRadius),
+                time: touch.timestamp
             )
         }
         setNeedsRender()
@@ -142,9 +144,10 @@ final class MetalCanvasView: UIView {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
-            store.session.touchEnded(id: id, location: location(of: touch))
+            store.session.touchEnded(id: id, location: location(of: touch), time: touch.timestamp)
         }
-        setNeedsRender()
+        // Gestures and taps finish here, so the controls catch up now.
+        store.refresh()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -152,6 +155,6 @@ final class MetalCanvasView: UIView {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             store.session.touchCancelled(id: id)
         }
-        setNeedsRender()
+        store.refresh()
     }
 }
