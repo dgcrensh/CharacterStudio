@@ -72,6 +72,11 @@ public struct DrawingEditor: Sendable {
 
     public init() {}
 
+    /// An editor for an opened document, with empty undo history.
+    public init(drawing: Drawing) {
+        self.drawing = drawing
+    }
+
     public var canUndo: Bool { undoStack.canUndo }
     public var canRedo: Bool { undoStack.canRedo }
     public var isInGesture: Bool { gesture != nil }
@@ -351,7 +356,8 @@ public struct DrawingEditor: Sendable {
             drawing.parts[p].shapes.append(shape)
         } else {
             let id = drawing.makeID()
-            drawing.parts.append(Part(id: id, name: "Part \(drawing.parts.count + 1)", shapes: [shape], pivot: shape.bounds.center))
+            let name = drawing.uniquePartName("Part \(drawing.parts.count + 1)")
+            drawing.parts.append(Part(id: id, name: name, shapes: [shape], pivot: shape.bounds.center))
         }
         commit(from: before)
     }
@@ -361,15 +367,13 @@ public struct DrawingEditor: Sendable {
     public mutating func undo() {
         cancelGesture()
         guard let state = undoStack.undo(current: drawing) else { return }
-        drawing = state
-        validateSelection()
+        restore(state)
     }
 
     public mutating func redo() {
         cancelGesture()
         guard let state = undoStack.redo(current: drawing) else { return }
-        drawing = state
-        validateSelection()
+        restore(state)
     }
 
     /// Removes all art (reference images stay). Undoable.
@@ -516,6 +520,48 @@ public struct DrawingEditor: Sendable {
         commit(from: before)
     }
 
+    // MARK: Layers
+
+    /// Renames a part. Names are trimmed and kept unique; an empty name is ignored.
+    public mutating func renamePart(_ id: Int, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let i = drawing.partIndex(id) else { return }
+        let before = drawing
+        drawing.parts[i].name = drawing.uniquePartName(trimmed, excluding: id)
+        commit(from: before)
+    }
+
+    public mutating func renameCharacter(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let before = drawing
+        drawing.name = trimmed
+        commit(from: before)
+    }
+
+    /// Selects a whole part, as tapping it with the select tool does.
+    public mutating func selectPart(_ id: Int) {
+        guard drawing.partIndex(id) != nil else { return }
+        cancelGesture()
+        selection = .part(id)
+    }
+
+    public mutating func deletePart(_ id: Int) {
+        guard drawing.partIndex(id) != nil else { return }
+        cancelGesture()
+        selection = .part(id)
+        deleteSelection()
+    }
+
+    /// Replaces the whole drawing (for example, with a version of the file changed
+    /// outside the editor). Undoable.
+    public mutating func replaceDrawing(_ newDrawing: Drawing) {
+        cancelGesture()
+        let before = drawing
+        restore(newDrawing)
+        commit(from: before)
+    }
+
     // MARK: Reference images
 
     @discardableResult
@@ -561,6 +607,15 @@ public struct DrawingEditor: Sendable {
     private mutating func commit(from before: Drawing, key: String? = nil) {
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
+    }
+
+    /// Switches to another state of the drawing. Ids are never handed out twice in a
+    /// session, so the app can key cached pixels and textures by id.
+    private mutating func restore(_ state: Drawing) {
+        let nextID = drawing.nextID
+        drawing = state
+        drawing.nextID = max(state.nextID, nextID)
+        validateSelection()
     }
 
     private mutating func validateSelection() {

@@ -1,0 +1,90 @@
+{
+  "formatVersion": "0.1.0",
+  "name": "Robo",
+  "bones": [
+    { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 }
+  ],
+  "slots": [
+    { "id": "Torso", "bone": "root", "attachment": "Torso" },
+    { "id": "Head", "bone": "root", "attachment": "Head" }
+  ],
+  "drawOrder": ["Torso", "Head"],
+  "skins": {
+    "default": {
+      "Torso": {
+        "Torso": {
+          "type": "vector",
+          "pivot": [0, -40],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#5A8DEEFF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [-30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [36, -10], "in": [0, -20], "out": [-8, 14] },
+                { "p": [0, 8], "in": [18, 0], "out": [-18, 0] },
+                { "p": [-36, -10], "in": [8, 14], "out": [0, -20] }
+              ]
+            },
+            {
+              "closed": true,
+              "fill": "#FFFFFF80",
+              "points": [
+                { "p": [-12, -70], "in": [0, -6.5], "out": [0, 6.5] },
+                { "p": [0, -58], "in": [-6.5, 0], "out": [6.5, 0] },
+                { "p": [12, -70], "in": [0, 6.5], "out": [0, -6.5] },
+                { "p": [0, -82], "in": [6.5, 0], "out": [-6.5, 0] }
+              ]
+            }
+          ]
+        }
+      },
+      "Head": {
+        "Head": {
+          "type": "vector",
+          "pivot": [0, -110],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#F2A65AFF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [0, -150], "in": [-22.0914, 0], "out": [22.0914, 0] },
+                { "p": [40, -110], "in": [0, -22.0914], "out": [0, 22.0914] },
+                { "p": [0, -70], "in": [22.0914, 0], "out": [-22.0914, 0] },
+                { "p": [-40, -110], "in": [0, 22.0914], "out": [0, -22.0914] }
+              ]
+            },
+            {
+              "closed": false,
+              "stroke": { "color": "#222222FF", "width": 2.5 },
+              "points": [
+                { "p": [-14, -96], "in": [0, 0], "out": [6, 8] },
+                { "p": [14, -96], "in": [-6, 8], "out": [0, 0] }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "poses": {},
+  "animations": {},
+  "palette": ["#F2A65AFF", "#5A8DEEFF", "#222222FF"],
+  "references": [
+    {
+      "name": "Sketch",
+      "file": "references/reference-1.png",
+      "width": 4,
+      "height": 4,
+      "x": 0,
+      "y": -80,
+      "rotation": 90,
+      "scale": 40,
+      "opacity": 0.35,
+      "hidden": false
+    }
+  ]
+}

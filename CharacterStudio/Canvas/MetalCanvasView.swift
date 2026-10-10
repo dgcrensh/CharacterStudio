@@ -28,7 +28,7 @@ final class MetalCanvasView: UIView {
         self.renderer = CanvasRenderer()
         super.init(frame: .zero)
         renderer?.attach(to: metalLayer)
-        renderer?.referenceImage = { [weak store] id in store?.referenceImages[id] }
+        renderer?.referenceImage = { [weak store] id in store?.referenceImage(id) }
         isMultipleTouchEnabled = true
         isOpaque = true
         backgroundColor = .systemBackground

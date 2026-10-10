@@ -185,6 +185,9 @@ public struct SelectionFrame: Hashable, Sendable {
 
 /// Everything the user has drawn in one character, plus editor-only reference images.
 public struct Drawing: Hashable, Sendable, Codable {
+    /// The character's name, saved in the file. The document's file name is separate.
+    public var name = "Character"
+    /// Back to front: this is the draw order.
     public var parts: [Part] = []
     /// Bottom to top.
     public var references: [ReferenceImage] = []
@@ -213,6 +216,19 @@ public struct Drawing: Hashable, Sendable, Codable {
     }
 
     public func referenceIndex(_ id: Int) -> Int? { references.firstIndex { $0.id == id } }
+
+    /// `base`, or `base 2`, `base 3`... so no other part has the same name. Part names
+    /// become slot ids in the file, so they are kept unique.
+    public func uniquePartName(_ base: String, excluding id: Int? = nil) -> String {
+        let taken = Set(parts.filter { $0.id != id }.map(\.name))
+        var name = base
+        var n = 2
+        while taken.contains(name) {
+            name = "\(base) \(n)"
+            n += 1
+        }
+        return name
+    }
 
     /// The topmost shape under `p`. Reference images are locked and never hit.
     public func hitTest(_ p: Vec2, tolerance: Double) -> (part: Int, shape: Int)? {

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dgcrensh/CharacterStudio/Schema/character-0.1.schema.json",
+  "title": "Character Studio character",
+  "description": "character.json inside a .charstudio package, format 0.1. Units are points with the y-axis down, angles are degrees (clockwise on screen), and colors are sRGB hex with alpha. Readers should ignore keys they do not know.",
+  "type": "object",
+  "required": ["formatVersion"],
+  "properties": {
+    "formatVersion": {
+      "description": "Semantic version of the format. Readers refuse a newer major version (in 0.x, a newer minor version).",
+      "type": "string",
+      "pattern": "^0\\.1\\.[0-9]+$"
+    },
+    "name": { "description": "The character's display name.", "type": "string" },
+    "bones": {
+      "description": "The bone tree, parents before children. Format 0.1 files written by the app contain only the root bone.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/bone" }
+    },
+    "slots": {
+      "description": "Places on bones that show one attachment at a time.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/slot" }
+    },
+    "drawOrder": {
+      "description": "Slot ids from back to front. Slots missing from this list draw in front, in slot order.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "skins": {
+      "description": "Skin name to slot id to attachment name to attachment. The app writes and reads the \"default\" skin.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/attachment" }
+        }
+      }
+    },
+    "poses": {
+      "description": "Saved test poses: pose name to bone id to a transform relative to the rest pose. Empty in 0.1.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "rotation": { "type": "number" },
+            "scaleX": { "type": "number" },
+            "scaleY": { "type": "number" }
+          }
+        }
+      }
+    },
+    "animations": { "description": "Reserved for the animation system. Empty in 0.1.", "type": "object" },
+    "palette": {
+      "description": "The character's reusable colors.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/color" }
+    },
+    "references": {
+      "description": "Editor-only reference images, bottom to top. Not part of the character: animation tools should ignore them.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/reference" }
+    }
+  },
+  "$defs": {
+    "vec2": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "description": "#RRGGBBAA (or #RRGGBB, opaque), straight alpha.",
+      "type": "string",
+      "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
+    },
+    "bone": {
+      "type": "object",
+      "required": ["id", "parent"],
+      "properties": {
+        "id": { "type": "string" },
+        "parent": { "description": "Parent bone id, or null for the root.", "type": ["string", "null"] },
+        "length": { "type": "number", "minimum": 0 },
+        "x": { "description": "Rest position relative to the parent bone.", "type": "number" },
+        "y": { "type": "number" },
+        "rotation": { "description": "Rest rotation relative to the parent bone, in degrees.", "type": "number" },
+        "scaleX": { "type": "number" },
+        "scaleY": { "type": "number" }
+      }
+    },
+    "slot": {
+      "type": "object",
+      "required": ["id", "bone"],
+      "properties": {
+        "id": { "type": "string" },
+        "bone": { "type": "string" },
+        "attachment": { "description": "The attachment shown by default, or absent for an empty slot.", "type": "string" }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "required": ["type", "shapes"],
+      "properties": {
+        "type": { "const": "vector" },
+        "pivot": { "description": "The part's own pivot, independent of the bone origin.", "$ref": "#/$defs/vec2" },
+        "shapes": {
+          "description": "Back to front.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/shape" }
+        }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "required": ["closed", "points"],
+      "properties": {
+        "closed": { "type": "boolean" },
+        "fill": { "description": "Solid fill, closed paths only (non-zero winding). Absent means no fill.", "$ref": "#/$defs/color" },
+        "stroke": {
+          "description": "Uniform-width outline with round caps and joins. Absent means no outline.",
+          "type": "object",
+          "required": ["color", "width"],
+          "properties": {
+            "color": { "$ref": "#/$defs/color" },
+            "width": { "type": "number", "minimum": 0 }
+          }
+        },
+        "points": {
+          "description": "Cubic Bézier anchors. Segment i runs from point i (p + out) to point i+1 (p + in); closed paths also join the last point to the first.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/point" }
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["p"],
+      "properties": {
+        "p": { "description": "Anchor position.", "$ref": "#/$defs/vec2" },
+        "in": { "description": "Incoming handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
+        "out": { "description": "Outgoing handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
+        "smooth": { "description": "Editor hint: false for a corner point. Defaults to true.", "type": "boolean" },
+        "weights": {
+          "description": "[bone id, weight] pairs for blended binding. Rigid parts omit this and follow their slot's bone.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "type": "number", "minimum": 0, "maximum": 1 }],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": ["file", "width", "height"],
+      "properties": {
+        "name": { "type": "string" },
+        "file": { "description": "Image file path inside the package, under references/.", "type": "string" },
+        "width": { "description": "Natural image size in points, before scale.", "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "x": { "description": "Center in world space.", "type": "number" },
+        "y": { "type": "number" },
+        "rotation": { "type": "number" },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "hidden": { "type": "boolean" }
+      }
+    }
+  }
+}

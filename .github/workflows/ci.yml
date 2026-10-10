@@ -14,6 +14,17 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift test --package-path Packages/CharacterCore
 
+  schema:
+    name: File format schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "jsonschema>=4.18"
+      - run: python Schema/validate.py
+
   app-build:
     name: App build (iPad Simulator)
     runs-on: macos-latest
