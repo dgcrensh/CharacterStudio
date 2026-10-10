@@ -36,6 +36,13 @@ final class EditorUIState {
     var style = ShapeStyle()
     var smoothing = 0.4
     var palette: [RGBAColor] = []
+    var globalColors: [GlobalColor] = []
+    /// Opacity, gradient, clipping and global colors of the first selected shape.
+    var appearance: ShapeAppearance?
+    var canClip = false
+    /// The width multiple at the selected anchors, while point-editing.
+    var anchorWidth: Double?
+    var pressureWidth = false
     var characterName = ""
     /// Parts under their bones, then reference images.
     var layers = LayerTree(drawing: Drawing())
@@ -97,6 +104,7 @@ final class CanvasStore {
         options.fingerDraws = true
         #endif
         session = CanvasSession(options: options, drawing: package.drawing)
+        session.editor.pressureWidth = UserDefaults.standard.bool(forKey: Self.pressureWidthKey)
         referenceData = package.referenceImages
         document = package
         documentRevision = session.editor.revision
@@ -182,6 +190,11 @@ final class CanvasStore {
         update(\.style, editor.style)
         update(\.smoothing, editor.smoothing)
         update(\.palette, editor.drawing.palette)
+        update(\.globalColors, editor.drawing.globalColors)
+        update(\.appearance, editor.selectionAppearance)
+        update(\.canClip, editor.canClipSelection)
+        update(\.anchorWidth, editingPoints ? editor.selectedAnchorsWidth : nil)
+        update(\.pressureWidth, editor.pressureWidth)
         update(\.characterName, editor.drawing.name)
         update(\.shapeKind, editor.shapeKind)
         update(\.shapeOptions, editor.shapeOptions)
@@ -347,7 +360,7 @@ final class CanvasStore {
 
     func setFill(_ color: Color) { edit { $0.editor.setFill(RGBAColor(color), continuous: true) } }
     func setFillEnabled(_ on: Bool) { edit { $0.editor.setFillEnabled(on) } }
-    func setOutline(_ color: Color) { edit { $0.editor.setOutline(RGBAColor(color, opaque: true), continuous: true) } }
+    func setOutline(_ color: Color) { edit { $0.editor.setOutline(RGBAColor(color), continuous: true) } }
     func setOutlineWidth(_ width: Double) { edit { $0.editor.setOutlineWidth(width) } }
     func setOutlineEnabled(_ on: Bool) { edit { $0.editor.setOutlineEnabled(on) } }
     func setSmoothing(_ amount: Double) { edit { $0.editor.smoothing = amount } }
@@ -356,9 +369,43 @@ final class CanvasStore {
     func addOutlineToPalette() { edit { $0.editor.addToPalette($0.editor.style.outline) } }
     func removeFromPalette(at index: Int) { edit { $0.editor.removeFromPalette(at: index) } }
     func applyPaletteFill(_ color: RGBAColor) { edit { $0.editor.setFill(color) } }
-    func applyPaletteOutline(_ color: RGBAColor) {
-        edit { $0.editor.setOutline(RGBAColor(r: color.r, g: color.g, b: color.b, a: 1)) }
+    func applyPaletteOutline(_ color: RGBAColor) { edit { $0.editor.setOutline(color) } }
+
+    // MARK: Appearance
+
+    private static let pressureWidthKey = "pressureWidth"
+
+    func setOutlineCap(_ cap: LineCap) { edit { $0.editor.setOutlineCap(cap) } }
+    func setOutlineJoin(_ join: LineJoin) { edit { $0.editor.setOutlineJoin(join) } }
+    func setMiterLimit(_ limit: Double) { edit { $0.editor.setMiterLimit(limit) } }
+    func setOutlineDash(_ dash: [Double]) { edit { $0.editor.setOutlineDash(dash) } }
+    func setOutlineAlignment(_ alignment: StrokeAlignment) { edit { $0.editor.setOutlineAlignment(alignment) } }
+    func setOpacity(_ opacity: Double) { edit { $0.editor.setOpacity(opacity) } }
+    func setClipped(_ clipped: Bool) { edit { $0.editor.setClipped(clipped) } }
+    func setGradient(_ kind: ShapeGradient.Kind?) { edit { $0.editor.setGradient(kind) } }
+    func setGradientStop(_ index: Int, _ color: Color) { edit { $0.editor.setGradientStop(index, color: RGBAColor(color)) } }
+    func setGradientAngle(_ degrees: Double) { edit { $0.editor.setGradientAngle(degrees) } }
+    func setGradientSpan(_ fraction: Double) { edit { $0.editor.setGradientSpan(fraction) } }
+    func reverseGradient() { edit { $0.editor.reverseGradient() } }
+    func setAnchorWidth(_ width: Double) { edit { $0.editor.setSelectedAnchorsWidth(width) } }
+    func resetOutlineWidths() { edit { $0.editor.resetOutlineWidths() } }
+
+    /// Pencil pressure sets the outline width along new strokes. Remembered on this iPad.
+    func setPressureWidth(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.pressureWidthKey)
+        edit { $0.editor.pressureWidth = on }
     }
+
+    // MARK: Global colors
+
+    func addGlobalColorFromFill() { edit { _ = $0.editor.addGlobalColor($0.editor.style.fill) } }
+    func renameGlobalColor(_ id: Int, to name: String) { edit { $0.editor.renameGlobalColor(id, to: name) } }
+    func setGlobalColor(_ id: Int, _ color: Color) {
+        edit { $0.editor.setGlobalColor(id, to: RGBAColor(color), continuous: true) }
+    }
+    func removeGlobalColor(_ id: Int) { edit { $0.editor.removeGlobalColor(id) } }
+    func applyGlobalFill(_ id: Int) { edit { $0.editor.applyGlobalFill(id) } }
+    func applyGlobalOutline(_ id: Int) { edit { $0.editor.applyGlobalOutline(id) } }
 
     // MARK: Layers
 
@@ -441,11 +488,11 @@ extension Vec2 {
 }
 
 extension RGBAColor {
-    init(_ color: Color, opaque: Bool = false) {
+    init(_ color: Color) {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
         func clamp(_ v: CGFloat) -> Double { min(max(Double(v), 0), 1) }
-        self.init(r: clamp(r), g: clamp(g), b: clamp(b), a: opaque ? 1 : clamp(a))
+        self.init(r: clamp(r), g: clamp(g), b: clamp(b), a: clamp(a))
     }
 
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }

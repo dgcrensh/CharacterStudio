@@ -1,5 +1,5 @@
 {
-  "formatVersion": "0.1.0",
+  "formatVersion": "0.2.0",
   "name": "Robo",
   "bones": [
     { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 }
@@ -19,7 +19,17 @@
             {
               "closed": true,
               "fill": "#5A8DEEFF",
-              "stroke": { "color": "#222222FF", "width": 3 },
+              "fillGlobal": "Body",
+              "gradient": {
+                "type": "linear",
+                "start": [0, -90],
+                "end": [0, 8],
+                "stops": [
+                  { "offset": 0, "color": "#5A8DEEFF" },
+                  { "offset": 1, "color": "#3655A0FF" }
+                ]
+              },
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 3, "join": "miter" },
               "points": [
                 { "p": [-30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
                 { "p": [30, -90], "in": [0, 0], "out": [0, 0], "smooth": false },
@@ -30,12 +40,32 @@
             },
             {
               "closed": true,
+              "fill": "#1A2A5040",
+              "clipped": true,
+              "points": [
+                { "p": [20, -60], "in": [0, -22], "out": [0, 22] },
+                { "p": [44, -20], "in": [-14, 0], "out": [14, 0] },
+                { "p": [64, -60], "in": [0, 22], "out": [0, -22] },
+                { "p": [44, -100], "in": [14, 0], "out": [-14, 0] }
+              ]
+            },
+            {
+              "closed": true,
               "fill": "#FFFFFF80",
+              "opacity": 0.8,
               "points": [
                 { "p": [-12, -70], "in": [0, -6.5], "out": [0, 6.5] },
                 { "p": [0, -58], "in": [-6.5, 0], "out": [6.5, 0] },
                 { "p": [12, -70], "in": [0, 6.5], "out": [0, -6.5] },
                 { "p": [0, -82], "in": [6.5, 0], "out": [-6.5, 0] }
+              ]
+            },
+            {
+              "closed": false,
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 1.5, "cap": "butt", "dash": [4, 3] },
+              "points": [
+                { "p": [-30, -30], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [30, -30], "in": [0, 0], "out": [0, 0], "smooth": false }
               ]
             }
           ]
@@ -49,7 +79,8 @@
             {
               "closed": true,
               "fill": "#F2A65AFF",
-              "stroke": { "color": "#222222FF", "width": 3 },
+              "fillGlobal": "Skin",
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 3, "align": "inside" },
               "points": [
                 { "p": [0, -150], "in": [-22.0914, 0], "out": [22.0914, 0] },
                 { "p": [40, -110], "in": [0, -22.0914], "out": [0, 22.0914] },
@@ -59,10 +90,11 @@
             },
             {
               "closed": false,
-              "stroke": { "color": "#222222FF", "width": 2.5 },
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 2.5 },
               "points": [
-                { "p": [-14, -96], "in": [0, 0], "out": [6, 8] },
-                { "p": [14, -96], "in": [-6, 8], "out": [0, 0] }
+                { "p": [-14, -96], "in": [0, 0], "out": [4, 5], "w": 0.3 },
+                { "p": [0, -89], "in": [-8, 0], "out": [8, 0], "w": 1.4 },
+                { "p": [14, -96], "in": [-4, 5], "out": [0, 0], "w": 0.3 }
               ]
             }
           ]
@@ -72,7 +104,12 @@
   },
   "poses": {},
   "animations": {},
-  "palette": ["#F2A65AFF", "#5A8DEEFF", "#222222FF"],
+  "palette": [
+    "#FFFFFF80",
+    { "name": "Skin", "color": "#F2A65AFF" },
+    { "name": "Body", "color": "#5A8DEEFF" },
+    { "name": "Ink", "color": "#222222FF" }
+  ],
   "references": [
     {
       "name": "Sketch",

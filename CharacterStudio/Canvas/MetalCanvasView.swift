@@ -180,6 +180,13 @@ final class MetalCanvasView: UIView {
         Vec2(touch.type == .pencil ? touch.preciseLocation(in: self) : touch.location(in: self))
     }
 
+    /// The Pencil's force as a fraction of the most it reports, or nil for fingers.
+    private func pressure(of touch: UITouch) -> Double? {
+        guard touch.type == .pencil, touch.maximumPossibleForce > 0 else { return nil }
+        let fraction = Double(touch.force / touch.maximumPossibleForce)
+        return min(max(fraction, 0), 1)
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         // Shift and Option on a hardware keyboard constrain and duplicate.
         if let event { store.setKeyboardModifiers(event.modifierFlags) }
@@ -196,7 +203,8 @@ final class MetalCanvasView: UIView {
                 kind: touchKind,
                 location: location(of: touch),
                 majorRadius: Double(touch.majorRadius),
-                time: touch.timestamp
+                time: touch.timestamp,
+                pressure: pressure(of: touch)
             )
         }
         if store.session.isDrawing, quickShapeWatch == nil { watchForQuickShape() }
@@ -226,12 +234,18 @@ final class MetalCanvasView: UIView {
         for touch in touches {
             guard let id = touchIDs[ObjectIdentifier(touch)] else { continue }
             let coalesced = event?.coalescedTouches(for: touch) ?? [touch]
+            let samples: [UITouch] = coalesced.isEmpty ? [touch] : coalesced
             let predicted = event?.predictedTouches(for: touch) ?? []
+            var pressures: [Double] = []
+            for sample in samples {
+                if let value = pressure(of: sample) { pressures.append(value) }
+            }
             store.session.touchMoved(
                 id: id,
-                samples: (coalesced.isEmpty ? [touch] : coalesced).map(location(of:)),
+                samples: samples.map(location(of:)),
                 predicted: predicted.map(location(of:)),
-                time: touch.timestamp
+                time: touch.timestamp,
+                pressures: pressures.count == samples.count ? pressures : nil
             )
         }
         setNeedsRender()

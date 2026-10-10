@@ -1,6 +1,6 @@
 /// Metal shaders, compiled at launch from source so the project needs no .metal
-/// build step. Struct layouts must match `CanvasUniforms` (CanvasRenderer.swift),
-/// `CapsuleTessellator` and `FillTessellator` (CharacterCore).
+/// build step. Struct layouts must match `CanvasUniforms` and `PaintUniforms`
+/// (CanvasRenderer.swift), `CapsuleTessellator` and `ArtBatch` (CharacterCore).
 enum ShaderSource {
     static let metal = """
     #include <metal_stdlib>
@@ -74,16 +74,73 @@ enum ShaderSource {
         return in.color * coverage; // premultiplied
     }
 
-    // Fills use stencil-then-cover: the fan marks winding numbers in the stencil,
-    // then the cover quad paints where the stencil is non-zero (and clears it).
-    vertex float4 fill_vertex(uint vid [[vertex_id]],
-                              const device packed_float2 *positions [[buffer(0)]],
-                              constant Uniforms &u [[buffer(1)]]) {
-        return u.worldToClip * float4(float2(positions[vid]), 0.0, 1.0);
+    // The art is drawn with stencil-then-cover (see ArtBuilder): triangles mark the
+    // stencil, then a cover rectangle paints where the stencil test passes.
+    struct FillOut {
+        float4 position [[position]];
+        float2 world;
+    };
+
+    vertex FillOut fill_vertex(uint vid [[vertex_id]],
+                               const device packed_float2 *positions [[buffer(0)]],
+                               constant Uniforms &u [[buffer(1)]]) {
+        float2 world = float2(positions[vid]);
+        FillOut out;
+        out.position = u.worldToClip * float4(world, 0.0, 1.0);
+        out.world = world;
+        return out;
     }
 
-    fragment float4 fill_fragment(constant float4 &color [[buffer(0)]]) {
-        return color; // premultiplied
+    fragment float4 stencil_fragment() {
+        return float4(0.0); // color writes are off
+    }
+
+    // A solid color or a gradient, in straight alpha. See PaintUniforms.
+    struct Paint {
+        float4 color;
+        float4 points;      // start.xy, end.xy (world)
+        float4 info;        // kind (0 solid, 1 linear, 2 radial), stop count, opacity
+        float4 stopColors[8];
+        float4 stopOffsets[2];
+    };
+
+    float stop_offset(constant Paint &paint, int i) {
+        return paint.stopOffsets[i / 4][i % 4];
+    }
+
+    fragment float4 fill_fragment(FillOut in [[stage_in]], constant Paint &paint [[buffer(0)]]) {
+        float4 c = paint.color;
+        int kind = int(paint.info.x);
+        if (kind != 0) {
+            float2 s = paint.points.xy;
+            float2 axis = paint.points.zw - s;
+            float t = 0.0;
+            if (kind == 1) {
+                float len2 = dot(axis, axis);
+                t = len2 > 1e-12 ? dot(in.world - s, axis) / len2 : 0.0;
+            } else {
+                float radius = length(axis);
+                t = radius > 1e-6 ? length(in.world - s) / radius : 0.0;
+            }
+            t = saturate(t);
+            int n = clamp(int(paint.info.y), 1, 8);
+            c = paint.stopColors[n - 1];
+            if (t <= stop_offset(paint, 0)) {
+                c = paint.stopColors[0];
+            } else {
+                for (int i = 1; i < n; i++) {
+                    float b = stop_offset(paint, i);
+                    if (t <= b) {
+                        float a = stop_offset(paint, i - 1);
+                        float k = b - a > 1e-6 ? (t - a) / (b - a) : 1.0;
+                        c = mix(paint.stopColors[i - 1], paint.stopColors[i], k);
+                        break;
+                    }
+                }
+            }
+        }
+        float alpha = c.a * paint.info.z;
+        return float4(c.rgb * alpha, alpha); // premultiplied
     }
 
     struct ImageVertex {

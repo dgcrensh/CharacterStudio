@@ -104,26 +104,40 @@ final class CharacterFormatTests: XCTestCase {
         let d = package.drawing
         XCTAssertEqual(d.name, "Robo")
         XCTAssertEqual(d.parts.map(\.name), ["Torso", "Head"])
-        XCTAssertEqual(d.parts.map(\.shapes.count), [2, 2])
+        XCTAssertEqual(d.parts.map(\.shapes.count), [4, 2])
         XCTAssertEqual(d.parts[0].pivot, Vec2(0, -40))
+        XCTAssertEqual(d.palette, [RGBAColor(hex: "#FFFFFF80")!])
+        XCTAssertEqual(d.globalColors.map(\.name), ["Skin", "Body", "Ink"])
+        let ink = d.globalColors[2].id
         let torso = d.parts[0].shapes[0]
         XCTAssertTrue(torso.path.closed)
         XCTAssertEqual(torso.fill?.hexString, "#5A8DEEFF")
-        XCTAssertEqual(torso.stroke, StrokeStyle(color: RGBAColor(hex: "#222222")!, width: 3))
+        XCTAssertEqual(torso.fillGlobal, d.globalColors[1].id)
+        XCTAssertEqual(torso.gradient?.kind, .linear)
+        XCTAssertEqual(torso.gradient?.stops.map(\.color.hexString), ["#5A8DEEFF", "#3655A0FF"])
+        XCTAssertEqual(torso.stroke, StrokeStyle(color: RGBAColor(hex: "#222222")!, width: 3, join: .miter, global: ink))
         XCTAssertFalse(torso.path.points[0].isSmooth)
         XCTAssertTrue(torso.path.points[2].isSmooth)
         XCTAssertEqual(torso.path.points[2].outHandle, Vec2(-8, 14))
-        XCTAssertNil(d.parts[0].shapes[1].stroke)
+        XCTAssertTrue(d.parts[0].shapes[1].isClipped)
+        XCTAssertEqual(d.parts[0].clipBase(of: 1), 0)
+        XCTAssertNil(d.parts[0].shapes[2].stroke)
+        XCTAssertEqual(d.parts[0].shapes[2].opacity, 0.8)
+        let seam = d.parts[0].shapes[3].stroke
+        XCTAssertEqual(seam?.cap, .butt)
+        XCTAssertEqual(seam?.dash, [4, 3])
+        XCTAssertEqual(d.parts[1].shapes[0].stroke?.alignment, .inside)
         let mouth = d.parts[1].shapes[1]
         XCTAssertFalse(mouth.path.closed)
         XCTAssertNil(mouth.fill)
-        XCTAssertEqual(d.palette.count, 3)
+        XCTAssertEqual(mouth.path.points.map(\.width), [0.3, 1.4, 0.3])
         XCTAssertEqual(d.references.count, 1)
         XCTAssertEqual(d.references[0].rotation, .pi / 2, accuracy: 1e-12)
         XCTAssertEqual(d.references[0].opacity, 0.35)
         XCTAssertEqual(package.referenceImages[d.references[0].id]?.count, try exampleFiles("robo.charstudio")["references/reference-1.png"]?.count)
         // Every id is distinct.
-        let ids = d.parts.map(\.id) + d.parts.flatMap { $0.shapes.map(\.id) } + d.references.map(\.id)
+        let ids = d.parts.map(\.id) + d.parts.flatMap { $0.shapes.map(\.id) } + d.references.map(\.id) +
+            d.globalColors.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count)
         XCTAssertGreaterThan(d.nextID, ids.max()!)
     }
@@ -213,7 +227,8 @@ final class CharacterFormatTests: XCTestCase {
         }
         XCTAssertNoThrow(try open("0.1.0"))
         XCTAssertNoThrow(try open("0.1.7"))
-        XCTAssertThrowsError(try open("0.2.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("0.2.0")) }
+        XCTAssertNoThrow(try open("0.2.0"))
+        XCTAssertThrowsError(try open("0.3.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("0.3.0")) }
         XCTAssertThrowsError(try open("1.0.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("1.0.0")) }
         XCTAssertThrowsError(try open("0.0.9")) { XCTAssertEqual($0 as? CharacterFileError, .unsupportedVersion("0.0.9")) }
         XCTAssertThrowsError(try open("one")) {

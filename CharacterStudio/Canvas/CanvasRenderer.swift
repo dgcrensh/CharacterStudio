@@ -15,15 +15,57 @@ private struct CanvasUniforms {
     var gridColor: SIMD4<Float>
 }
 
+/// A solid color or gradient for the cover shader. Layout must match `Paint` in
+/// ShaderSource: three float4s, then eight stop colors and eight stop offsets.
+private struct PaintUniforms {
+    var color: SIMD4<Float>
+    var points: SIMD4<Float> = .zero
+    var info: SIMD4<Float>
+    var stopColors: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
+                     SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero)
+    var stopOffsets: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero)
+
+    init(_ paint: ArtPaint) {
+        color = Self.vector(paint.color)
+        info = SIMD4(0, 0, Float(min(max(paint.opacity, 0), 1)), 0)
+        guard let gradient = paint.gradient, !gradient.stops.isEmpty else { return }
+        points = SIMD4(Float(gradient.start.x), Float(gradient.start.y), Float(gradient.end.x), Float(gradient.end.y))
+        let stops = Array(gradient.stops.prefix(ShapeGradient.maxStops))
+        info.x = gradient.kind == .linear ? 1 : 2
+        info.y = Float(stops.count)
+        var colors = [SIMD4<Float>](repeating: .zero, count: 8)
+        var offsets = [Float](repeating: 1, count: 8)
+        for (i, stop) in stops.enumerated() {
+            colors[i] = Self.vector(stop.color)
+            offsets[i] = Float(stop.offset)
+        }
+        stopColors = (colors[0], colors[1], colors[2], colors[3], colors[4], colors[5], colors[6], colors[7])
+        stopOffsets = (SIMD4(offsets[0], offsets[1], offsets[2], offsets[3]),
+                       SIMD4(offsets[4], offsets[5], offsets[6], offsets[7]))
+    }
+
+    /// A solid color, given in straight alpha.
+    init(solid: SIMD4<Float>) {
+        color = solid
+        info = SIMD4(0, 0, 1, 0)
+    }
+
+    private static func vector(_ c: RGBAColor) -> SIMD4<Float> {
+        SIMD4(Float(c.r), Float(c.g), Float(c.b), Float(c.a))
+    }
+}
+
 /// Draws the canvas: dot grid, reference images, the art, the live stroke, then the
 /// editing overlay. Hidden shapes are skipped. In isolation the other parts are drawn
 /// first under a veil of the background color, then the isolated part on top.
 ///
 /// Rendering is 4x multisampled into memoryless targets and resolved into the
-/// drawable. Shapes are filled with stencil-then-cover (any freehand outline fills
-/// correctly, and multisampling anti-aliases the edge) and outlined with capsules.
-/// Each shape's triangles are cached and rebuilt only when that shape changes, so a
-/// drag re-tessellates just the shapes it moves. Vertices are in world space and the
+/// drawable. The art is built by CharacterCore's `ArtBuilder` as stencil-then-cover
+/// steps: fills, outlines (from the stroker, with caps, joins, dashes and varying
+/// width), gradients and clipping all mark the stencil and then paint a rectangle
+/// where the test passes, and multisampling anti-aliases the edges. Each shape's
+/// triangles are cached and rebuilt only when that shape changes, so a drag
+/// re-tessellates just the shapes it moves. Vertices are in world space and the
 /// camera is applied in the vertex shader, so navigation never re-tessellates, except
 /// for a refinement pass when zoom crosses a power of two.
 @MainActor
@@ -33,13 +75,13 @@ final class CanvasRenderer {
     private let device: any MTLDevice
     private let queue: any MTLCommandQueue
     private let strokePipeline: any MTLRenderPipelineState
-    private let fillStencilPipeline: any MTLRenderPipelineState
-    private let fillCoverPipeline: any MTLRenderPipelineState
+    private let stencilPipeline: any MTLRenderPipelineState
+    private let coverPipeline: any MTLRenderPipelineState
     private let imagePipeline: any MTLRenderPipelineState
     private let gridPipeline: any MTLRenderPipelineState
     private let plainState: any MTLDepthStencilState
-    private let stencilWriteState: any MTLDepthStencilState
-    private let coverState: any MTLDepthStencilState
+    /// Depth-stencil states for the art's steps, made on first use.
+    private var stencilStates: [StencilState: any MTLDepthStencilState] = [:]
     private let sampler: any MTLSamplerState
     private let pixelFormat = MTLPixelFormat.bgra8Unorm
     private let stencilFormat = MTLPixelFormat.stencil8
@@ -49,28 +91,12 @@ final class CanvasRenderer {
     private var stencilTexture: (any MTLTexture)?
 
     // Art cache.
-    private struct ShapeGeometry {
-        var shape: VectorShape
-        var tolerance: Double
-        var fan: [Float]
-        var cover: [Float]
-        var outline: [Float]
-    }
-
-    private enum ArtOp {
-        case fill(fanStart: Int, fanCount: Int, coverStart: Int, color: SIMD4<Float>)
-        case outline(start: Int, count: Int)
-        /// Dims everything drawn before it: the parts outside isolation.
-        case veil
-    }
-
-    private var shapeCache: [Int: ShapeGeometry] = [:]
+    private var artBuilder = ArtBuilder()
     private var artRevision = -1
     private var artTolerance = 0.0
     private var artIsolation: Int?
-    private var artOps: [ArtOp] = []
-    private var fillBuffer: (any MTLBuffer)?
-    private var capsuleBuffer: (any MTLBuffer)?
+    private var artSteps: [ArtStep] = []
+    private var artBuffer: (any MTLBuffer)?
 
     private var textures: [Int: any MTLTexture] = [:]
 
@@ -110,13 +136,13 @@ final class CanvasRenderer {
             premultipliedBlending(stroke)
             strokePipeline = try device.makeRenderPipelineState(descriptor: stroke)
 
-            let stencil = descriptor("Fill stencil", vertex: "fill_vertex", fragment: "fill_fragment")
+            let stencil = descriptor("Art stencil", vertex: "fill_vertex", fragment: "stencil_fragment")
             stencil.colorAttachments[0].writeMask = []
-            fillStencilPipeline = try device.makeRenderPipelineState(descriptor: stencil)
+            stencilPipeline = try device.makeRenderPipelineState(descriptor: stencil)
 
-            let cover = descriptor("Fill cover", vertex: "fill_vertex", fragment: "fill_fragment")
+            let cover = descriptor("Art cover", vertex: "fill_vertex", fragment: "fill_fragment")
             premultipliedBlending(cover)
-            fillCoverPipeline = try device.makeRenderPipelineState(descriptor: cover)
+            coverPipeline = try device.makeRenderPipelineState(descriptor: cover)
 
             let image = descriptor("Reference image", vertex: "image_vertex", fragment: "image_fragment")
             premultipliedBlending(image)
@@ -132,26 +158,6 @@ final class CanvasRenderer {
         let plain = MTLDepthStencilDescriptor()
         plain.label = "No stencil"
 
-        let write = MTLDepthStencilDescriptor()
-        write.label = "Stencil winding"
-        let front = MTLStencilDescriptor()
-        front.stencilCompareFunction = .always
-        front.depthStencilPassOperation = .incrementWrap
-        let back = MTLStencilDescriptor()
-        back.stencilCompareFunction = .always
-        back.depthStencilPassOperation = .decrementWrap
-        write.frontFaceStencil = front
-        write.backFaceStencil = back
-
-        let cover = MTLDepthStencilDescriptor()
-        cover.label = "Stencil cover"
-        let coverFace = MTLStencilDescriptor()
-        coverFace.stencilCompareFunction = .notEqual
-        coverFace.stencilFailureOperation = .keep
-        coverFace.depthStencilPassOperation = .zero
-        cover.frontFaceStencil = coverFace
-        cover.backFaceStencil = coverFace
-
         let samplerDescriptor = MTLSamplerDescriptor()
         samplerDescriptor.minFilter = .linear
         samplerDescriptor.magFilter = .linear
@@ -160,13 +166,9 @@ final class CanvasRenderer {
         samplerDescriptor.tAddressMode = .clampToEdge
 
         guard let plainState = device.makeDepthStencilState(descriptor: plain),
-              let stencilWriteState = device.makeDepthStencilState(descriptor: write),
-              let coverState = device.makeDepthStencilState(descriptor: cover),
               let sampler = device.makeSamplerState(descriptor: samplerDescriptor)
         else { return nil }
         self.plainState = plainState
-        self.stencilWriteState = stencilWriteState
-        self.coverState = coverState
         self.sampler = sampler
     }
 
@@ -269,115 +271,101 @@ final class CanvasRenderer {
         artRevision = editor.revision
         artTolerance = tolerance
         artIsolation = editor.isolatedPart
-
-        var fills: [Float] = []
-        var capsules: [Float] = []
-        var ops: [ArtOp] = []
-        var live: Set<Int> = []
-
-        var parts = editor.drawing.parts
-        if let isolated = editor.isolatedPart {
-            parts = parts.filter { $0.id != isolated } + parts.filter { $0.id == isolated }
-        }
-        for part in parts {
-            if part.id == editor.isolatedPart { ops.append(.veil) }
-            for (index, shape) in part.shapes.enumerated() {
-                live.insert(shape.id)
-                guard part.isShown(index) else { continue }
-                let geometry: ShapeGeometry
-                if let cached = shapeCache[shape.id], cached.shape == shape, cached.tolerance == tolerance {
-                    geometry = cached
-                } else {
-                    geometry = tessellate(shape, tolerance: tolerance)
-                    shapeCache[shape.id] = geometry
-                }
-
-                if let color = shape.visibleFill, !geometry.fan.isEmpty {
-                    let fanStart = fills.count / FillTessellator.floatsPerVertex
-                    fills += geometry.fan
-                    let coverStart = fills.count / FillTessellator.floatsPerVertex
-                    fills += geometry.cover
-                    let a = Float(color.a)
-                    ops.append(.fill(
-                        fanStart: fanStart,
-                        fanCount: geometry.fan.count / FillTessellator.floatsPerVertex,
-                        coverStart: coverStart,
-                        color: SIMD4(Float(color.r) * a, Float(color.g) * a, Float(color.b) * a, a)
-                    ))
-                }
-                if !geometry.outline.isEmpty {
-                    let start = capsules.count / CapsuleTessellator.floatsPerVertex
-                    capsules += geometry.outline
-                    ops.append(.outline(start: start, count: geometry.outline.count / CapsuleTessellator.floatsPerVertex))
-                }
-            }
-        }
-        shapeCache = shapeCache.filter { live.contains($0.key) }
-        artOps = ops
-        fillBuffer = makeBuffer(fills)
-        capsuleBuffer = makeBuffer(capsules)
-    }
-
-    private func tessellate(_ shape: VectorShape, tolerance: Double) -> ShapeGeometry {
-        let poly = shape.path.flattened(tolerance: tolerance)
-        var fan: [Float] = []
-        var cover: [Float] = []
-        if shape.visibleFill != nil, poly.count >= 3 {
-            FillTessellator.appendFan(polygon: poly, to: &fan)
-            FillTessellator.appendCover(Rect(points: poly), to: &cover)
-        }
-        var outline: [Float] = []
-        if let stroke = shape.stroke {
-            let points = shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly
-            CapsuleTessellator.append(points: points, width: stroke.width, color: stroke.color, to: &outline)
-        }
-        return ShapeGeometry(shape: shape, tolerance: tolerance, fan: fan, cover: cover, outline: outline)
+        let batch = artBuilder.build(editor.drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance)
+        artSteps = batch.steps
+        artBuffer = makeBuffer(batch.vertices)
     }
 
     private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms, viewRect: Rect) {
-        var strokeStateSet = false
-        for op in artOps {
-            switch op {
+        guard !artSteps.isEmpty else { return }
+        var view: [Float] = []
+        let corners = viewRect.corners
+        for i in [0, 1, 2, 0, 2, 3] {
+            view.append(Float(corners[i].x))
+            view.append(Float(corners[i].y))
+        }
+        enum Bound { case none, stencil, cover }
+        var bound = Bound.none
+        func bind(_ pipeline: any MTLRenderPipelineState, as kind: Bound) {
+            guard bound != kind else { return }
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+            if let artBuffer { encoder.setVertexBuffer(artBuffer, offset: 0, index: 0) }
+            bound = kind
+        }
+
+        for step in artSteps {
+            switch step {
+            case .stencil(let range, let state, let reference):
+                bind(stencilPipeline, as: .stencil)
+                encoder.setDepthStencilState(depthStencilState(state))
+                encoder.setStencilReferenceValue(UInt32(reference))
+                encoder.drawPrimitives(type: .triangle, vertexStart: range.lowerBound, vertexCount: range.count)
+
+            case .cover(let range, let paint, let state, let reference):
+                bind(coverPipeline, as: .cover)
+                var paintUniforms = PaintUniforms(paint)
+                encoder.setDepthStencilState(depthStencilState(state))
+                encoder.setStencilReferenceValue(UInt32(reference))
+                encoder.setFragmentBytes(&paintUniforms, length: MemoryLayout<PaintUniforms>.stride, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: range.lowerBound, vertexCount: range.count)
+
+            case .stencilView(let state, let reference):
+                encoder.setRenderPipelineState(stencilPipeline)
+                encoder.setVertexBytes(view, length: view.count * MemoryLayout<Float>.stride, index: 0)
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+                encoder.setDepthStencilState(depthStencilState(state))
+                encoder.setStencilReferenceValue(UInt32(reference))
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                bound = .none
+
             case .veil:
-                strokeStateSet = false
-                var cover: [Float] = []
-                FillTessellator.appendCover(viewRect, to: &cover)
-                guard !cover.isEmpty else { continue }
                 let bg = uniforms.background
-                var color = SIMD4<Float>(bg.x * 0.7, bg.y * 0.7, bg.z * 0.7, 0.7)
-                encoder.setRenderPipelineState(fillCoverPipeline)
+                var paint = PaintUniforms(solid: SIMD4(bg.x, bg.y, bg.z, 0.7))
+                encoder.setRenderPipelineState(coverPipeline)
                 encoder.setDepthStencilState(plainState)
-                encoder.setVertexBytes(cover, length: cover.count * MemoryLayout<Float>.stride, index: 0)
+                encoder.setVertexBytes(view, length: view.count * MemoryLayout<Float>.stride, index: 0)
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
-                encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: cover.count / FillTessellator.floatsPerVertex)
-
-            case .fill(let fanStart, let fanCount, let coverStart, var color):
-                guard let fillBuffer else { continue }
-                strokeStateSet = false
-                encoder.setRenderPipelineState(fillStencilPipeline)
-                encoder.setDepthStencilState(stencilWriteState)
-                encoder.setVertexBuffer(fillBuffer, offset: 0, index: 0)
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
-                encoder.drawPrimitives(type: .triangle, vertexStart: fanStart, vertexCount: fanCount)
-
-                encoder.setRenderPipelineState(fillCoverPipeline)
-                encoder.setDepthStencilState(coverState)
-                encoder.setStencilReferenceValue(0)
-                encoder.setFragmentBytes(&color, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: coverStart, vertexCount: 6)
-
-            case .outline(let start, let count):
-                guard let capsuleBuffer else { continue }
-                if !strokeStateSet {
-                    encoder.setRenderPipelineState(strokePipeline)
-                    encoder.setDepthStencilState(plainState)
-                    encoder.setVertexBuffer(capsuleBuffer, offset: 0, index: 0)
-                    encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
-                    strokeStateSet = true
-                }
-                encoder.drawPrimitives(type: .triangle, vertexStart: start, vertexCount: count)
+                encoder.setFragmentBytes(&paint, length: MemoryLayout<PaintUniforms>.stride, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                bound = .none
             }
+        }
+    }
+
+    /// The Metal state for a stencil configuration from the art pass.
+    private func depthStencilState(_ state: StencilState) -> any MTLDepthStencilState {
+        if let cached = stencilStates[state] { return cached }
+        func face(_ pass: StencilOperation) -> MTLStencilDescriptor {
+            let d = MTLStencilDescriptor()
+            d.stencilCompareFunction = switch state.compare {
+            case .always: .always
+            case .equal: .equal
+            case .notEqual: .notEqual
+            case .less: .less
+            }
+            d.stencilFailureOperation = CanvasRenderer.operation(state.fail)
+            d.depthFailureOperation = .keep
+            d.depthStencilPassOperation = CanvasRenderer.operation(pass)
+            d.readMask = UInt32(state.readMask)
+            d.writeMask = UInt32(state.writeMask)
+            return d
+        }
+        let descriptor = MTLDepthStencilDescriptor()
+        descriptor.frontFaceStencil = face(state.pass)
+        descriptor.backFaceStencil = face(state.backPass)
+        let made = device.makeDepthStencilState(descriptor: descriptor) ?? plainState
+        stencilStates[state] = made
+        return made
+    }
+
+    private static func operation(_ op: StencilOperation) -> MTLStencilOperation {
+        switch op {
+        case .keep: .keep
+        case .zero: .zero
+        case .replace: .replace
+        case .incrementWrap: .incrementWrap
+        case .decrementWrap: .decrementWrap
         }
     }
 

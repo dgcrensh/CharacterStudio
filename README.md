@@ -36,7 +36,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 
 1. **Canvas and ink**: Metal canvas, pan, zoom, rotate, low-latency Pencil strokes, palm rejection.
 2. **Vector shapes**: curve fitting, filled shapes with outlines, point editing, selection, undo, solid colors, reference images.
-3. **Document** (this milestone): JSON model, save and open in Files, layer tree, schema v0.1.
+3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order.
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
 6. Polish and export: SVG export, slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below.)
@@ -92,7 +92,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 
 **How it works**
 
-- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.1.schema.json).
+- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.2.schema.json).
 - **CharacterCore** owns the format: a small JSON reader and writer that keeps key order (`JSONValue`), the encoder, decoder and version checks (`CharacterFormat`), and the package as a map of paths to bytes (`CharacterPackage`). Damaged files fail with the JSON path of the problem, for example `skins.default.Head.Head.shapes[0].points[1].p is missing`.
 - **App:** a SwiftUI `DocumentGroup` with a `FileDocument` that reads and writes the package folder. The editor keeps its own undo stack and hands the drawing to the document after each finished gesture or command, which marks it edited for autosave.
 - Ids are never reused within a session (undo no longer rewinds the id counter), which also fixes a milestone 2 bug where importing a second reference after undoing the first could show the first image.
@@ -125,3 +125,25 @@ The everyday editing gaps from the full-editor plan, with no change to the file 
 - **Isolation** is editor state, not saved. The renderer draws the other parts, then a 70% veil of the background color, then the isolated part on top.
 - **Duplicate, paste and Option-drag** give every copy fresh ids. An Option-drag records the state before the copy, so one undo removes the copy and the move together.
 
+
+## Appearance notes
+
+Tier 2 of the full-editor plan, done as one file format bump to **0.2**. Older 0.1 characters open as they are and are saved as 0.2.
+
+**Using it**
+
+- **Appearance** (palette button on the left strip) holds everything below. Changes apply to the selection; outline options also apply to new shapes, like the outline color and width. A slider drag is one undo step.
+- **Outlines** now have **ends** (butt, round or square), **corners** (miter with a miter limit, round or bevel), **dashes** (solid, dashed, long dashes or dotted, sized to the outline width) and a **position** for closed shapes (centered on the path, inside it or outside it). Outlines can be translucent now: overlaps no longer darken.
+- **Width along the outline:** in Direct Select, select points and drag **Selected Points** to make the outline thicker or thinner there; widths blend smoothly between points. **Make Width Even** resets a shape. **Pencil Pressure Sets Width** (also the line-weight button next to smoothing on the Pencil tool's style bar) makes pressing harder draw a thicker line. It is **off by default**, so outlines stay uniform unless you turn it on; the setting is remembered on the iPad.
+- **Opacity** fades a shape's fill and outline.
+- **Gradients:** switch a closed shape's fill from Solid to **Linear** or **Radial**. Pick the start and end colors, the angle (linear) and how far it spreads, or swap the colors. The gradient moves, turns and scales with the shape.
+- **Clip to Shape Below:** the shape draws only inside the nearest unclipped shape under it in the same part (its fill and its outline). Paint a shadow or highlight loosely over an arm, turn this on, and it stays inside the arm. Several clipped shapes in a row share the same base. Hiding the base hides them too. Taps on the clipped-away area go through to what's beneath.
+- **Global colors:** New Global Color from Fill adds a named color (Appearance panel, or the palette's **+** menu). Tap its square swatch in the palette to fill the selection with it (long-press for outline). Change a global color in the Appearance panel and every shape that follows it changes too; renaming or deleting it keeps the shapes' colors. Picking an ordinary color for a shape stops it following.
+
+**How it works**
+
+- **Stroker** (`Stroker`, CharacterCore): turns a path into triangles for one quad per segment, a wedge per corner and the caps, with widths blended per point. Dashes cut the flattened path by length first. Triangles are all wound one way.
+- **Drawing the art** is planned in CharacterCore by `ArtBuilder` as stencil-then-cover steps, so the renderer only replays them. The 8-bit stencil holds a fill's winding (bits 0-5), "outline covers this sample" (bit 6) and the clip (bit 7). Fills mark the winding and paint where it is non-zero; outlines mark their triangles and paint the marked area once, so translucent outlines stay even. Inside and outside outlines are stroked twice as wide and painted only where the path's own winding is non-zero or zero. A clip base sets bit 7 where it paints and clipped shapes paint only there. The tests replay these steps in a stencil simulator to check clipping, alignment and that each shape leaves the stencil clean. Gradients are evaluated per pixel in the cover shader.
+- **Pressure:** `CanvasSession` records each sample's force as a fraction of the most the Pencil reports; after fitting, each anchor takes the averaged pressure near where it was drawn (`PressureWidth`). Fingers report no pressure, so the Simulator always draws even outlines.
+- **Format 0.2** keeps widths on the centerline (`w` per point) rather than outlining strokes into filled shapes, so line weight stays right when bones bend a path. Every new key is optional and written only when it differs from its default; see [Schema/README.md](Schema/README.md#appearance-02). `fill` and outline `color` still hold the actual color when a gradient or global color applies, for readers that don't know them.
+- The thumbnail uses the same stroker, and Core Graphics for gradients and clipping.

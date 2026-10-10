@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dgcrensh/CharacterStudio/Schema/character-0.1.schema.json",
+  "$id": "https://github.com/dgcrensh/CharacterStudio/Schema/character-0.2.schema.json",
   "title": "Character Studio character",
-  "description": "character.json inside a .charstudio package, format 0.1. Units are points with the y-axis down, angles are degrees (clockwise on screen), and colors are sRGB hex with alpha. Readers should ignore keys they do not know.",
+  "description": "character.json inside a .charstudio package, format 0.2 (0.1 files are valid too). Units are points with the y-axis down, angles are degrees (clockwise on screen), and colors are sRGB hex with alpha. Readers should ignore keys they do not know.",
   "type": "object",
   "required": ["formatVersion"],
   "properties": {
     "formatVersion": {
       "description": "Semantic version of the format. Readers refuse a newer major version (in 0.x, a newer minor version).",
       "type": "string",
-      "pattern": "^0\\.1\\.[0-9]+$"
+      "pattern": "^0\\.[12]\\.[0-9]+$"
     },
     "name": { "description": "The character's display name.", "type": "string" },
     "bones": {
@@ -58,9 +58,22 @@
     },
     "animations": { "description": "Reserved for the animation system. Empty in 0.1.", "type": "object" },
     "palette": {
-      "description": "The character's reusable colors.",
+      "description": "The character's reusable colors: plain colors, then named global colors that shapes can follow (format 0.2).",
       "type": "array",
-      "items": { "$ref": "#/$defs/color" }
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/color" },
+          {
+            "description": "A global color. Shapes refer to it by name; names are unique.",
+            "type": "object",
+            "required": ["name", "color"],
+            "properties": {
+              "name": { "type": "string" },
+              "color": { "$ref": "#/$defs/color" }
+            }
+          }
+        ]
+      }
     },
     "references": {
       "description": "Editor-only reference images, bottom to top. Not part of the character: animation tools should ignore them.",
@@ -123,16 +136,27 @@
       "required": ["closed", "points"],
       "properties": {
         "closed": { "type": "boolean" },
-        "fill": { "description": "Solid fill, closed paths only (non-zero winding). Absent means no fill.", "$ref": "#/$defs/color" },
+        "fill": { "description": "Solid fill, closed paths only (non-zero winding). Absent means no fill. With a gradient, the color to show where gradients are not supported.", "$ref": "#/$defs/color" },
+        "fillGlobal": { "description": "Format 0.2: the name of the global color (in palette) the fill follows. fill holds its current value.", "type": "string" },
+        "gradient": { "description": "Format 0.2: draws the fill as a gradient. Only with a fill.", "$ref": "#/$defs/gradient" },
         "stroke": {
-          "description": "Uniform-width outline with round caps and joins. Absent means no outline.",
+          "description": "Outline. Absent means no outline. Format 0.1 outlines are uniform with round caps and joins; the keys after width are format 0.2 and optional.",
           "type": "object",
           "required": ["color", "width"],
           "properties": {
             "color": { "$ref": "#/$defs/color" },
-            "width": { "type": "number", "minimum": 0 }
+            "global": { "description": "The name of the global color (in palette) the outline follows. color holds its current value.", "type": "string" },
+            "width": { "description": "Width in points; each point's w multiplies it.", "type": "number", "minimum": 0 },
+            "cap": { "description": "Ends of open paths and dashes. Defaults to round.", "enum": ["butt", "round", "square"] },
+            "join": { "description": "Corners. Defaults to round.", "enum": ["miter", "round", "bevel"] },
+            "miterLimit": { "description": "A miter longer than this many half-widths becomes a bevel. Defaults to 4.", "type": "number", "minimum": 1 },
+            "dash": { "description": "Dash and gap lengths in points, alternating from a dash; an odd list repeats twice. Absent means solid.", "type": "array", "items": { "type": "number", "minimum": 0 } },
+            "dashOffset": { "description": "How far into the dash pattern the path starts. Defaults to 0.", "type": "number" },
+            "align": { "description": "For closed paths: the outline centered on the path, inside the fill area or outside it. Open paths always center. Defaults to center.", "enum": ["center", "inside", "outside"] }
           }
         },
+        "opacity": { "description": "Format 0.2: multiplies the alpha of the fill and of the outline (each on its own). Defaults to 1.", "type": "number", "minimum": 0, "maximum": 1 },
+        "clipped": { "description": "Format 0.2: the shape draws only where the nearest unclipped shape below it in the same attachment draws (its fill and outline). Defaults to false.", "type": "boolean" },
         "hidden": { "description": "Editor hint: the shape is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
         "locked": { "description": "Editor hint: the shape can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "points": {
@@ -149,6 +173,7 @@
         "p": { "description": "Anchor position.", "$ref": "#/$defs/vec2" },
         "in": { "description": "Incoming handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
         "out": { "description": "Outgoing handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
+        "w": { "description": "Format 0.2: the outline width here as a multiple of the stroke width, blended linearly along each segment. Defaults to 1.", "type": "number", "minimum": 0 },
         "smooth": { "description": "Editor hint: false for a corner point. Defaults to true.", "type": "boolean" },
         "symmetric": { "description": "Editor hint: true when the handles are kept equally long and opposite. Defaults to false; ignored on corner points.", "type": "boolean" },
         "weights": {
@@ -159,6 +184,29 @@
             "prefixItems": [{ "type": "string" }, { "type": "number", "minimum": 0, "maximum": 1 }],
             "minItems": 2,
             "maxItems": 2
+          }
+        }
+      }
+    },
+    "gradient": {
+      "description": "Points are in the attachment's space, so the gradient moves with the shape.",
+      "type": "object",
+      "required": ["type", "start", "end", "stops"],
+      "properties": {
+        "type": { "description": "linear runs from start to end; radial runs from start (the center) out to the circle through end.", "enum": ["linear", "radial"] },
+        "start": { "$ref": "#/$defs/vec2" },
+        "end": { "$ref": "#/$defs/vec2" },
+        "stops": {
+          "description": "Colors by offset, 0 at start and 1 at end, interpolated in straight alpha.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["offset", "color"],
+            "properties": {
+              "offset": { "type": "number", "minimum": 0, "maximum": 1 },
+              "color": { "$ref": "#/$defs/color" }
+            }
           }
         }
       }

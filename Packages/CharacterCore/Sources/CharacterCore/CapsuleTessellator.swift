@@ -24,9 +24,12 @@ public enum CapsuleTessellator {
     }
 
     /// Appends vertices for `points` to `out`. A single point becomes a round dot.
-    public static func append(points: [Vec2], width: Double, color: RGBAColor, to out: inout [Float]) {
+    /// `widths`, one per point, multiply `width` (each segment uses the mean of its ends).
+    public static func append(points: [Vec2], width: Double, widths: [Double]? = nil, color: RGBAColor,
+                              to out: inout [Float]) {
         guard let first = points.first else { return }
-        let radius = Float(width / 2)
+        let widths = widths?.count == points.count ? widths : nil
+        var radius = Float(width / 2) * Float(widths?[0] ?? 1)
         // Shaders blend premultiplied colors.
         let alpha = Float(color.a)
         let rgba = (Float(color.r) * alpha, Float(color.g) * alpha, Float(color.b) * alpha, alpha)
@@ -48,14 +51,16 @@ public enum CapsuleTessellator {
             return
         }
         for i in 1..<points.count {
+            if let widths { radius = Float(width / 2 * (widths[i - 1] + widths[i]) / 2) }
             emit(points[i - 1], points[i])
         }
     }
 
     public static func vertices(for stroke: InkStroke, includePredicted: Bool = true) -> [Float] {
         var out: [Float] = []
+        let widths = stroke.displayWidths.map { includePredicted ? $0 : Array($0.prefix(stroke.points.count)) }
         append(points: includePredicted ? stroke.displayPoints : stroke.points,
-               width: stroke.width, color: stroke.color, to: &out)
+               width: stroke.width, widths: widths, color: stroke.color, to: &out)
         return out
     }
 }

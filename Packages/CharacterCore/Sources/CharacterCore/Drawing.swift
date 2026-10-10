@@ -1,22 +1,23 @@
 import Foundation
 
-/// A uniform-width outline.
-public struct StrokeStyle: Hashable, Sendable, Codable {
-    public var color: RGBAColor
-    public var width: Double
-
-    public init(color: RGBAColor, width: Double) {
-        self.color = color
-        self.width = width
-    }
-}
-
-/// One path with an optional solid fill (closed paths only) and an optional outline.
+/// One path with an optional fill (closed paths only) and an optional outline.
 public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public var id: Int
     public var path: BezierPath
+    /// The fill color. With a `gradient` it is the solid color readers without
+    /// gradients fall back to; `nil` means no fill at all.
     public var fill: RGBAColor?
+    /// Draws the fill as a gradient instead of `fill`.
+    public var gradient: ShapeGradient?
+    /// The global color `fill` follows, if any (a `GlobalColor` id).
+    public var fillGlobal: Int?
     public var stroke: StrokeStyle?
+    /// Multiplies the alpha of the fill and the outline (each on its own).
+    public var opacity: Double = 1
+    /// Draws only where the nearest unclipped shape below it in the same part draws
+    /// (its fill and outline), like a clipping mask. Shapes above a clipped shape can
+    /// be clipped to the same base.
+    public var isClipped = false
     /// Editor hints, saved in the file: a hidden shape is not drawn in the editor, and
     /// neither a hidden nor a locked shape can be tapped, selected or erased.
     public var isHidden: Bool
@@ -27,6 +28,8 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
         self.id = id
         self.path = path
         self.fill = fill
+        self.gradient = nil
+        self.fillGlobal = nil
         self.stroke = stroke
         self.isHidden = isHidden
         self.isLocked = isLocked
@@ -35,19 +38,33 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     /// Fill only applies to closed paths.
     public var visibleFill: RGBAColor? { path.closed ? fill : nil }
 
-    public var bounds: Rect {
-        path.bounds().outset(by: (stroke?.width ?? 0) / 2)
+    /// How far the outline reaches from the path at its widest, in points.
+    public var outlineReach: Double {
+        guard let stroke else { return 0 }
+        let alignment = path.closed ? stroke.alignment : .center
+        return stroke.width * path.maxWidth * (alignment == .outside ? 1 : 0.5)
     }
 
-    /// Transforms the path; outline width scales with the transform's area scale.
+    public var bounds: Rect {
+        path.bounds().outset(by: outlineReach)
+    }
+
+    /// Transforms the path and gradient; outline width and dashes scale with the
+    /// transform's area scale.
     public mutating func apply(_ t: Affine2D) {
         path.apply(t)
-        if stroke != nil { stroke!.width *= abs(t.determinant).squareRoot() }
+        gradient?.apply(t)
+        if stroke != nil {
+            let k = abs(t.determinant).squareRoot()
+            stroke!.width *= k
+            stroke!.dash = stroke!.dash.map { $0 * k }
+            stroke!.dashOffset *= k
+        }
     }
 
     /// True when `p` is inside the fill or within `tolerance` of the outline.
     public func contains(_ p: Vec2, tolerance: Double) -> Bool {
-        let outline = (stroke?.width ?? 0) / 2 + tolerance
+        let outline = outlineReach + tolerance
         guard bounds.outset(by: tolerance).contains(p) else { return false }
         let poly = path.flattened(tolerance: 0.5)
         if visibleFill != nil, poly.count >= 3, windingNumber(of: p, polygon: poly) != 0 {
@@ -105,6 +122,27 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
 
     /// True when shape `index` can be tapped, selected, erased or cut.
     public func isEditable(_ index: Int) -> Bool { isShown(index) && !isLocked && !shapes[index].isLocked }
+
+    /// The index of the shape that clipped shape `index` draws inside: the nearest
+    /// unclipped shape below it. Nil for an unclipped shape, or a clipped one with
+    /// nothing below it (which draws unclipped).
+    public func clipBase(of index: Int) -> Int? {
+        guard shapes[index].isClipped else { return nil }
+        return shapes[..<index].lastIndex { !$0.isClipped }
+    }
+
+    /// True when shape `index` is the base of the clipped shapes right above it.
+    public func isClipBase(_ index: Int) -> Bool {
+        !shapes[index].isClipped && index + 1 < shapes.count && shapes[index + 1].isClipped
+    }
+
+    /// True when `p` is on shape `index` where it shows: a clipped shape only shows
+    /// inside its base.
+    public func shape(_ index: Int, contains p: Vec2, tolerance: Double) -> Bool {
+        guard shapes[index].contains(p, tolerance: tolerance) else { return false }
+        guard let base = clipBase(of: index) else { return true }
+        return isShown(base) && shapes[base].contains(p, tolerance: 0)
+    }
 
     public var bounds: Rect {
         shapes.reduce(Rect.null) { $0.union($1.bounds) }
@@ -241,6 +279,8 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var references: [ReferenceImage] = []
     /// Per-character colors for reuse.
     public var palette: [RGBAColor] = []
+    /// Named colors that shapes follow.
+    public var globalColors: [GlobalColor] = []
     public var nextID = 1
 
     public init() {}
@@ -269,6 +309,21 @@ public struct Drawing: Hashable, Sendable, Codable {
 
     public func referenceIndex(_ id: Int) -> Int? { references.firstIndex { $0.id == id } }
 
+    public func globalColor(_ id: Int) -> GlobalColor? { globalColors.first { $0.id == id } }
+
+    /// `base`, or `base 2`, `base 3`... so no other global color has the same name.
+    /// Shapes refer to global colors by name in the file, so names are kept unique.
+    public func uniqueGlobalColorName(_ base: String, excluding id: Int? = nil) -> String {
+        let taken = Set(globalColors.filter { $0.id != id }.map(\.name))
+        var name = base
+        var n = 2
+        while taken.contains(name) {
+            name = "\(base) \(n)"
+            n += 1
+        }
+        return name
+    }
+
     /// `base`, or `base 2`, `base 3`... so no other part has the same name. Part names
     /// become slot ids in the file, so they are kept unique.
     public func uniquePartName(_ base: String, excluding id: Int? = nil) -> String {
@@ -286,7 +341,7 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// Hidden and locked shapes, and reference images, are never hit.
     public func hitTest(_ p: Vec2, tolerance: Double, within: Int? = nil) -> (part: Int, shape: Int)? {
         for part in parts.reversed() where within == nil || part.id == within {
-            for i in part.shapes.indices.reversed() where part.isEditable(i) && part.shapes[i].contains(p, tolerance: tolerance) {
+            for i in part.shapes.indices.reversed() where part.isEditable(i) && part.shape(i, contains: p, tolerance: tolerance) {
                 return (part.id, part.shapes[i].id)
             }
         }
