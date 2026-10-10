@@ -12,13 +12,26 @@ final class EditorUIState {
         case none, part, shape, reference
     }
 
-    var tool: Tool = .brush
+    var tool: Tool = .pencil
     var canUndo = false
     var canRedo = false
     var selection: SelectionKind = .none
     var canDeleteAnchor = false
-    /// Smooth state of the selected anchor, when one is selected.
-    var anchorIsSmooth: Bool?
+    /// How many anchors are selected in Direct Select.
+    var anchorCount = 0
+    /// The handle mode the selected anchors share, if they do.
+    var anchorMode: HandleMode?
+    var canSplit = false
+    var canJoin = false
+    var canTransform = false
+    var penActive = false
+    var addToSelection = false
+    var autoJoin = false
+    var snap = SnapSettings()
+    /// The selection's bounds without outline width, and the selected anchors' middle,
+    /// for the inspector's numeric fields.
+    var selectionBounds: Rect?
+    var anchorPosition: Vec2?
     var style = ShapeStyle()
     var smoothing = 0.4
     var palette: [RGBAColor] = []
@@ -116,7 +129,7 @@ final class CanvasStore {
         let kind: EditorUIState.SelectionKind = switch editor.selection {
         case .none: .none
         case .part: .part
-        case .shape: .shape
+        case .shape, .shapes: .shape
         case .reference: .reference
         }
         update(\.selection, kind)
@@ -125,8 +138,19 @@ final class CanvasStore {
         } else {
             update(\.selectedReference, nil)
         }
-        update(\.canDeleteAnchor, editor.tool == .points && editor.canDeleteSelectedAnchor)
-        update(\.anchorIsSmooth, editor.tool == .points ? editor.selectedAnchorIsSmooth : nil)
+        let editingPoints = editor.tool == .directSelect
+        update(\.canDeleteAnchor, editingPoints && editor.canDeleteSelectedAnchor)
+        update(\.anchorCount, editingPoints ? editor.selectedAnchors.count : 0)
+        update(\.anchorMode, editingPoints ? editor.selectedAnchorMode : nil)
+        update(\.canSplit, editingPoints && editor.canSplitAtSelectedAnchor)
+        update(\.canJoin, editor.canJoinSelection)
+        update(\.canTransform, editor.canTransformSelection)
+        update(\.penActive, editor.isPenActive)
+        update(\.addToSelection, editor.addToSelection)
+        update(\.autoJoin, editor.autoJoinSelectedPart)
+        update(\.snap, editor.snap)
+        update(\.selectionBounds, editor.selectionGeometry)
+        update(\.anchorPosition, editingPoints ? editor.selectedAnchorsCentroid : nil)
         update(\.style, editor.style)
         update(\.smoothing, editor.smoothing)
         update(\.palette, editor.drawing.palette)
@@ -136,6 +160,8 @@ final class CanvasStore {
             update(\.selectedPart, id)
         } else if case .shape(let id, _) = editor.selection {
             update(\.selectedPart, id)
+        } else if case .shapes(let refs) = editor.selection, Set(refs.map(\.part)).count == 1 {
+            update(\.selectedPart, refs.first?.part)
         } else {
             update(\.selectedPart, nil)
         }
@@ -164,8 +190,25 @@ final class CanvasStore {
     func undo() { edit { $0.undo() } }
     func redo() { edit { $0.redo() } }
     func deleteSelection() { edit { $0.editor.deleteSelection() } }
-    func deleteSelectedAnchor() { edit { $0.editor.deleteSelectedAnchor() } }
-    func toggleAnchorSmooth() { edit { $0.editor.toggleSelectedAnchorSmooth() } }
+    func deleteSelectedAnchors() { edit { $0.editor.deleteSelectedAnchors() } }
+    func setAnchorMode(_ mode: HandleMode) { edit { $0.editor.setSelectedAnchorMode(mode) } }
+    func breakAnchorHandles() { edit { $0.editor.breakSelectedAnchorHandles() } }
+    func splitAtAnchor() { edit { $0.editor.splitAtSelectedAnchor() } }
+    func joinPaths() { edit { $0.editor.joinSelection() } }
+    func penDone() { edit { $0.editor.penFinish() } }
+    func setAddToSelection(_ on: Bool) { edit { $0.editor.addToSelection = on } }
+    func setAutoJoin(_ on: Bool) { edit { $0.editor.autoJoinSelectedPart = on } }
+    func setSnap(_ snap: SnapSettings) { edit { $0.editor.snap = snap } }
+    func flip(horizontal: Bool) { edit { $0.editor.flipSelection(horizontal: horizontal) } }
+    func nudge(_ dx: Double, _ dy: Double) { edit { $0.editor.nudge(by: Vec2(dx, dy)) } }
+    func resetPivot() { edit { $0.editor.resetPivot() } }
+    func rotateSelection(degrees: Double) { edit { $0.editor.rotateSelection(byDegrees: degrees) } }
+    func setSelectionX(_ x: Double) { edit { $0.editor.setSelectionOrigin(x: x) } }
+    func setSelectionY(_ y: Double) { edit { $0.editor.setSelectionOrigin(y: y) } }
+    func setSelectionWidth(_ width: Double) { edit { $0.editor.setSelectionSize(width: width) } }
+    func setSelectionHeight(_ height: Double) { edit { $0.editor.setSelectionSize(height: height) } }
+    func setAnchorX(_ x: Double) { edit { $0.editor.setSelectedAnchorsPosition(x: x) } }
+    func setAnchorY(_ y: Double) { edit { $0.editor.setSelectedAnchorsPosition(y: y) } }
     func clear() { edit { $0.clear() } }
     func deselect() { edit { $0.editor.selection = .none } }
 

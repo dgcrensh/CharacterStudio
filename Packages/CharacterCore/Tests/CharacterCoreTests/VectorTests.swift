@@ -302,6 +302,11 @@ final class DrawingEditorTests: XCTestCase {
         var e = editorWithSquare()
         let partID = e.drawing.parts[0].id
         e.selection = .part(partID)
+        // Off by default: the stroke starts its own part.
+        e.addStroke([Vec2(20, 50), Vec2(80, 50)], zoom: 1)
+        XCTAssertEqual(e.drawing.parts.count, 2)
+        e.undo()
+        e.autoJoinSelectedPart = true
         e.addStroke([Vec2(20, 50), Vec2(80, 50)], zoom: 1)
         XCTAssertEqual(e.drawing.parts.count, 1)
         XCTAssertEqual(e.drawing.parts[0].shapes.count, 2)
@@ -356,9 +361,9 @@ final class DrawingEditorTests: XCTestCase {
         XCTAssertTrue(after.isApproximately(expected, tolerance: 1e-6))
     }
 
-    func testPointsToolMovesAnchorAndTogglesSmooth() throws {
+    func testDirectSelectMovesAnchorAndSetsMode() throws {
         var e = editorWithSquare()
-        e.tool = .points
+        e.tool = .directSelect
         tap(&e, Vec2(50, 50))
         guard case .shape = e.selection else { return XCTFail("shape not selected") }
         let path = e.drawing.parts[0].shapes[0].path
@@ -369,7 +374,10 @@ final class DrawingEditorTests: XCTestCase {
         XCTAssertTrue(e.drawing.parts[0].shapes[0].path.points[corner].position.isApproximately(Vec2(130, 120), tolerance: 1.5))
 
         XCTAssertEqual(e.selectedAnchorIsSmooth, false)
+        // Tapping the selected anchor no longer changes its mode; the mode control does.
         tap(&e, Vec2(130, 120))
+        XCTAssertEqual(e.selectedAnchorIsSmooth, false)
+        e.setSelectedAnchorMode(.smooth)
         XCTAssertEqual(e.selectedAnchorIsSmooth, true)
 
         e.undo()
@@ -378,9 +386,9 @@ final class DrawingEditorTests: XCTestCase {
         XCTAssertTrue(e.drawing.parts[0].shapes[0].path.points[corner].position.isApproximately(Vec2(100, 100), tolerance: 1))
     }
 
-    func testPointsToolInsertsAndDeletesPoints() throws {
+    func testDirectSelectInsertsAndDeletesPoints() throws {
         var e = editorWithSquare()
-        e.tool = .points
+        e.tool = .directSelect
         tap(&e, Vec2(50, 50))
         let count = e.drawing.parts[0].shapes[0].path.points.count
         // Tap on the top edge, between corners.

@@ -72,19 +72,48 @@ public struct CubicBezier: Hashable, Sendable {
     }
 }
 
+/// How a point's two handles relate when one of them moves.
+public enum HandleMode: Hashable, Sendable, Codable {
+    /// The handles move independently.
+    case corner
+    /// The handles stay collinear; the other keeps its length.
+    case smooth
+    /// The handles stay collinear and equally long.
+    case symmetric
+}
+
 /// An anchor on a path. Handles are offsets from the anchor, matching the file
-/// format's `in` and `out`. A smooth point keeps its two handles collinear.
+/// format's `in` and `out`. `mode` says how the handles follow each other.
 public struct PathPoint: Hashable, Sendable, Codable {
     public var position: Vec2
     public var inHandle: Vec2
     public var outHandle: Vec2
-    public var isSmooth: Bool
+    public var mode: HandleMode
 
     public init(_ position: Vec2, in inHandle: Vec2 = .zero, out outHandle: Vec2 = .zero, smooth: Bool = true) {
         self.position = position
         self.inHandle = inHandle
         self.outHandle = outHandle
-        self.isSmooth = smooth
+        self.mode = smooth ? .smooth : .corner
+    }
+
+    public init(_ position: Vec2, in inHandle: Vec2, out outHandle: Vec2, mode: HandleMode) {
+        self.position = position
+        self.inHandle = inHandle
+        self.outHandle = outHandle
+        self.mode = mode
+    }
+
+    /// True for smooth and symmetric points. Setting it true keeps a symmetric mode.
+    public var isSmooth: Bool {
+        get { mode != .corner }
+        set {
+            if !newValue {
+                mode = .corner
+            } else if mode == .corner {
+                mode = .smooth
+            }
+        }
     }
 
     public var inControl: Vec2 { position + inHandle }
@@ -94,6 +123,12 @@ public struct PathPoint: Hashable, Sendable, Codable {
 public enum HandleSide: Hashable, Sendable {
     case incoming
     case outgoing
+}
+
+/// One end of an open path.
+public enum PathEnd: Hashable, Sendable {
+    case start
+    case end
 }
 
 /// An editable cubic Bézier path, open or closed.
@@ -168,61 +203,110 @@ public struct BezierPath: Hashable, Sendable, Codable {
         return a + 1
     }
 
+    /// Removes point `i`. Interior points are healed: the neighbours keep their handle
+    /// directions and the handles facing the gap are lengthened so the joined curve
+    /// follows the old shape (splitting it again would give back the old handles).
     public mutating func removePoint(at i: Int) {
+        let n = points.count
+        guard points.indices.contains(i) else { return }
+        guard n >= 3, closed || (i > 0 && i < n - 1) else {
+            points.remove(at: i)
+            return
+        }
+        let prev = (i - 1 + n) % n, next = (i + 1) % n
+        let here = points[i].position
+        let d1 = points[prev].position.distance(to: here)
+        let d2 = here.distance(to: points[next].position)
+        let t = d1 + d2 > 1e-12 ? min(max(d1 / (d1 + d2), 0.2), 0.8) : 0.5
+        points[prev].outHandle = points[prev].outHandle / t
+        points[next].inHandle = points[next].inHandle / (1 - t)
+        // One handle changed length, so equal-length handles no longer hold.
+        if points[prev].mode == .symmetric { points[prev].mode = .smooth }
+        if points[next].mode == .symmetric { points[next].mode = .smooth }
         points.remove(at: i)
+    }
+
+    /// Removes several points, each healed in turn.
+    public mutating func removePoints(at indices: Set<Int>) {
+        for i in indices.sorted(by: >) { removePoint(at: i) }
     }
 
     public mutating func moveAnchor(_ i: Int, to p: Vec2) {
         points[i].position = p
     }
 
-    /// Moves one handle to the absolute point `q`. On a smooth point the opposite
-    /// handle turns to stay collinear and keeps its length.
+    /// Moves one handle to the absolute point `q`. The opposite handle follows
+    /// according to the point's mode: nothing for a corner, the opposite direction
+    /// (keeping its length) for smooth, the exact mirror for symmetric.
     public mutating func setHandle(_ i: Int, _ side: HandleSide, to q: Vec2) {
         let offset = q - points[i].position
         switch side {
-        case .incoming:
-            points[i].inHandle = offset
-            if points[i].isSmooth {
-                let len = points[i].outHandle.length
-                points[i].outHandle = -offset.normalized * len
+        case .incoming: points[i].inHandle = offset
+        case .outgoing: points[i].outHandle = offset
+        }
+        guard offset.length > 1e-9 else { return }
+        switch points[i].mode {
+        case .corner:
+            break
+        case .smooth:
+            switch side {
+            case .incoming: points[i].outHandle = -offset.normalized * points[i].outHandle.length
+            case .outgoing: points[i].inHandle = -offset.normalized * points[i].inHandle.length
             }
-        case .outgoing:
-            points[i].outHandle = offset
-            if points[i].isSmooth {
-                let len = points[i].inHandle.length
-                points[i].inHandle = -offset.normalized * len
+        case .symmetric:
+            switch side {
+            case .incoming: points[i].outHandle = -offset
+            case .outgoing: points[i].inHandle = -offset
             }
         }
     }
 
-    /// Switches a point between smooth and corner. Turning a point smooth lines
-    /// its handles up; if it has no handles yet they are derived from its neighbours.
+    /// Switches a point between smooth and corner.
     public mutating func toggleSmooth(_ i: Int) {
-        if points[i].isSmooth {
-            points[i].isSmooth = false
-            return
+        setMode(i, points[i].isSmooth ? .corner : .smooth)
+    }
+
+    /// Sets a point's handle mode. Turning a point smooth or symmetric lines its
+    /// handles up; if it has no handles yet they are derived from its neighbours.
+    public mutating func setMode(_ i: Int, _ mode: HandleMode) {
+        points[i].mode = mode
+        switch mode {
+        case .corner: break
+        case .smooth: alignHandles(i, equalLength: false)
+        case .symmetric: alignHandles(i, equalLength: true)
         }
-        points[i].isSmooth = true
+    }
+
+    /// Retracts both handles, leaving a sharp corner between straight segments.
+    public mutating func breakHandles(_ i: Int) {
+        points[i].mode = .corner
+        points[i].inHandle = .zero
+        points[i].outHandle = .zero
+    }
+
+    private mutating func alignHandles(_ i: Int, equalLength: Bool) {
         let pt = points[i]
         let inLen = pt.inHandle.length, outLen = pt.outHandle.length
         if inLen > 1e-9, outLen > 1e-9 {
             let dir = (pt.outHandle.normalized - pt.inHandle.normalized).normalized
             guard dir != .zero else { return }
-            points[i].outHandle = dir * outLen
-            points[i].inHandle = -dir * inLen
+            let average = (inLen + outLen) / 2
+            points[i].outHandle = dir * (equalLength ? average : outLen)
+            points[i].inHandle = -dir * (equalLength ? average : inLen)
             return
         }
         let prev = neighbor(of: i, offset: -1)
         let next = neighbor(of: i, offset: 1)
         let dir = ((next ?? pt.position) - (prev ?? pt.position)).normalized
         guard dir != .zero else { return }
-        if let prev, hasIncomingSegment(i) {
-            points[i].inHandle = -dir * (pt.position.distance(to: prev) / 3)
+        var inNew = prev.map { pt.position.distance(to: $0) / 3 }
+        var outNew = next.map { pt.position.distance(to: $0) / 3 }
+        if equalLength, let a = inNew, let b = outNew {
+            inNew = (a + b) / 2
+            outNew = inNew
         }
-        if let next, hasOutgoingSegment(i) {
-            points[i].outHandle = dir * (pt.position.distance(to: next) / 3)
-        }
+        if let inNew, hasIncomingSegment(i) { points[i].inHandle = -dir * inNew }
+        if let outNew, hasOutgoingSegment(i) { points[i].outHandle = dir * outNew }
     }
 
     private func neighbor(of i: Int, offset: Int) -> Vec2? {
@@ -231,5 +315,95 @@ public struct BezierPath: Hashable, Sendable, Codable {
         let j = i + offset
         if closed { return points[(j % n + n) % n].position }
         return points.indices.contains(j) ? points[j].position : nil
+    }
+
+    /// Reshapes segment `i` by dragging the curve near parameter `t` by `delta`: the
+    /// two handles that shape the segment move so that point of the curve follows.
+    /// Handle modes of the end points are honoured.
+    public mutating func reshapeSegment(_ i: Int, t: Double, by delta: Vec2) {
+        guard i >= 0, i < segmentCount else { return }
+        // Near the ends the weights vanish, so keep t away from them.
+        let tt = min(max(t, 0.15), 0.85)
+        let mt = 1 - tt
+        let b1 = 3 * mt * mt * tt, b2 = 3 * mt * tt * tt
+        let denom = b1 * b1 + b2 * b2
+        let a = i, b = (i + 1) % points.count
+        let seg = segment(i)
+        setHandle(a, .outgoing, to: seg.p1 + delta * (b1 / denom))
+        setHandle(b, .incoming, to: seg.p2 + delta * (b2 / denom))
+    }
+
+    /// The path traversed backwards: points reversed and each point's handles swapped.
+    public func reversed() -> BezierPath {
+        let flipped = points.reversed().map { point -> PathPoint in
+            var p = point
+            let tmp = p.inHandle
+            p.inHandle = p.outHandle
+            p.outHandle = tmp
+            return p
+        }
+        return BezierPath(points: flipped, closed: closed)
+    }
+
+    /// The anchor at one end of an open path.
+    public func endPoint(_ end: PathEnd) -> Vec2? {
+        (end == .start ? points.first : points.last)?.position
+    }
+
+    /// Joins two open paths so that `aEnd` of `a` meets `bEnd` of `b`. Endpoints that
+    /// coincide merge into one corner point; otherwise a segment connects them.
+    public static func joined(_ a: BezierPath, _ aEnd: PathEnd, _ b: BezierPath, _ bEnd: PathEnd,
+                              mergeWithin tolerance: Double = 1e-6) -> BezierPath? {
+        guard !a.closed, !b.closed, !a.points.isEmpty, !b.points.isEmpty else { return nil }
+        var points = (aEnd == .end ? a : a.reversed()).points
+        var rest = (bEnd == .start ? b : b.reversed()).points
+        if let last = points.last, let head = rest.first, last.position.distance(to: head.position) <= tolerance {
+            var merged = last
+            merged.outHandle = head.outHandle
+            merged.mode = .corner
+            points[points.count - 1] = merged
+            rest.removeFirst()
+        }
+        return BezierPath(points: points + rest, closed: false)
+    }
+
+    /// The open path closed by joining its two ends, or nil with fewer than three
+    /// points. Ends that coincide merge.
+    public func closedByJoiningEnds(mergeWithin tolerance: Double = 1e-6) -> BezierPath? {
+        guard !closed, points.count >= 3 else { return nil }
+        var result = self
+        result.closed = true
+        if let first = points.first, let last = points.last, first.position.distance(to: last.position) <= tolerance {
+            guard points.count >= 4 else { return nil }
+            result.points[0].inHandle = last.inHandle
+            result.points[0].mode = .corner
+            result.points.removeLast()
+        }
+        return result
+    }
+
+    /// Cuts the path at point `i`. An open path becomes two open paths that both keep
+    /// point `i` (as a corner with no handle on the cut side); a closed path opens
+    /// into one path that starts and ends at `i`. Nil when a piece would be too short.
+    public func split(at i: Int) -> [BezierPath]? {
+        guard points.indices.contains(i) else { return nil }
+        if closed {
+            let n = points.count
+            guard n >= 2 else { return nil }
+            var pts = (0...n).map { points[(i + $0) % n] }
+            pts[0].inHandle = .zero
+            pts[0].mode = .corner
+            pts[n].outHandle = .zero
+            pts[n].mode = .corner
+            return [BezierPath(points: pts, closed: false)]
+        }
+        guard i > 0, i < points.count - 1 else { return nil }
+        var head = Array(points[0...i])
+        head[i].outHandle = .zero
+        head[i].mode = .corner
+        var tail = Array(points[i...])
+        tail[0].inHandle = .zero
+        tail[0].mode = .corner
+        return [BezierPath(points: head), BezierPath(points: tail)]
     }
 }

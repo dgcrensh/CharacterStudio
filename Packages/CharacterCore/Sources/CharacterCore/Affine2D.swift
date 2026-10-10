@@ -21,6 +21,11 @@ public struct Affine2D: Hashable, Sendable, Codable {
         Affine2D(a: s, b: 0, c: 0, d: s, tx: 0, ty: 0)
     }
 
+    /// Scale by different factors along x and y.
+    public static func scale(x: Double, y: Double) -> Affine2D {
+        Affine2D(a: x, b: 0, c: 0, d: y, tx: 0, ty: 0)
+    }
+
     /// Rotation by `radians`. Positive angles turn clockwise on a y-down screen.
     public static func rotation(_ radians: Double) -> Affine2D {
         let cs = cos(radians), sn = sin(radians)

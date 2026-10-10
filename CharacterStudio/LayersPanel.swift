@@ -37,7 +37,7 @@ struct LayersPanel: View {
                     }
                 }
                 if ui.layers.bones.allSatisfy({ $0.parts.isEmpty }) {
-                    Text("Draw with the brush to add a part.")
+                    Text("Draw with the pencil or pen to add a part.")
                         .foregroundStyle(.secondary)
                 }
             } header: {

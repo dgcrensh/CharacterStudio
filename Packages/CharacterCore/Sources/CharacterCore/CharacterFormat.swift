@@ -152,6 +152,7 @@ public enum CharacterFormat {
             (key: "out", value: vec(point.outHandle)),
         ]
         if !point.isSmooth { members.append((key: "smooth", value: .bool(false))) }
+        if point.mode == .symmetric { members.append((key: "symmetric", value: .bool(true))) }
         return .object(members)
     }
 
@@ -252,6 +253,7 @@ public enum CharacterFormat {
             point.inHandle = try p.field("in")?.vec2() ?? .zero
             point.outHandle = try p.field("out")?.vec2() ?? .zero
             point.isSmooth = try p.field("smooth")?.bool() ?? true
+            if point.isSmooth, try p.field("symmetric")?.bool() ?? false { point.mode = .symmetric }
             points.append(point)
         }
         let path = BezierPath(points: points, closed: try node.field("closed")?.bool() ?? false)

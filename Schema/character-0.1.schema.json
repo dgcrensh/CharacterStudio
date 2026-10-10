@@ -146,6 +146,7 @@
         "in": { "description": "Incoming handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
         "out": { "description": "Outgoing handle, as an offset from p. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
         "smooth": { "description": "Editor hint: false for a corner point. Defaults to true.", "type": "boolean" },
+        "symmetric": { "description": "Editor hint: true when the handles are kept equally long and opposite. Defaults to false; ignored on corner points.", "type": "boolean" },
         "weights": {
           "description": "[bone id, weight] pairs for blended binding. Rigid parts omit this and follow their slot's bone.",
           "type": "array",

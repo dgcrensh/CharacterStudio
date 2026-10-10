@@ -176,14 +176,16 @@ final class CanvasRenderer {
         self.layer = layer
     }
 
-    func render(session: CanvasSession, viewSize: CGSize, scale: CGFloat, darkMode: Bool) {
-        guard let layer, viewSize.width > 0, viewSize.height > 0,
-              let drawable = layer.nextDrawable(),
-              let commandBuffer = queue.makeCommandBuffer()
-        else { return }
+    /// Draws one frame. Returns false when the system had no drawable to give (it
+    /// does that under load), so the caller draws again instead of leaving the last
+    /// edit, such as a released anchor drag, undrawn until the next touch.
+    @discardableResult
+    func render(session: CanvasSession, viewSize: CGSize, scale: CGFloat, darkMode: Bool) -> Bool {
+        guard let layer, viewSize.width > 0, viewSize.height > 0 else { return true }
+        guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return false }
 
         ensureTargets(width: drawable.texture.width, height: drawable.texture.height)
-        guard let msaaTexture, let stencilTexture else { return }
+        guard let msaaTexture, let stencilTexture else { return true }
 
         let editor = session.editor
         updateArt(editor: editor, zoom: session.camera.zoom)
@@ -201,7 +203,7 @@ final class CanvasRenderer {
         pass.stencilAttachment.clearStencil = 0
         pass.stencilAttachment.storeAction = .dontCare
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setDepthStencilState(plainState)
 
         encoder.setRenderPipelineState(gridPipeline)
@@ -223,6 +225,7 @@ final class CanvasRenderer {
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        return true
     }
 
     // MARK: Targets

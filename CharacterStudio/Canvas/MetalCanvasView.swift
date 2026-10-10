@@ -30,6 +30,8 @@ final class MetalCanvasView: UIView {
         renderer?.attach(to: metalLayer)
         renderer?.referenceImage = { [weak store] id in store?.referenceImage(id) }
         isMultipleTouchEnabled = true
+        // Pencil (and pointer) hover drives the pen tool's rubber band.
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         isOpaque = true
         backgroundColor = .systemBackground
         store.onChange = { [weak self] in self?.setNeedsRender() }
@@ -88,12 +90,24 @@ final class MetalCanvasView: UIView {
             return
         }
         needsRender = false
-        renderer?.render(
+        let drawn = renderer?.render(
             session: store.session,
             viewSize: bounds.size,
             scale: contentScaleFactor,
             darkMode: traitCollection.userInterfaceStyle == .dark
-        )
+        ) ?? true
+        // A dropped frame is retried on the next tick; otherwise the overlay could stay stale.
+        if !drawn { needsRender = true }
+    }
+
+    @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {
+        switch recognizer.state {
+        case .began, .changed:
+            store.session.pencilHovered(at: Vec2(recognizer.location(in: self)))
+        default:
+            store.session.pencilHovered(at: nil)
+        }
+        setNeedsRender()
     }
 
     // MARK: Touches
