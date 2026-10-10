@@ -70,8 +70,9 @@ public struct CanvasSession: Sendable {
     private var navigation: (ids: (Int, Int), gesture: TwoFingerNavigation)?
     private var nextStrokeID = 1
 
-    public init(options: InputOptions = InputOptions()) {
+    public init(options: InputOptions = InputOptions(), drawing: Drawing = Drawing()) {
         self.options = options
+        self.editor = DrawingEditor(drawing: drawing)
     }
 
     public var isNavigating: Bool { navigation != nil }

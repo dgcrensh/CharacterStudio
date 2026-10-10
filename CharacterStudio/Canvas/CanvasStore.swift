@@ -22,7 +22,10 @@ final class EditorUIState {
     var style = ShapeStyle()
     var smoothing = 0.4
     var palette: [RGBAColor] = []
-    var references: [ReferenceImage] = []
+    var characterName = ""
+    /// Parts under their bones, then reference images.
+    var layers = LayerTree(drawing: Drawing())
+    var selectedPart: Int?
     var selectedReference: Int?
     /// A short message such as "Undo" after a multi-finger tap, with a counter so
     /// repeats re-show it.
@@ -41,19 +44,67 @@ final class CanvasStore {
     /// Called whenever the canvas needs to redraw.
     var onChange: (() -> Void)?
     let ui = EditorUIState()
-    /// Pixels for reference images, by id. Kept for the session so undo can bring
-    /// a deleted reference back.
-    private(set) var referenceImages: [Int: CGImage] = [:]
+    /// Called with the document's new contents after each finished change, which
+    /// marks the document edited so it autosaves.
+    var onDocumentChange: ((CharacterPackage) -> Void)?
+    /// Encoded pixels (PNG or JPEG, as saved) for reference images, by id. Kept for
+    /// the session so undo can bring a deleted reference back.
+    private var referenceData: [Int: Data]
+    /// Decoded pixels, filled on first use.
+    private var decodedImages: [Int: CGImage] = [:]
+    /// The drawing revision and contents last handed to the document.
+    private var documentRevision: Int
+    private var document: CharacterPackage
     private var seenTapCommands = 0
 
-    init() {
+    init(package: CharacterPackage = CharacterPackage()) {
         var options = InputOptions()
         #if targetEnvironment(simulator)
         // The Simulator has no Pencil, so a lone finger (mouse) draws there.
         options.fingerDraws = true
         #endif
-        session = CanvasSession(options: options)
+        session = CanvasSession(options: options, drawing: package.drawing)
+        referenceData = package.referenceImages
+        document = package
+        documentRevision = session.editor.revision
         refresh()
+    }
+
+    /// The pixels for a reference image, decoded on first use.
+    func referenceImage(_ id: Int) -> CGImage? {
+        if let image = decodedImages[id] { return image }
+        guard let data = referenceData[id], let image = UIImage(data: data)?.cgImage else { return nil }
+        decodedImages[id] = image
+        return image
+    }
+
+    // MARK: Document
+
+    /// Hands the drawing to the document once a change has finished.
+    private func updateDocument() {
+        let editor = session.editor
+        guard editor.revision != documentRevision, !editor.isInGesture else { return }
+        documentRevision = editor.revision
+        let drawing = editor.drawing
+        let images = referenceData.filter { id, _ in drawing.referenceIndex(id) != nil }
+        document = CharacterPackage(drawing: drawing, referenceImages: images)
+        onDocumentChange?(document)
+    }
+
+    /// Takes in a version of the document that changed outside the editor (for
+    /// example, edited on another device). Undoable like any other change.
+    func documentChanged(_ package: CharacterPackage) {
+        guard package != document else { return }
+        var drawing = package.drawing
+        drawing.nextID = max(drawing.nextID, session.editor.drawing.nextID)
+        // Fresh reference ids, so cached pixels and textures never mix up images.
+        for i in drawing.references.indices {
+            let old = drawing.references[i].id
+            let new = drawing.makeID()
+            drawing.references[i].id = new
+            referenceData[new] = package.referenceImages[old]
+        }
+        edit { $0.editor.replaceDrawing(drawing) }
     }
 
     /// Copies editor state into `ui` and redraws.
@@ -79,13 +130,22 @@ final class CanvasStore {
         update(\.style, editor.style)
         update(\.smoothing, editor.smoothing)
         update(\.palette, editor.drawing.palette)
-        update(\.references, editor.drawing.references)
+        update(\.characterName, editor.drawing.name)
+        update(\.layers, LayerTree(drawing: editor.drawing))
+        if case .part(let id) = editor.selection {
+            update(\.selectedPart, id)
+        } else if case .shape(let id, _) = editor.selection {
+            update(\.selectedPart, id)
+        } else {
+            update(\.selectedPart, nil)
+        }
 
         if session.tapCommandCount != seenTapCommands {
             seenTapCommands = session.tapCommandCount
             let text = session.lastTapCommand == .redo ? "Redo" : "Undo"
             ui.toast = (text, seenTapCommands)
         }
+        updateDocument()
         onChange?()
     }
 
@@ -131,11 +191,19 @@ final class CanvasStore {
         edit { $0.editor.setOutline(RGBAColor(r: color.r, g: color.g, b: color.b, a: 1)) }
     }
 
+    // MARK: Layers
+
+    func selectPart(_ id: Int) { edit { $0.editor.selectPart(id) } }
+    func renamePart(_ id: Int, to name: String) { edit { $0.editor.renamePart(id, to: name) } }
+    func deletePart(_ id: Int) { edit { $0.editor.deletePart(id) } }
+    func renameCharacter(_ name: String) { edit { $0.editor.renameCharacter(name) } }
+
     // MARK: Reference images
 
     /// Adds a reference image under the art, fitted to the middle of the view.
     func importReference(data: Data, name: String) {
-        guard let image = UIImage(data: data), let cgImage = Self.normalized(image) else { return }
+        guard let image = UIImage(data: data), let cgImage = Self.normalized(image),
+              let encoded = Self.encoded(cgImage) else { return }
         let size = Vec2(Double(cgImage.width), Double(cgImage.height))
         let view = viewSize.width > 0 ? Vec2(viewSize) : Vec2(1024, 768)
         let camera = session.camera
@@ -144,8 +212,11 @@ final class CanvasStore {
         let center = camera.toWorld(view / 2)
         var id = 0
         edit { id = $0.editor.addReference(name: name, size: size, center: center, scale: scale) }
-        referenceImages[id] = cgImage
-        onChange?()
+        referenceData[id] = encoded
+        decodedImages[id] = cgImage
+        // The reference was added before its pixels were stored, so save again.
+        documentRevision = -1
+        refresh()
     }
 
     func setReferenceOpacity(_ id: Int, _ opacity: Double) {
@@ -174,11 +245,24 @@ final class CanvasStore {
         let size = CGSize(width: (pixelWidth * k).rounded(), height: (pixelHeight * k).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        format.opaque = false
+        format.opaque = !hasAlpha(image.cgImage)
         let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
         }
         return rendered.cgImage
+    }
+
+    private static func hasAlpha(_ image: CGImage?) -> Bool {
+        switch image?.alphaInfo {
+        case .none?, .noneSkipFirst?, .noneSkipLast?: false
+        default: true
+        }
+    }
+
+    /// PNG for images with transparency, otherwise JPEG to keep photos small.
+    private static func encoded(_ image: CGImage) -> Data? {
+        let ui = UIImage(cgImage: image)
+        return hasAlpha(image) ? ui.pngData() : ui.jpegData(compressionQuality: 0.9)
     }
 }
 

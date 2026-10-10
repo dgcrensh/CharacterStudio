@@ -1,10 +1,16 @@
 import CharacterCore
-import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The editor for one character document.
 struct ContentView: View {
-    @State private var store = CanvasStore()
+    @Binding var document: CharacterDocument
+    @State private var store: CanvasStore
+
+    init(document: Binding<CharacterDocument>) {
+        _document = document
+        _store = State(initialValue: CanvasStore(package: document.wrappedValue.package))
+    }
 
     var body: some View {
         CanvasRepresentable(store: store)
@@ -23,14 +29,23 @@ struct ContentView: View {
                 return !providers.isEmpty
             }
             .persistentSystemOverlays(.hidden)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarRole(.editor)
+            .onAppear {
+                let document = $document
+                store.onDocumentChange = { document.wrappedValue.package = $0 }
+            }
+            .onChange(of: document.package) { _, package in
+                store.documentChanged(package)
+            }
     }
 }
 
-/// Tools, undo and redo, selection actions, references and view commands.
+/// Tools, undo and redo, selection actions, layers and view commands.
 private struct ToolBar: View {
     let store: CanvasStore
     let ui: EditorUIState
-    @State private var showingReferences = false
+    @State private var showingLayers = false
 
     var body: some View {
         HStack(spacing: 16) {
@@ -61,8 +76,8 @@ private struct ToolBar: View {
             }
 
             Divider().frame(height: 24)
-            Button("References", systemImage: "photo.on.rectangle") { showingReferences = true }
-                .popover(isPresented: $showingReferences) { ReferencesPanel(store: store, ui: ui) }
+            Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
+                .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
             Menu {
                 Button("Reset View", systemImage: "scope") { store.resetView() }
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) { store.clear() }
@@ -160,90 +175,6 @@ private struct PaletteRow: View {
     }
 }
 
-/// Import and manage reference images.
-private struct ReferencesPanel: View {
-    let store: CanvasStore
-    let ui: EditorUIState
-    @Environment(\.dismiss) private var dismiss
-    @State private var photoItem: PhotosPickerItem?
-    @State private var importingFile = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Reference Images").font(.headline)
-            HStack {
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label("Photos", systemImage: "photo")
-                }
-                Button { importingFile = true } label: {
-                    Label("Files", systemImage: "folder")
-                }
-            }
-            .buttonStyle(.bordered)
-
-            if ui.references.isEmpty {
-                Text("Import a photo or sketch, or drag one onto the canvas. References sit locked under the art and are never exported.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(ui.references.reversed()) { reference in
-                ReferenceRow(store: store, reference: reference, isSelected: ui.selectedReference == reference.id) {
-                    store.adjustReference(reference.id)
-                    dismiss()
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 360)
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    store.importReference(data: data, name: "Photo")
-                }
-                photoItem = nil
-            }
-        }
-        .fileImporter(isPresented: $importingFile, allowedContentTypes: [.image]) { result in
-            guard case .success(let url) = result else { return }
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-            if let data = try? Data(contentsOf: url) {
-                store.importReference(data: data, name: url.deletingPathExtension().lastPathComponent)
-            }
-        }
-    }
-}
-
-private struct ReferenceRow: View {
-    let store: CanvasStore
-    let reference: ReferenceImage
-    let isSelected: Bool
-    let adjust: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(reference.isHidden ? "Show" : "Hide", systemImage: reference.isHidden ? "eye.slash" : "eye") {
-                store.setReferenceHidden(reference.id, !reference.isHidden)
-            }
-            .labelStyle(.iconOnly)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(reference.name).lineLimit(1)
-                Slider(value: Binding(get: { reference.opacity }, set: { store.setReferenceOpacity(reference.id, $0) }),
-                       in: 0.05...1)
-            }
-
-            Button("Move, Scale, Rotate", systemImage: "arrow.up.and.down.and.arrow.left.and.right", action: adjust)
-                .labelStyle(.iconOnly)
-                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-            Button("Remove", systemImage: "trash", role: .destructive) { store.removeReference(reference.id) }
-                .labelStyle(.iconOnly)
-        }
-    }
-}
-
 /// Briefly confirms an undo or redo made with a multi-finger tap.
 private struct ToastView: View {
     let ui: EditorUIState
@@ -271,5 +202,5 @@ private struct ToastView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(document: .constant(CharacterDocument()))
 }
