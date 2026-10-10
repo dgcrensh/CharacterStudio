@@ -21,6 +21,12 @@ public struct Rect: Hashable, Sendable, Codable {
         for p in points { include(p) }
     }
 
+    /// The rect with `a` and `b` as opposite corners, in either order.
+    public init(from a: Vec2, to b: Vec2) {
+        minPoint = Vec2(Swift.min(a.x, b.x), Swift.min(a.y, b.y))
+        maxPoint = Vec2(Swift.max(a.x, b.x), Swift.max(a.y, b.y))
+    }
+
     public var isNull: Bool { minPoint.x > maxPoint.x || minPoint.y > maxPoint.y }
     public var width: Double { isNull ? 0 : maxPoint.x - minPoint.x }
     public var height: Double { isNull ? 0 : maxPoint.y - minPoint.y }
@@ -54,6 +60,30 @@ public struct Rect: Hashable, Sendable, Codable {
         guard !isNull, !other.isNull else { return false }
         return minPoint.x <= other.maxPoint.x && other.minPoint.x <= maxPoint.x &&
             minPoint.y <= other.maxPoint.y && other.minPoint.y <= maxPoint.y
+    }
+
+    /// True when any part of the segment from `a` to `b` lies inside the rect.
+    public func intersectsSegment(_ a: Vec2, _ b: Vec2) -> Bool {
+        guard !isNull else { return false }
+        var t0 = 0.0, t1 = 1.0
+        let d = b - a
+        // Liang-Barsky clipping against the four sides.
+        let sides = [(-d.x, a.x - minPoint.x), (d.x, maxPoint.x - a.x), (-d.y, a.y - minPoint.y), (d.y, maxPoint.y - a.y)]
+        for (p, q) in sides {
+            if p == 0 {
+                if q < 0 { return false }
+                continue
+            }
+            let r = q / p
+            if p < 0 {
+                if r > t1 { return false }
+                t0 = Swift.max(t0, r)
+            } else {
+                if r < t0 { return false }
+                t1 = Swift.min(t1, r)
+            }
+        }
+        return true
     }
 
     /// Top-left, top-right, bottom-right, bottom-left (y-down).

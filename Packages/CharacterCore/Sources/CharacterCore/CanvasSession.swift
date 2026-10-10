@@ -37,7 +37,7 @@ public enum TapCommand: Hashable, Sendable {
     case redo
 }
 
-/// The canvas state machine: camera, the vector editor, the live brush stroke, and
+/// The canvas state machine: camera, the vector editor, the live pencil stroke, and
 /// the touch routing that decides what each touch does. It is pure Swift, so palm
 /// rejection and gesture behaviour are unit-tested without UIKit.
 ///
@@ -55,7 +55,7 @@ public struct CanvasSession: Sendable {
     public var options: InputOptions
     public var editor = DrawingEditor()
 
-    /// The brush stroke being drawn right now, including predicted samples.
+    /// The pencil stroke being drawn right now, including predicted samples.
     public private(set) var liveStroke: InkStroke?
     /// The last multi-finger tap command, and a counter that changes with each one.
     public private(set) var lastTapCommand: TapCommand?
@@ -101,6 +101,13 @@ public struct CanvasSession: Sendable {
     public mutating func redo() {
         cancelPencil()
         editor.redo()
+    }
+
+    /// The Pencil hovering above the screen at `location`, or `nil` when it leaves. The
+    /// pen tool draws its rubber band to it.
+    public mutating func pencilHovered(at location: Vec2?) {
+        guard drawingTouch == nil else { return }
+        editor.pencilHovered(at: location.map { camera.toWorld($0) })
     }
 
     // MARK: Touches (screen-space points, times in seconds)
@@ -223,13 +230,15 @@ public struct CanvasSession: Sendable {
     private mutating func beginPencil(touch: Int, at location: Vec2) {
         drawingTouch = touch
         let world = camera.toWorld(location)
-        if editor.tool == .brush {
+        switch editor.tool {
+        case .pencil:
+            // Only the Pencil tool draws freehand; every other tool edits through the editor.
             let style = editor.style
             // The live stroke previews the outline color; a fill-only shape previews its fill.
             let color = style.outlineEnabled || !style.fillEnabled ? style.outline : style.fill
             liveStroke = InkStroke(id: nextStrokeID, start: world, brush: Brush(width: style.outlineWidth, color: color))
             nextStrokeID += 1
-        } else {
+        case .pen, .select, .directSelect:
             editor.pencilBegan(at: world, zoom: camera.zoom)
         }
     }

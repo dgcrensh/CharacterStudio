@@ -15,7 +15,12 @@ struct ContentView: View {
     var body: some View {
         CanvasRepresentable(store: store)
             .ignoresSafeArea()
-            .overlay(alignment: .top) { ToolBar(store: store, ui: store.ui) }
+            .overlay(alignment: .top) {
+                VStack(spacing: 8) {
+                    ToolBar(store: store, ui: store.ui)
+                    ContextBar(store: store, ui: store.ui)
+                }
+            }
             .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
             .overlay { ToastView(ui: store.ui) }
             .onDrop(of: [.image], isTargeted: nil) { providers in
@@ -46,17 +51,19 @@ private struct ToolBar: View {
     let store: CanvasStore
     let ui: EditorUIState
     @State private var showingLayers = false
+    @State private var showingInspector = false
 
     var body: some View {
         HStack(spacing: 16) {
             Picker("Tool", selection: Binding(get: { ui.tool }, set: { store.setTool($0) })) {
-                Image(systemName: "paintbrush.pointed").accessibilityLabel("Brush").tag(Tool.brush)
+                Image(systemName: "pencil.tip").accessibilityLabel("Pencil").tag(Tool.pencil)
+                Image(systemName: "pencil.and.outline").accessibilityLabel("Pen").tag(Tool.pen)
                 Image(systemName: "cursorarrow").accessibilityLabel("Select").tag(Tool.select)
                 Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                    .accessibilityLabel("Edit Points").tag(Tool.points)
+                    .accessibilityLabel("Direct Select").tag(Tool.directSelect)
             }
             .pickerStyle(.segmented)
-            .frame(width: 168)
+            .frame(width: 224)
 
             Divider().frame(height: 24)
             Button("Undo", systemImage: "arrow.uturn.backward") { store.undo() }
@@ -64,18 +71,13 @@ private struct ToolBar: View {
             Button("Redo", systemImage: "arrow.uturn.forward") { store.redo() }
                 .disabled(!ui.canRedo)
 
-            if let smooth = ui.anchorIsSmooth {
-                Divider().frame(height: 24)
-                Button(smooth ? "Corner" : "Smooth") { store.toggleAnchorSmooth() }
-                    .labelStyle(.titleOnly)
-                Button("Delete Point", systemImage: "minus.circle") { store.deleteSelectedAnchor() }
-                    .disabled(!ui.canDeleteAnchor)
-            }
             if ui.selection != .none {
                 Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
             }
 
             Divider().frame(height: 24)
+            Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
+                .popover(isPresented: $showingInspector) { InspectorPanel(store: store, ui: ui) }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
                 .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
             Menu {
@@ -90,6 +92,127 @@ private struct ToolBar: View {
         .padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
         .padding(.top, 12)
+    }
+}
+
+/// Controls for the current tool: pen Done, the Add toggle, snapping, the point type
+/// control and path commands, flips and nudging.
+private struct ContextBar: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            controls
+            ScrollView(.horizontal, showsIndicators: false) { controls }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.horizontal, 16)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 14) {
+            switch ui.tool {
+            case .pencil:
+                Toggle(isOn: Binding(get: { ui.autoJoin }, set: { store.setAutoJoin($0) })) {
+                    Label("Auto-join selected part", systemImage: "rectangle.on.rectangle")
+                }
+                .toggleStyle(.button)
+            case .pen:
+                Text("Tap to place, drag to curve, tap the first point to close")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Done", systemImage: "checkmark.circle") { store.penDone() }
+                    .disabled(!ui.penActive)
+            case .select, .directSelect:
+                Toggle(isOn: Binding(get: { ui.addToSelection }, set: { store.setAddToSelection($0) })) {
+                    Label("Add", systemImage: "plus.square.on.square")
+                }
+                .toggleStyle(.button)
+            }
+
+            if ui.tool != .pencil { snapMenu }
+
+            if ui.tool == .directSelect, ui.anchorCount > 0 { pointControls }
+            if ui.canJoin, ui.tool == .select || ui.tool == .directSelect {
+                Button("Join", systemImage: "link") { store.joinPaths() }
+            }
+            if ui.tool == .select, ui.canTransform { flipControls }
+            if (ui.tool == .directSelect && ui.anchorCount > 0) || (ui.tool == .select && ui.canTransform) {
+                nudgeControls
+            }
+        }
+    }
+
+    private var snapMenu: some View {
+        Menu {
+            Toggle("Snap", isOn: snapBinding(\.isEnabled))
+            Toggle("Anchors", isOn: snapBinding(\.toAnchors))
+            Toggle("Grid", isOn: snapBinding(\.toGrid))
+            Stepper("Grid \(Int(ui.snap.gridSize)) pt", value: Binding(
+                get: { ui.snap.gridSize },
+                set: { var snap = ui.snap; snap.gridSize = $0; store.setSnap(snap) }
+            ), in: 1...200, step: 1)
+        } label: {
+            Label("Snap", systemImage: ui.snap.isEnabled ? "grid.circle.fill" : "grid.circle")
+        }
+    }
+
+    private func snapBinding(_ keyPath: WritableKeyPath<SnapSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { ui.snap[keyPath: keyPath] },
+            set: { var snap = ui.snap; snap[keyPath: keyPath] = $0; store.setSnap(snap) }
+        )
+    }
+
+    /// An explicit control for how the selected points' handles behave, in place of
+    /// the old hidden tap-to-toggle.
+    @ViewBuilder
+    private var pointControls: some View {
+        Divider().frame(height: 24)
+        Picker("Point type", selection: Binding(
+            get: { ui.anchorMode },
+            set: { if let mode = $0 { store.setAnchorMode(mode) } }
+        )) {
+            Text("Corner").tag(Optional(HandleMode.corner))
+            Text("Smooth").tag(Optional(HandleMode.smooth))
+            Text("Symmetric").tag(Optional(HandleMode.symmetric))
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 260)
+        Button("Break Handles", systemImage: "slash.circle") { store.breakAnchorHandles() }
+        Button("Split", systemImage: "scissors") { store.splitAtAnchor() }
+            .disabled(!ui.canSplit)
+        Button("Delete Point", systemImage: "minus.circle") { store.deleteSelectedAnchors() }
+            .disabled(!ui.canDeleteAnchor)
+    }
+
+    @ViewBuilder
+    private var flipControls: some View {
+        Divider().frame(height: 24)
+        HStack(spacing: 14) {
+            Button("Flip Horizontal", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                store.flip(horizontal: true)
+            }
+            Button("Flip Vertical", systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down") {
+                store.flip(horizontal: false)
+            }
+        }
+        .labelStyle(.iconOnly)
+    }
+
+    @ViewBuilder
+    private var nudgeControls: some View {
+        Divider().frame(height: 24)
+        HStack(spacing: 14) {
+            Button("Nudge Left", systemImage: "arrow.left") { store.nudge(-1, 0) }
+            Button("Nudge Up", systemImage: "arrow.up") { store.nudge(0, -1) }
+            Button("Nudge Down", systemImage: "arrow.down") { store.nudge(0, 1) }
+            Button("Nudge Right", systemImage: "arrow.right") { store.nudge(1, 0) }
+        }
+        .labelStyle(.iconOnly)
     }
 }
 
@@ -124,7 +247,7 @@ private struct StyleBar: View {
                 .monospacedDigit()
                 .frame(width: 44, alignment: .leading)
 
-            if ui.tool == .brush {
+            if ui.tool == .pencil {
                 Divider().frame(height: 24)
                 Image(systemName: "scribble.variable")
                     .accessibilityLabel("Smoothing")

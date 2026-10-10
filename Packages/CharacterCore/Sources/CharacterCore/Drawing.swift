@@ -138,12 +138,39 @@ public struct ReferenceImage: Hashable, Sendable, Codable, Identifiable {
     }
 }
 
+/// The address of one shape: its part and its own id.
+public struct ShapeRef: Hashable, Sendable, Comparable {
+    public var part: Int
+    public var shape: Int
+
+    public init(part: Int, shape: Int) {
+        self.part = part
+        self.shape = shape
+    }
+
+    public static func < (a: ShapeRef, b: ShapeRef) -> Bool {
+        a.part != b.part ? a.part < b.part : a.shape < b.shape
+    }
+}
+
 /// What the Pencil has selected.
 public enum Selection: Hashable, Sendable {
     case none
     case part(Int)
     case shape(part: Int, shape: Int)
+    /// Several shapes picked one by one or with a marquee. Use `covering` to build
+    /// one, so a single shape is always `.shape`.
+    case shapes(Set<ShapeRef>)
     case reference(Int)
+
+    /// The smallest selection holding exactly `refs`: none, one shape, or several.
+    public static func covering(_ refs: Set<ShapeRef>) -> Selection {
+        switch refs.count {
+        case 0: .none
+        case 1: .shape(part: refs.first!.part, shape: refs.first!.shape)
+        default: .shapes(refs)
+        }
+    }
 }
 
 /// The on-canvas frame drawn around a selection, with its handles.
@@ -160,6 +187,8 @@ public struct SelectionFrame: Hashable, Sendable {
     }
 
     public var center: Vec2 { (corners[0] + corners[2]) / 2 }
+    /// Midpoints of the top, right, bottom and left edges, in that order.
+    public var edgeMidpoints: [Vec2] { (0..<4).map { (corners[$0] + corners[($0 + 1) % 4]) / 2 } }
     public var topCenter: Vec2 { (corners[0] + corners[1]) / 2 }
 
     /// Unit vector from the bottom edge toward the top edge.
@@ -215,6 +244,10 @@ public struct Drawing: Hashable, Sendable, Codable {
         indices(part: part, shape: shape).map { parts[$0.0].shapes[$0.1] }
     }
 
+    public func shape(_ ref: ShapeRef) -> VectorShape? { shape(part: ref.part, shape: ref.shape) }
+
+    public func indices(_ ref: ShapeRef) -> (Int, Int)? { indices(part: ref.part, shape: ref.shape) }
+
     public func referenceIndex(_ id: Int) -> Int? { references.firstIndex { $0.id == id } }
 
     /// `base`, or `base 2`, `base 3`... so no other part has the same name. Part names
@@ -245,6 +278,7 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none: true
         case .part(let id): partIndex(id) != nil
         case .shape(let p, let s): indices(part: p, shape: s) != nil
+        case .shapes(let refs): !refs.isEmpty && refs.allSatisfy { indices($0) != nil }
         case .reference(let id): referenceIndex(id) != nil
         }
     }
@@ -258,6 +292,9 @@ public struct Drawing: Hashable, Sendable, Codable {
             return SelectionFrame(rect: parts[i].bounds)
         case .shape(let p, let s):
             return shape(part: p, shape: s).map { SelectionFrame(rect: $0.bounds) }
+        case .shapes:
+            let bounds = shapeIndices(in: selection).reduce(Rect.null) { $0.union(parts[$1.0].shapes[$1.1].bounds) }
+            return bounds.isNull ? nil : SelectionFrame(rect: bounds)
         case .reference(let id):
             return referenceIndex(id).map { SelectionFrame(corners: references[$0].corners) }
         }
@@ -271,9 +308,32 @@ public struct Drawing: Hashable, Sendable, Codable {
             return parts[p].shapes.indices.map { (p, $0) }
         case .shape(let p, let s):
             return indices(part: p, shape: s).map { [$0] } ?? []
+        case .shapes(let refs):
+            // In draw order, whatever the set's own order.
+            var out: [(Int, Int)] = []
+            for (pi, part) in parts.enumerated() {
+                for (si, shape) in part.shapes.enumerated() where refs.contains(ShapeRef(part: part.id, shape: shape.id)) {
+                    out.append((pi, si))
+                }
+            }
+            return out
         case .none, .reference:
             return []
         }
+    }
+
+    /// The shapes a selection covers, in draw order.
+    public func shapeRefs(in selection: Selection) -> [ShapeRef] {
+        shapeIndices(in: selection).map { ShapeRef(part: parts[$0.0].id, shape: parts[$0.0].shapes[$0.1].id) }
+    }
+
+    /// The selection's bounds without outline width, for numeric position and size.
+    public func geometryBounds(of selection: Selection) -> Rect? {
+        if case .reference(let id) = selection {
+            return referenceIndex(id).map { Rect(points: references[$0].corners) }
+        }
+        let bounds = shapeIndices(in: selection).reduce(Rect.null) { $0.union(parts[$1.0].shapes[$1.1].path.bounds()) }
+        return bounds.isNull ? nil : bounds
     }
 
     public mutating func apply(_ t: Affine2D, to selection: Selection) {
@@ -287,6 +347,8 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
             parts[idx.0].shapes[idx.1].apply(t)
+        case .shapes:
+            for (p, s) in shapeIndices(in: selection) { parts[p].shapes[s].apply(t) }
         case .reference(let id):
             guard let r = referenceIndex(id) else { return }
             references[r].apply(t)
