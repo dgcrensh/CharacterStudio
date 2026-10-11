@@ -71,6 +71,20 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The select tool's hover hit test alone (the topmost shape under the Pencil), with
+    /// nothing selected, on the busy point: what every hover frame and tap pays.
+    static let selectHoverHitTest = Workload(name: "Select hover, hit test only") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .select
+        let start = StressDrawing.busyPoint(parts: drawing.parts.count)
+        var i = 0
+        return {
+            i += 1
+            editor.pencilHovered(at: start + Vec2(Double(i % 20) * 2, 0), zoom: 1)
+            _ = editor.hoverTarget
+        }
+    }
+
     /// One overlay frame in the outline view during a pinch: a warm cache, with the zoom
     /// changed by 1% (the wireframe's cache key is the exact zoom).
     static let overlayWireframeAtNewZoom = Workload(name: "Outline view, overlay at a new zoom") { drawing in
@@ -254,7 +268,7 @@ struct Workload: @unchecked Sendable {
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
         [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, hoverFrame,
-         overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
+         selectHoverHitTest, overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
          undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
          svgImport]
     }
