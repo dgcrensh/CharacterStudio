@@ -22,10 +22,15 @@ struct CharacterDocument: FileDocument {
     }
 
     init(configuration: ReadConfiguration) throws {
+        let interval = Signposts.canvas.beginInterval("Open")
+        defer { Signposts.canvas.endInterval("Open", interval) }
         package = try CharacterPackage(files: Self.files(in: configuration.file))
     }
 
+    /// Runs off the main thread, for each autosave.
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let interval = Signposts.canvas.beginInterval("Save")
+        defer { Signposts.canvas.endInterval("Save", interval) }
         let thumbnail = ThumbnailRenderer.png(for: package.drawing)
         return Self.folder(from: package.files(thumbnail: thumbnail))
     }
