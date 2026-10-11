@@ -344,7 +344,7 @@ private struct Builder {
         }
 
         // A selected part's pivot shows in every tool (the select tool draws its own, draggable).
-        if editor.tool != .select, case .part(let id) = editor.selection, let part = drawing.part(id), !part.shapes.isEmpty {
+        if editor.tool != .select, case .layer(let id) = editor.selection, let part = drawing.part(id), !part.shapes.isEmpty {
             line(part.pivot - Vec2(8 * px, 0), part.pivot + Vec2(8 * px, 0), width: 1.5)
             line(part.pivot - Vec2(0, 8 * px), part.pivot + Vec2(0, 8 * px), width: 1.5)
             ringDot(part.pivot, radius: 3.5)

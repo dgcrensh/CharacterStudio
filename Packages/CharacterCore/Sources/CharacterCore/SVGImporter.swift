@@ -859,7 +859,7 @@ extension DrawingEditor {
             drawing.parts.append(copy)
             added.append(copy.id)
         }
-        selection = added.count == 1 ? .part(added[0]) : .covering(refs)
+        selection = added.count == 1 ? .layer(added[0]) : .covering(refs)
         commit(from: before)
         return true
     }

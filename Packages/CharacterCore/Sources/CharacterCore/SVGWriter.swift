@@ -19,9 +19,20 @@ public enum SVGWriter {
     public static func document(for drawing: Drawing, area: Rect? = nil) -> String? {
         guard let area = area ?? drawing.exportArea(), area.width > 0, area.height > 0 else { return nil }
         var writer = Writer(area: area)
-        let names = CharacterFormat.slotNames(for: drawing.parts)
-        for (part, name) in zip(drawing.parts, names) where !part.isHidden {
-            writer.part(part, name: name)
+        let names = Dictionary(zip(drawing.parts.map(\.id), CharacterFormat.slotNames(for: drawing.parts)),
+                               uniquingKeysWith: { a, _ in a })
+        // An accessory's shapes drawn behind its owner get a group of their own there.
+        let stack = drawing.drawStack
+        var seen = Set<Int>(), split = Set<Int>()
+        for part in stack where !seen.insert(part.id).inserted { split.insert(part.id) }
+        for part in stack where !part.isHidden {
+            let name = names[part.id] ?? part.name
+            guard split.contains(part.id) else {
+                writer.part(part, name: name)
+                continue
+            }
+            guard !part.shapes.isEmpty else { continue }
+            writer.part(part, name: part.shapes.allSatisfy(\.isBehindOwner) ? name + " (behind)" : name)
         }
         return writer.finish(title: drawing.name)
     }
@@ -128,13 +139,24 @@ public enum SVGWriter {
             for index in part.shapes.indices where part.isShown(index) {
                 let base = clips.base(of: index)
                 if let base, !part.isShown(base) { continue }
+                let groupBase = clips.groupBase(of: index)
+                if let groupBase, !part.isShown(groupBase) { continue }
                 let group = part.shapes[index].group.flatMap { part.group($0) }
                 if group?.id != openGroup {
                     if clipGroup != nil { body.append((openGroup == nil ? "    " : "      ") + "</g>") }
                     clipGroup = nil
                     if openGroup != nil { body.append("    </g>") }
                     openGroup = group?.id
-                    if let group { body.append("    <g data-name=\"\(SVGWriter.escaped(group.name))\">") }
+                    if let group {
+                        var open = "    <g data-name=\"\(SVGWriter.escaped(group.name))\""
+                        // A clipped group is masked by its base as a whole.
+                        if let groupBase {
+                            let mask = masks[groupBase] ?? clipMask(part.shapes[groupBase])
+                            masks[groupBase] = mask
+                            open += " mask=\"url(#\(mask))\""
+                        }
+                        body.append(open + ">")
+                    }
                 }
                 let indent = openGroup == nil ? "    " : "      "
                 if clipGroup?.base != base {

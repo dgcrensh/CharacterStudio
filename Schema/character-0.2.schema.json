@@ -139,14 +139,15 @@
         "hidden": { "description": "Editor hint: the part is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
         "locked": { "description": "Editor hint: the part can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "groups": {
-          "description": "Groups of this attachment's shapes, bottom to top. Written only when there are some. Groups don't nest and don't change how shapes draw, except that clipping stays within a group.",
+          "description": "Groups of this attachment's shapes, bottom to top. Written only when there are some. Groups don't nest and don't change how shapes draw, except that clipping stays within a group and a clipped group draws inside the shape below it.",
           "type": "array",
           "items": {
             "type": "object",
             "required": ["id"],
             "properties": {
               "id": { "description": "Local to the attachment.", "type": "integer" },
-              "name": { "type": "string" }
+              "name": { "type": "string" },
+              "clipped": { "description": "The whole group draws only where the nearest shape below it that isn't clipped (or in a clipped group) draws, like a clipped shape. Clipped shapes inside the group still clip within it. Defaults to false.", "type": "boolean" }
             }
           }
         },
@@ -184,6 +185,7 @@
         },
         "opacity": { "description": "Format 0.2: multiplies the alpha of the fill and of the outline (each on its own). Defaults to 1.", "type": "number", "minimum": 0, "maximum": 1 },
         "clipped": { "description": "Format 0.2: the shape draws only where the nearest unclipped shape below it in the same attachment (and the same group, when it has one) draws (its fill and outline). Defaults to false.", "type": "boolean" },
+        "behindOwner": { "description": "In an accessory's attachment: the shape draws just behind its owner's attachment instead of with the rest of the accessory, in its order among the accessory's other behind shapes. Ignored in a part that isn't an accessory. Defaults to false.", "type": "boolean" },
         "hidden": { "description": "Editor hint: the shape is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
         "locked": { "description": "Editor hint: the shape can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "points": {
