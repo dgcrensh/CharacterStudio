@@ -39,7 +39,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
-6. Polish and export: SVG export, slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below.)
+6. Polish and export: slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below.)
 
 ## Milestone 1 notes
 
@@ -171,3 +171,25 @@ Milestone 4 with three items from the full-editor plan: mirror drawing (#18), jo
 - **Mirror drawing** reflects the finished stroke, path or shape with the axis transform; the symmetry axis is editor state, not saved.
 - **Wiggle** is display-only: the renderer redraws every frame from `DrawingEditor.displayDrawing(at:)`, which rotates the part and the parts on bones below it about the pivot; the saved drawing never changes.
 - **Joint cap** radius is half the narrowest chord through the pivot across the part's closed shapes, so it fills the limb at the joint.
+
+## Workspace and interchange notes
+
+Tier 5 of the full-editor plan: the outline view and ghosting (#23), the character frame (#24), and SVG import with SVG and PNG export (#25). The file format stays 0.2 with one new optional key, `frame`.
+
+**Using it**
+
+- **View menu** (the eye button in the toolbar):
+  - **Outline View** (Cmd-Y) draws every shape as a thin wire, so you can see paths hidden under fills. Parts outside an isolated part are dimmed.
+  - **Ghost Unselected** (Option-Cmd-G) fades everything except the selection (or, with the Bones tool, the selected bone's parts) to a quarter of its opacity. With nothing selected, nothing fades.
+  - **Character Frame** shows a dashed target box and a ground line. Turning it on the first time fits the box round the art (or puts a standard 320 by 480 box mid-view when the canvas is empty). **Frame Settings** edits its position, size and ground height, fits it to the selection or the art, and removes it. Frame edits undo like any other.
+  - **Zoom to Fit** (Cmd-0) fits the frame, or else the art, in the view. **Reset View** is here too.
+- **More menu:**
+  - **Import SVG** opens an SVG from Files. Each top-level group becomes a part, named from `data-name`, Inkscape's label or its id; loose shapes become one part named after the file. Paths, rectangles, circles, ellipses, lines and polygons come in with their fills, outlines, linear and radial gradients, opacity and transforms, including CSS in `<style>`. Shapes with holes keep their holes. Text, images, filters, clip paths and masks are skipped, and the toast says how many. The new parts land on top, selected, and the view zooms to them. One undo step.
+  - **Export SVG** and **Export PNG** (1x, 2x or 4x) save to Files. Both cover the frame when it is shown, or else the visible art with a small margin. The SVG keeps each part as a group named after it; inside and outside outlines, variable width, clipping and gradients are drawn to look the same. The PNG has a transparent background. Hidden art is left out of both.
+
+**How it works**
+
+- **Frame** (CharacterCore): `CharacterFrame` is a rect and a ground height on `Drawing.frame`, saved as `"frame": { "x", "y", "width", "height", "ground" }` after `references` only when set, with `"hidden": true` when it is off. `DrawingEditor` adds the frame commands, and `Drawing.exportArea` picks the export rectangle. Tests in `WorkspaceTests`.
+- **Outline view and ghosting** are editor state, not saved. In outline view the renderer skips the art pass and `EditorOverlay` draws the wires. Ghosting passes `DrawingEditor.ghostFocus` to `ArtBuilder`, which multiplies the paint opacity of shapes outside it.
+- **SVG import** lives in CharacterCore: `XMLReader` (a small XML parser, since Linux Foundation's is limited), `SVGPathParser` (every path command, with arcs and quadratics turned into cubic Béziers) and `SVGImporter` (styles, transforms, `<use>`, gradients). Compound fills become one fill shape whose rings are joined by hairline bridges, plus an outline-only shape per ring.
+- **SVG export** is `SVGWriter` in CharacterCore. The app's PNG export draws with Core Graphics, like the thumbnail.

@@ -145,6 +145,7 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertEqual(d.references.count, 1)
         XCTAssertEqual(d.references[0].rotation, .pi / 2, accuracy: 1e-12)
         XCTAssertEqual(d.references[0].opacity, 0.35)
+        XCTAssertEqual(d.frame, CharacterFrame(bounds: Rect(minPoint: Vec2(-90, -170), maxPoint: Vec2(90, 20)), ground: 8))
         XCTAssertEqual(package.referenceImages[d.references[0].id]?.count, try exampleFiles("robo.charstudio")["references/reference-1.png"]?.count)
         // Every id is distinct.
         let ids = d.parts.map(\.id) + d.parts.flatMap { $0.shapes.map(\.id) } + d.references.map(\.id) +

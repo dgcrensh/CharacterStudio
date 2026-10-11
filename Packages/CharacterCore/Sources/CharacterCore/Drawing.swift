@@ -286,6 +286,8 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var palette: [RGBAColor] = []
     /// Named colors that shapes follow.
     public var globalColors: [GlobalColor] = []
+    /// The target box and ground line the character is drawn for, if set.
+    public var frame: CharacterFrame?
     public var nextID = 1
 
     public init() {}

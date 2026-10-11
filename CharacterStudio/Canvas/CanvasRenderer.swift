@@ -57,7 +57,9 @@ private struct PaintUniforms {
 
 /// Draws the canvas: dot grid, reference images, the art, the live stroke, then the
 /// editing overlay. Hidden shapes are skipped. In isolation the other parts are drawn
-/// first under a veil of the background color, then the isolated part on top.
+/// first under a veil of the background color, then the isolated part on top. Ghosting
+/// fades the shapes outside the selection; the outline view skips the art and the
+/// overlay draws every shape as a wireframe instead.
 ///
 /// Rendering is 4x multisampled into memoryless targets and resolved into the
 /// drawable. The art is built by CharacterCore's `ArtBuilder` as stencil-then-cover
@@ -95,6 +97,7 @@ final class CanvasRenderer {
     private var artRevision = -1
     private var artTolerance = 0.0
     private var artIsolation: Int?
+    private var artGhost: Set<Int>?
     /// True when the cached art was built from the wiggle preview's moving picture.
     private var artWiggled = false
     private var artSteps: [ArtStep] = []
@@ -196,7 +199,9 @@ final class CanvasRenderer {
         guard let msaaTexture, let stencilTexture else { return true }
 
         let editor = session.editor
-        updateArt(editor: editor, zoom: session.camera.zoom, time: CACurrentMediaTime())
+        let time = CACurrentMediaTime()
+        // The outline view draws the art as a wireframe in the overlay instead.
+        if !editor.outlineView { updateArt(editor: editor, zoom: session.camera.zoom, time: time) }
         loadMissingTextures(for: editor.drawing.references, commandBuffer: commandBuffer)
 
         var uniforms = makeUniforms(camera: session.camera, viewSize: viewSize, scale: scale, darkMode: darkMode)
@@ -221,7 +226,7 @@ final class CanvasRenderer {
         drawReferences(editor.drawing.references, encoder: encoder, uniforms: &uniforms)
         let w = Double(viewSize.width), h = Double(viewSize.height)
         let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
-        drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen))
+        if !editor.outlineView { drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen)) }
 
         // The live stroke and the overlay change every frame, so they are built fresh.
         encoder.setDepthStencilState(plainState)
@@ -233,7 +238,9 @@ final class CanvasRenderer {
         if let mirrored = session.mirroredLiveStroke {
             drawCapsules(CapsuleTessellator.vertices(for: mirrored), encoder: encoder)
         }
-        drawCapsules(EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen)),
+        let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
+        drawCapsules(EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
+                                            art: shown, darkMode: darkMode),
                      encoder: encoder)
 
         encoder.endEncoding()
@@ -269,21 +276,23 @@ final class CanvasRenderer {
 
     // MARK: Art
 
-    /// Rebuilds the art when the drawing, zoom bucket or isolation changed, and on every
-    /// frame of the wiggle preview (only the wiggling shapes re-tessellate).
+    /// Rebuilds the art when the drawing, zoom bucket, isolation or ghost focus changed,
+    /// and on every frame of the wiggle preview (only the wiggling shapes re-tessellate).
     private func updateArt(editor: DrawingEditor, zoom: Double, time: Double) {
         // Flatten finely enough for the current zoom, in power-of-two steps.
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let tolerance = 0.2 / bucket
         let wiggling = editor.wigglePart != nil
+        let ghost = editor.ghostFocus
         guard wiggling || artWiggled || editor.revision != artRevision || tolerance != artTolerance ||
-            editor.isolatedPart != artIsolation else { return }
+            editor.isolatedPart != artIsolation || ghost != artGhost else { return }
         artRevision = editor.revision
         artTolerance = tolerance
         artIsolation = editor.isolatedPart
+        artGhost = ghost
         artWiggled = wiggling
         let drawing = wiggling ? editor.displayDrawing(at: time) : editor.drawing
-        let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance)
+        let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance, ghostFocus: ghost)
         artSteps = batch.steps
         artBuffer = makeBuffer(batch.vertices)
     }

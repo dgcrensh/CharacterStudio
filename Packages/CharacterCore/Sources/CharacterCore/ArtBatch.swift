@@ -130,9 +130,14 @@ public struct ArtBuilder: Sendable {
 
     private var cache: [Int: Tessellation] = [:]
 
+    /// How strongly the ghost view draws the shapes outside its focus.
+    public static let ghostOpacity = 0.25
+
     public init() {}
 
-    public mutating func build(_ drawing: Drawing, isolatedPart: Int?, tolerance: Double) -> ArtBatch {
+    /// With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
+    public mutating func build(_ drawing: Drawing, isolatedPart: Int?, tolerance: Double,
+                               ghostFocus: Set<Int>? = nil) -> ArtBatch {
         var batch = ArtBatch()
         var live: Set<Int> = []
         var parts = drawing.parts
@@ -153,7 +158,8 @@ public struct ArtBuilder: Sendable {
                     role = part.isClipBase(index) ? .base : .none
                 }
                 let geometry = tessellation(of: shape, tolerance: tolerance)
-                append(shape, geometry, role: role, to: &batch)
+                let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1
+                append(shape, geometry, role: role, fade: fade, to: &batch)
             }
         }
         cache = cache.filter { live.contains($0.key) }
@@ -178,7 +184,8 @@ public struct ArtBuilder: Sendable {
         return result
     }
 
-    private func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, to batch: inout ArtBatch) {
+    private func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, fade: Double,
+                        to batch: inout ArtBatch) {
         if role == .base { batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0)) }
 
         if let fill = shape.visibleFill, !geometry.fan.isEmpty {
@@ -186,7 +193,7 @@ public struct ArtBuilder: Sendable {
             batch.steps.append(.stencil(vertices: fan, state: ArtStencil.winding, reference: 0))
             let cover = batch.addRect(geometry.fanBounds)
             let (state, reference) = Self.fillCover(role)
-            let paint = ArtPaint(color: fill, gradient: shape.gradient, opacity: shape.opacity)
+            let paint = ArtPaint(color: fill, gradient: shape.gradient, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
         }
 
@@ -200,7 +207,7 @@ public struct ArtBuilder: Sendable {
             }
             let cover = batch.addRect(geometry.outlineBounds)
             let (state, reference) = Self.outlineCover(role, alignment)
-            let paint = ArtPaint(color: stroke.color, opacity: shape.opacity)
+            let paint = ArtPaint(color: stroke.color, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
             if role == .base, alignment != .center {
                 batch.steps.append(.stencil(vertices: cover, state: ArtStencil.cleanUp, reference: 0))

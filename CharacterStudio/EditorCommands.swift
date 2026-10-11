@@ -66,6 +66,14 @@ struct EditorCommands: Commands {
             Button("Nudge Down") { store?.nudge(0, 1) }
                 .keyboardShortcut(.downArrow, modifiers: [])
         }
+        CommandGroup(after: .toolbar) {
+            Button("Outline View") { if let store { store.setOutlineView(!store.ui.outlineView) } }
+                .keyboardShortcut("y")
+            Button("Ghost Unselected") { if let store { store.setGhostsUnselected(!store.ui.ghostsUnselected) } }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+            Button("Zoom to Fit") { store?.zoomToFit() }
+                .keyboardShortcut("0")
+        }
         CommandMenu("Tools") {
             tool(.select, "Select", key: "v")
             tool(.directSelect, "Direct Select", key: "a")

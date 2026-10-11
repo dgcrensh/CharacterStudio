@@ -109,6 +109,17 @@ public struct CanvasSession: Sendable {
         navigation = nil
     }
 
+    /// Fits `rect` (world space) in the view, unrotated and centered, with `margin`
+    /// screen points to spare on the tighter side.
+    public mutating func zoom(toFit rect: Rect, viewSize: Vec2, margin: Double = 48) {
+        guard !rect.isNull, viewSize.x > 2 * margin, viewSize.y > 2 * margin else { return }
+        let fit = min((viewSize.x - 2 * margin) / max(rect.width, 1), (viewSize.y - 2 * margin) / max(rect.height, 1))
+        let zoom = min(max(fit, CanvasCamera.zoomRange.lowerBound), CanvasCamera.zoomRange.upperBound)
+        camera = CanvasCamera(worldToScreen: Affine2D.translation(viewSize / 2) * Affine2D.scale(zoom) *
+            Affine2D.translation(-rect.center))
+        navigation = nil
+    }
+
     /// Removes all art. Undoable.
     public mutating func clear() {
         cancelPencil()

@@ -11,10 +11,23 @@ public enum EditorOverlay {
     /// Bones that aren't selected, and the symmetry axis.
     public static let boneColor = RGBAColor(r: 0.45, g: 0.42, b: 0.58)
     public static let symmetryColor = RGBAColor(r: 0.85, g: 0.35, b: 0.75, a: 0.8)
+    /// The character frame's box and ground line.
+    public static let frameColor = RGBAColor(r: 0.15, g: 0.62, b: 0.55)
+
+    /// The outline view's wireframe on a light or dark canvas, and the dimmed wireframe of
+    /// art outside isolation or the ghost focus. Opaque, since overlapping capsules
+    /// would double-blend a translucent line at every joint.
+    public static func wireColors(darkMode: Bool) -> (normal: RGBAColor, dimmed: RGBAColor) {
+        darkMode
+            ? (RGBAColor(r: 0.88, g: 0.88, b: 0.9), RGBAColor(r: 0.34, g: 0.34, b: 0.37))
+            : (RGBAColor(r: 0.16, g: 0.16, b: 0.18), RGBAColor(r: 0.74, g: 0.74, b: 0.76))
+    }
 
     /// `viewRect` (world space) bounds lines that run across the whole view, such as the
-    /// symmetry axis.
-    public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil) -> [Float] {
+    /// symmetry axis and the ground line. `art` is the drawing as the canvas shows it
+    /// (the wiggle preview's), for the outline view; it defaults to the editor's.
+    public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil,
+                                art: Drawing? = nil, darkMode: Bool = false) -> [Float] {
         var out: [Float] = []
         let px = 1 / max(zoom, 1e-9)
         let drawing = editor.drawing
@@ -74,6 +87,44 @@ public enum EditorOverlay {
             }
             CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
         }
+        func dashedLine(_ a: Vec2, _ b: Vec2, dash: Double, width: Double, color: RGBAColor) {
+            let d = b - a, len = d.length
+            guard len > 1e-9 else { return }
+            var s = 0.0
+            while s < len {
+                line(a + d * (s / len), a + d * (min(s + dash, len) / len), width: width, color: color)
+                s += dash * 2
+            }
+        }
+
+        // Outline view: every shown shape as a thin line, dimmed outside isolation and the
+        // ghost focus.
+        if editor.outlineView {
+            let colors = wireColors(darkMode: darkMode)
+            let focus = editor.ghostFocus
+            for part in (art ?? drawing).parts {
+                let away = editor.isolatedPart.map { $0 != part.id } ?? false
+                for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
+                    let dimmed = away || (focus.map { !$0.contains(shape.id) } ?? false)
+                    let poly = shape.path.flattened(tolerance: 0.5 * px)
+                    guard !poly.isEmpty else { continue }
+                    CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                              width: 1 * px, color: dimmed ? colors.dimmed : colors.normal, to: &out)
+                }
+            }
+        }
+
+        // The character frame: a dashed box and the ground line across the view.
+        if let frame = drawing.frame, !frame.isHidden {
+            let c = frame.bounds.corners
+            for i in 0..<4 { dashedLine(c[i], c[(i + 1) % 4], dash: 8 * px, width: 1.5, color: frameColor) }
+            let pad = 40 * px
+            let left = min(viewRect.map { $0.minPoint.x } ?? c[0].x, c[0].x) - pad
+            let right = max(viewRect.map { $0.maxPoint.x } ?? c[1].x, c[1].x) + pad
+            line(Vec2(left, frame.ground), Vec2(right, frame.ground), width: 2, color: frameColor.withAlpha(0.45))
+            line(Vec2(c[0].x, frame.ground), Vec2(c[1].x, frame.ground), width: 2, color: frameColor)
+        }
+
         // The symmetry axis, and what symmetry will add for a shape or pen path in progress.
         if editor.symmetry.isEnabled {
             let axis = editor.symmetry.axis

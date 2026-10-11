@@ -108,7 +108,7 @@ public enum CharacterFormat {
         let palette: [JSONValue] = drawing.palette.map { .string($0.hexString) } +
             drawing.globalColors.map { obj(["name": .string($0.name), "color": .string($0.color.hexString)]) }
 
-        return obj([
+        let character = obj([
             "formatVersion": .string(version.description),
             "name": .string(drawing.name),
             "bones": .array(boneValues),
@@ -120,6 +120,22 @@ public enum CharacterFormat {
             "palette": .array(palette),
             "references": .array(references),
         ])
+        // The frame is an optional editor hint, written only when set.
+        guard let frame = drawing.frame, case .object(var members) = character else { return character }
+        members.append((key: "frame", value: self.frame(frame)))
+        return .object(members)
+    }
+
+    private static func frame(_ frame: CharacterFrame) -> JSONValue {
+        var members: [(key: String, value: JSONValue)] = [
+            (key: "x", value: num(frame.bounds.minPoint.x)),
+            (key: "y", value: num(frame.bounds.minPoint.y)),
+            (key: "width", value: num(frame.bounds.width)),
+            (key: "height", value: num(frame.bounds.height)),
+            (key: "ground", value: num(frame.ground)),
+        ]
+        if frame.isHidden { members.append((key: "hidden", value: .bool(true))) }
+        return .object(members)
     }
 
     /// A bone relative to its parent: the head's position in the parent's space, and
@@ -383,6 +399,16 @@ public enum CharacterFormat {
             ref.isHidden = try node.field("hidden")?.bool() ?? false
             drawing.references.append(ref)
             files[id] = try node.require("file").string()
+        }
+        if let node = try root.field("frame") {
+            let origin = Vec2(try node.require("x").number(), try node.require("y").number())
+            let size = Vec2(try node.require("width").number(), try node.require("height").number())
+            guard size.x > 0, size.y > 0 else {
+                throw CharacterFileError.invalid(path: node.path, problem: "has no area")
+            }
+            let bounds = Rect(minPoint: origin, maxPoint: origin + size)
+            drawing.frame = CharacterFrame(bounds: bounds, ground: try node.field("ground")?.number(),
+                                           isHidden: try node.field("hidden")?.bool() ?? false)
         }
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
     }
