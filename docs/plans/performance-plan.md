@@ -104,6 +104,22 @@ pinch on a device trace, and the main-thread merge after a refine costs what a w
 
 ## Step 2: make the frame after an edit proportional to the edit (M)
 
+**Done.** All three bullets. 2.1: `ArtBuilder` caches a `PartBatch` per place in the draw stack (part id plus
+occurrence, since an accessory behind its owner appears twice), keyed on the part's shapes, groups and hidden flag,
+the tolerance, isolation, the isolated group, and the ghost focus and moving set restricted to its shapes; each part
+batch starts and ends with `moving` off and the assembler drops a `moving(false)`/`moving(true)` pair at a seam.
+Shape tessellations are pruned from the rebuilt and deleted parts only, so nothing walks the whole drawing. 2.2:
+`Tessellation.fan` and `outline` are `[Float]`. 2.3: `ArtBatch.segments` names each part's steps and vertices with an
+id that stays the same while the part is reused; the renderer keeps one immutable `MTLBuffer` per segment id, makes
+buffers only for `segmentsToUpload(resident:)` and draws each part's ranges from its own buffer
+(`ArtSegment.local`), with `concatenatesVertices` off so no full vertex array is built. Writing new buffers rather
+than rewriting slots of one means frames in flight never see a half-written part. Tests: `ArtPartCacheTests`
+(warm equals cold for every case below, plus hidden parts, a shape moved between parts, an accessory split behind
+its owner and a new tolerance; one edit rebuilds one part and uploads one segment). New workload
+`artRebuildAfterOneEditAndUpload`, and `testArtUploadSize` logs the upload after one edit. Not done: recycling the
+per-part buffers through a pool (each edit allocates one buffer the size of the edited part); check the `Art upload`
+signpost on an iPad.
+
 **Today.** Any `revision` change runs `ArtBuilder.build` over every part. Only the edited shape re-tessellates, but
 every other shape still costs a cache lookup, a `VectorShape` comparison and an append of its cached triangles,
 converted again from `Vec2` to `Float` into a new array (`ArtBatch.add`, `ArtBatch.swift:343-351`), and then the

@@ -38,11 +38,11 @@ final class VertexBufferPool {
     private struct Slot {
         var buffer: any MTLBuffer
         var lastUse: UInt64
-        /// Held across frames (the art), so never handed out again until released.
+        /// Held across frames (the overlay's kept layers), so never handed out again until released.
         var isPinned = false
     }
 
-    /// Enough for the art and the overlay's kept layers (pinned), and the live and
+    /// Enough for the overlay's kept layers (pinned), and the live and
     /// mirrored strokes and the overlay's two per-frame layers with three frames in flight.
     private static let maxSlots = 20
     private static let minimumLength = 64 * 1024
