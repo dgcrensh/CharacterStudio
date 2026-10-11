@@ -247,6 +247,17 @@ comparing against a fresh build at the same bucket. The shader change is app-onl
 
 ## Step 5: hover from an index, not a scan (S-M)
 
+**Done.** All four bullets. `ShapeIndex` (CharacterCore) holds each editable shape with its bounds, draw-stack
+rank and clip bases in a uniform grid; the editor keeps one tagged with `revision`, rebuilt by `pencilHovered`,
+`pencilBegan`, the eraser and the marquee, and read by the getters only when fresh. `cutTarget` walks shapes by
+index (or the grid's candidates) and skips segments whose control box is farther than the best so far
+(`BezierPath.nearestSegment(to:within:)`). An eraser stroke patches the index as shapes go instead of rebuilding
+it; a patched index serves the geometry queries but not `hitTest` (an erased shape can change another's clip base
+and the draw stack), which rebuilds on the next hover. `ShapeIndexTests` checks every answer against the old scans
+(isolation, an isolated group, hidden and locked shapes, clipping, an accessory split around its owner, ties) and
+the fallback after an edit and an undo. New scaling row: "Select hover, hit test only". `Drawing.hitTest` and
+`editableShapeRefs` are unchanged and still used by the pen and the select menu.
+
 **Today.** `cutTarget` (`DrawingEditor.swift:423-434`) runs on every hover frame with the scissors (through
 `hoverCut`, a computed property). For every editable shape it looks the shape up by id (`drawing.shape(ref)`, a
 linear `partIndex` and `firstIndex`), rebuilds its `controlBounds` from every anchor and handle, and for shapes near
