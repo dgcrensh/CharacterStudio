@@ -59,7 +59,7 @@ struct Workload: @unchecked Sendable {
     static let hoverFrame = Workload(name: "Hover frame (select tool)") { drawing in
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         var cache = OverlayCache()
         _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
         let start = StressDrawing.busyPoint(parts: drawing.parts.count)

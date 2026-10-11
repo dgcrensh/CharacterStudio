@@ -321,13 +321,13 @@ final class HideLockIsolateTests: XCTestCase {
         let back = e.drawing.parts[0].id, front = e.drawing.parts[1].id
         e.tool = .select
         tap(&e, Vec2(50, 50))
-        XCTAssertEqual(e.selection, .part(front))
+        XCTAssertEqual(e.selection, .layer(front))
         e.lockSelection()
         XCTAssertEqual(e.selection, Selection.none)
         tap(&e, Vec2(50, 50))
-        XCTAssertEqual(e.selection, .part(back), "taps go through the locked part")
+        XCTAssertEqual(e.selection, .layer(back), "taps go through the locked part")
         e.selectPart(front)
-        XCTAssertEqual(e.selection, .part(back), "a locked part can't be picked from the layers")
+        XCTAssertEqual(e.selection, .layer(back), "a locked part can't be picked from the layers")
         e.hideSelection()
         tap(&e, Vec2(50, 50))
         XCTAssertEqual(e.selection, Selection.none)
@@ -436,7 +436,7 @@ final class ArrangeTests: XCTestCase {
     func testArrangingAndReorderingParts() {
         var e = editor([square(0, 0), square(10, 0), square(20, 0)])
         let ids = e.drawing.parts.map(\.id)
-        e.selection = .part(ids[0])
+        e.selection = .layer(ids[0])
         e.arrange(.bringToFront)
         XCTAssertEqual(e.drawing.parts.map(\.id), [ids[1], ids[2], ids[0]])
         e.setPartOrder(frontToBack: [ids[2], ids[1], ids[0]])
@@ -452,7 +452,7 @@ final class ArrangeTests: XCTestCase {
         e.mergePartDown(upper)
         XCTAssertEqual(e.drawing.parts.count, 1)
         XCTAssertEqual(e.drawing.parts[0].shapes.count, 2)
-        XCTAssertEqual(e.selection, .part(lower))
+        XCTAssertEqual(e.selection, .layer(lower))
 
         let moved = e.drawing.parts[0].shapes[1].id
         e.selection = .shape(part: lower, shape: moved)
@@ -471,7 +471,7 @@ final class ArrangeTests: XCTestCase {
         XCTAssertEqual(e.drawing.parts.map(\.id), [ids[0], ids[1]], "the emptied part goes")
         XCTAssertEqual(e.drawing.parts[0].shapes.last?.id, shape)
         XCTAssertEqual(e.selection, .shape(part: ids[0], shape: shape))
-        e.selection = .part(ids[1])
+        e.selection = .layer(ids[1])
         e.moveSelection(toPart: ids[0])
         XCTAssertEqual(e.drawing.parts.count, 1)
         XCTAssertEqual(e.drawing.parts[0].shapes.count, 3)
@@ -481,12 +481,12 @@ final class ArrangeTests: XCTestCase {
 final class DuplicateAndClipboardTests: XCTestCase {
     func testDuplicatingAPart() {
         var e = editor([square(0, 0), square(200, 0)])
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         e.duplicateSelection()
         XCTAssertEqual(e.drawing.parts.count, 3)
         let copy = e.drawing.parts[1]
         XCTAssertEqual(copy.name, "Part 1 2")
-        XCTAssertEqual(e.selection, .part(copy.id))
+        XCTAssertEqual(e.selection, .layer(copy.id))
         assertClose(copy.shapes[0].path.points[0].position, Vec2(10, 10))
         assertClose(copy.pivot, Vec2(60, 60))
         e.undo()
@@ -529,14 +529,14 @@ final class DuplicateAndClipboardTests: XCTestCase {
     func testCopyAndPasteParts() throws {
         var e = editor([square(0, 0)])
         e.drawing.parts[0].name = "Hand.L"
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         let text = try XCTUnwrap(e.copySelection())
         XCTAssertTrue(text.contains("\"clipboard\": \"parts\""))
         XCTAssertTrue(e.paste(text))
         XCTAssertEqual(e.drawing.parts.count, 2)
         XCTAssertEqual(e.drawing.parts[1].name, "Hand.L 2")
         assertClose(e.drawing.parts[1].shapes[0].path.points[0].position, Vec2(10, 10), tolerance: 1e-3)
-        XCTAssertEqual(e.selection, .part(e.drawing.parts[1].id))
+        XCTAssertEqual(e.selection, .layer(e.drawing.parts[1].id))
 
         // Into another character, in place.
         var other = DrawingEditor()
@@ -551,12 +551,12 @@ final class DuplicateAndClipboardTests: XCTestCase {
         let source = e.drawing.parts[0]
         e.selection = .shape(part: source.id, shape: source.shapes[0].id)
         let text = try XCTUnwrap(e.copySelection())
-        e.selection = .part(e.drawing.parts[1].id)
+        e.selection = .layer(e.drawing.parts[1].id)
         XCTAssertTrue(e.paste(text))
         XCTAssertEqual(e.drawing.parts.count, 2)
         XCTAssertEqual(e.drawing.parts[1].shapes.count, 2)
         // Cut removes the original.
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         XCTAssertNotNil(e.cutSelection())
         XCTAssertEqual(e.drawing.parts.count, 1)
     }

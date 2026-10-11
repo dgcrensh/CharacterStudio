@@ -99,7 +99,7 @@ final class GroupTests: XCTestCase {
         let group = part.groups[0].id
 
         tap(&e, middle(100))
-        XCTAssertEqual(e.selection, .part(part.id))
+        XCTAssertEqual(e.selection, .layer(part.id))
         tap(&e, middle(100))
         XCTAssertEqual(Set(e.drawing.shapeRefs(in: e.selection)), refs(e, [1, 2]), "the whole group")
         tap(&e, middle(0))
@@ -145,7 +145,7 @@ final class GroupTests: XCTestCase {
         e.pencilMoved(to: Vec2(60, 30))
         e.pencilMoved(to: Vec2(130, 60))
         e.pencilEnded(at: Vec2(130, 60))
-        XCTAssertEqual(e.selection, .part(e.drawing.parts[0].id), "touching the group took all three")
+        XCTAssertEqual(e.selection, .layer(e.drawing.parts[0].id), "touching the group took all three")
     }
 
     func testNewArtInsideAGroupJoinsIt() {
@@ -209,12 +209,15 @@ final class GroupTests: XCTestCase {
         var e = editor(squares: 5)
         e.selection = .covering(refs(e, [1, 2, 3]))
         e.groupSelection()
-        for mask in 0..<32 {
+        // The group clipped and not.
+        for mask in 0..<64 {
             for s in 0..<5 { e.drawing.parts[0].shapes[s].isClipped = mask & (1 << s) != 0 }
+            e.drawing.parts[0].groups[0].isClipped = mask & 32 != 0
             let part = e.drawing.parts[0]
             let plan = part.clipPlan()
             for i in 0..<5 {
                 XCTAssertEqual(plan.base(of: i), part.clipBase(of: i), "mask \(mask) shape \(i)")
+                XCTAssertEqual(plan.groupBase(of: i), part.groupClipBase(of: i), "mask \(mask) shape \(i)")
                 XCTAssertEqual(plan.isBase(i), part.isClipBase(i), "mask \(mask) shape \(i)")
             }
         }
@@ -390,7 +393,7 @@ final class GroupTests: XCTestCase {
         e.groupSelection(name: "Bangs")
         let original = e.drawing.parts[0].groups[0].id
         let text = try XCTUnwrap(e.copySelection())
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         XCTAssertTrue(e.paste(text))
         let part = e.drawing.parts[0]
         XCTAssertTrue(e.drawing.groupsAreValid)
