@@ -466,7 +466,7 @@ final class PenToolTests: XCTestCase {
         XCTAssertEqual(e.drawing.parts.count, 2)
 
         e.autoJoinSelectedPart = true
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         penPath([Vec2(0, 200), Vec2(100, 200)], in: &e)
         XCTAssertEqual(e.drawing.parts.count, 2)
         XCTAssertEqual(e.drawing.parts[0].shapes.count, 2)
@@ -547,7 +547,7 @@ final class SelectionTests: XCTestCase {
         var e = twoLines()
         e.tool = .select
         drag(&e, Vec2(-20, -20), Vec2(420, 100))
-        XCTAssertEqual(e.selection, .part(e.drawing.parts[0].id), "one whole part")
+        XCTAssertEqual(e.selection, .layer(e.drawing.parts[0].id), "one whole part")
         XCTAssertNil(e.marquee)
 
         drag(&e, Vec2(-20, -20), Vec2(420, 320))
@@ -566,7 +566,7 @@ final class SelectionTests: XCTestCase {
         e.tool = .select
         // Neither end of the line is inside the rectangle.
         drag(&e, Vec2(150, -30), Vec2(250, 30))
-        XCTAssertEqual(e.selection, .part(e.drawing.parts[0].id))
+        XCTAssertEqual(e.selection, .layer(e.drawing.parts[0].id))
     }
 
     func testAddToggleBuildsAndShrinksTheSelection() {
@@ -775,7 +775,7 @@ final class PointEditingTests: XCTestCase {
 
     func testJoinOnASingleOpenShapeClosesIt() {
         var e = fourPointPath()
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         XCTAssertTrue(e.canJoinSelection)
         e.joinSelection()
         XCTAssertTrue(e.drawing.parts[0].shapes[0].path.closed)
@@ -861,7 +861,7 @@ final class TransformTests: XCTestCase {
 
     func testNumericSizeAndOrigin() throws {
         var e = editorWithSquare()
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         let steps = e.undoStack.undoStates.count
         e.setSelectionOrigin(x: 10)
         e.setSelectionOrigin(y: 20)
@@ -880,7 +880,7 @@ final class TransformTests: XCTestCase {
     func testFlipMirrorsAboutTheFrameCenter() throws {
         var e = DrawingEditor()
         e.addStroke([Vec2(0, 0), Vec2(100, 40)], zoom: 1)
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         let before = e.drawing.parts[0].shapes[0]
         let c = try XCTUnwrap(e.drawing.frame(of: e.selection)).center
         e.flipSelection(horizontal: true)
@@ -919,7 +919,7 @@ final class TransformTests: XCTestCase {
         drag(&e, part.pivot, Vec2(70, 60))
         assertClose(e.drawing.parts[0].pivot, Vec2(70, 60), tolerance: 1e-6)
         assertClose(try XCTUnwrap(e.pivot), Vec2(70, 60), tolerance: 1e-6)
-        XCTAssertEqual(e.selection, .part(part.id), "dragging the pivot does not change the selection")
+        XCTAssertEqual(e.selection, .layer(part.id), "dragging the pivot does not change the selection")
         e.undo()
         assertClose(e.drawing.parts[0].pivot, part.pivot)
 

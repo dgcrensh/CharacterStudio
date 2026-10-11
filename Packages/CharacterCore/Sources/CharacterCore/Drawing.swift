@@ -24,6 +24,9 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public var isLocked: Bool
     /// The group (a `ShapeGroup` id in the same part) this shape belongs to, if any.
     public var group: Int?
+    /// In an accessory, draws just behind the owner part's art instead of with the rest
+    /// of the accessory (a hat's back brim behind the head). Ignored in a part's own art.
+    public var isBehindOwner = false
 
     public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -117,15 +120,22 @@ public func windingNumber(of p: Vec2, polygon: [Vec2]) -> Int {
     return wn
 }
 
-/// Every shape's clip base in one part, from `Part.clipPlan()`.
+/// Every shape's clip bases in one part, from `Part.clipPlan()`.
 public struct ClipPlan: Hashable, Sendable {
     /// `clipBase(of:)` by shape index.
     public let bases: [Int?]
+    /// `groupClipBase(of:)` by shape index.
+    public let groupBases: [Int?]
 
     public func base(of index: Int) -> Int? { bases[index] }
 
-    /// True when shape `index` is the base of the clipped shapes right above it.
-    public func isBase(_ index: Int) -> Bool { index + 1 < bases.count && bases[index + 1] == index }
+    public func groupBase(of index: Int) -> Int? { groupBases[index] }
+
+    /// True when shape `index` is the base of the clipped shapes, or the clipped group,
+    /// right above it.
+    public func isBase(_ index: Int) -> Bool {
+        index + 1 < bases.count && (bases[index + 1] == index || groupBases[index + 1] == index)
+    }
 }
 
 /// A named set of shapes inside one part, such as an eye's white, iris and highlight.
@@ -134,10 +144,14 @@ public struct ClipPlan: Hashable, Sendable {
 public struct ShapeGroup: Hashable, Sendable, Codable, Identifiable {
     public var id: Int
     public var name: String
+    /// Draws the whole group only where the nearest shape below it draws, like a
+    /// clipped shape (see `Part.clipBase(ofGroup:)`). Clipping inside the group still works.
+    public var isClipped = false
 
-    public init(id: Int, name: String) {
+    public init(id: Int, name: String, isClipped: Bool = false) {
         self.id = id
         self.name = name
+        self.isClipped = isClipped
     }
 }
 
@@ -177,43 +191,70 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// True when shape `index` can be tapped, selected, erased or cut.
     public func isEditable(_ index: Int) -> Bool { isShown(index) && !isLocked && !shapes[index].isLocked }
 
+    /// True when shape `index` is clipped or in a clipped group, so it isn't a base for
+    /// the clipped shapes and groups above it.
+    public func isClipping(_ index: Int) -> Bool {
+        shapes[index].isClipped || shapes[index].group.map { group($0)?.isClipped == true } == true
+    }
+
     /// The index of the shape that clipped shape `index` draws inside: the nearest
-    /// unclipped shape below it, without leaving the shape's group. Nil for an
-    /// unclipped shape, or a clipped one with nothing below it (which draws unclipped).
+    /// unclipped shape below it, without leaving the shape's group. Outside a group,
+    /// shapes in clipped groups count as clipped, so they share the base below them.
+    /// Nil for an unclipped shape, or a clipped one with nothing below it (which draws
+    /// unclipped).
     public func clipBase(of index: Int) -> Int? {
         guard shapes[index].isClipped else { return nil }
-        var floor = 0
         if let group = shapes[index].group, let first = shapes.firstIndex(where: { $0.group == group }) {
-            floor = first
+            return shapes[first..<index].lastIndex { !$0.isClipped }
         }
-        return shapes[floor..<index].lastIndex { !$0.isClipped }
+        return (0..<index).last { !isClipping($0) }
     }
 
-    /// True when shape `index` is the base of the clipped shapes right above it.
+    /// The index of the shape clipped group `id` draws inside: the nearest shape below
+    /// the group that isn't clipped or in a clipped group. Nil when the group isn't
+    /// clipped, or has nothing below it (it draws unclipped).
+    public func clipBase(ofGroup id: Int) -> Int? {
+        guard group(id)?.isClipped == true, let first = shapes.firstIndex(where: { $0.group == id }) else { return nil }
+        return (0..<first).last { !isClipping($0) }
+    }
+
+    /// The shape whose area shape `index` is masked to as a member of a clipped group.
+    public func groupClipBase(of index: Int) -> Int? {
+        shapes[index].group.flatMap { clipBase(ofGroup: $0) }
+    }
+
+    /// True when shape `index` is the base of the clipped shapes, or the clipped group,
+    /// right above it.
     public func isClipBase(_ index: Int) -> Bool {
-        index + 1 < shapes.count && clipBase(of: index + 1) == index
+        index + 1 < shapes.count && (clipBase(of: index + 1) == index || groupClipBase(of: index + 1) == index)
     }
 
-    /// `clipBase(of:)` for every shape, in one pass. Use it when walking the whole part,
-    /// where asking shape by shape would be quadratic.
+    /// `clipBase(of:)` and `groupClipBase(of:)` for every shape, in one pass. Use it when
+    /// walking the whole part, where asking shape by shape would be quadratic.
     public func clipPlan() -> ClipPlan {
-        var bases: [Int?] = []
+        var bases: [Int?] = [], groupBases: [Int?] = []
         bases.reserveCapacity(shapes.count)
-        var lastUnclipped: Int?
-        var groupStarts: [Int: Int] = [:]
+        groupBases.reserveCapacity(shapes.count)
+        let clippedGroups = Set(groups.filter(\.isClipped).map(\.id))
+        // The last shape that isn't clipped or in a clipped group, and in each group the
+        // last shape that isn't clipped.
+        var lastBase: Int?
+        var lastInGroup: [Int: Int] = [:]
+        var groupBase: [Int: Int?] = [:]
         for (index, shape) in shapes.enumerated() {
-            var floor = 0
             if let group = shape.group {
-                if let start = groupStarts[group] { floor = start } else { groupStarts[group] = index; floor = index }
-            }
-            if shape.isClipped {
-                bases.append(lastUnclipped.flatMap { $0 >= floor ? $0 : nil })
+                if groupBase[group] == nil { groupBase[group] = clippedGroups.contains(group) ? lastBase : nil }
+                groupBases.append(groupBase[group] ?? nil)
+                bases.append(shape.isClipped ? lastInGroup[group] : nil)
+                if !shape.isClipped { lastInGroup[group] = index }
             } else {
-                bases.append(nil)
-                lastUnclipped = index
+                groupBases.append(nil)
+                bases.append(shape.isClipped ? lastBase : nil)
             }
+            let inClippedGroup = shape.group.map(clippedGroups.contains) ?? false
+            if !shape.isClipped, !inClippedGroup { lastBase = index }
         }
-        return ClipPlan(bases: bases)
+        return ClipPlan(bases: bases, groupBases: groupBases)
     }
 
     public func group(_ id: Int) -> ShapeGroup? { groups.first { $0.id == id } }
@@ -243,11 +284,13 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     }
 
     /// True when `p` is on shape `index` where it shows: a clipped shape only shows
-    /// inside its base.
+    /// inside its base, and a shape in a clipped group only inside the group's base.
     public func shape(_ index: Int, contains p: Vec2, tolerance: Double) -> Bool {
         guard shapes[index].contains(p, tolerance: tolerance) else { return false }
-        guard let base = clipBase(of: index) else { return true }
-        return isShown(base) && shapes[base].contains(p, tolerance: 0)
+        for base in [clipBase(of: index), groupClipBase(of: index)].compactMap({ $0 }) {
+            guard isShown(base), shapes[base].contains(p, tolerance: 0) else { return false }
+        }
+        return true
     }
 
     public var bounds: Rect {
@@ -319,7 +362,11 @@ public struct ShapeRef: Hashable, Sendable, Comparable {
 /// What the Pencil has selected.
 public enum Selection: Hashable, Sendable {
     case none
-    case part(Int)
+    /// A whole part or accessory (a layer), with any accessories it owns.
+    case layer(Int)
+    /// Several whole layers, picked in the layers panel. Use `coveringLayers` to build
+    /// one, so a single layer is always `.layer`.
+    case layers(Set<Int>)
     case shape(part: Int, shape: Int)
     /// Several shapes picked one by one or with a marquee. Use `covering` to build
     /// one, so a single shape is always `.shape`.
@@ -332,6 +379,15 @@ public enum Selection: Hashable, Sendable {
         case 0: .none
         case 1: .shape(part: refs.first!.part, shape: refs.first!.shape)
         default: .shapes(refs)
+        }
+    }
+
+    /// The smallest selection holding exactly the layers `ids`: none, one layer, or several.
+    public static func coveringLayers(_ ids: Set<Int>) -> Selection {
+        switch ids.count {
+        case 0: .none
+        case 1: .layer(ids.first!)
+        default: .layers(ids)
         }
     }
 }
@@ -451,7 +507,7 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// and only in its group `group` when that is given too. Hidden and locked shapes,
     /// and reference images, are never hit.
     public func hitTest(_ p: Vec2, tolerance: Double, within: Int? = nil, group: Int? = nil) -> (part: Int, shape: Int)? {
-        for part in parts.reversed() where within == nil || part.id == within {
+        for part in drawStack.reversed() where within == nil || part.id == within {
             for i in part.shapes.indices.reversed() where (group == nil || part.shapes[i].group == group) &&
                 part.isEditable(i) && part.shape(i, contains: p, tolerance: tolerance) {
                 return (part.id, part.shapes[i].id)
@@ -475,7 +531,8 @@ public struct Drawing: Hashable, Sendable, Codable {
     public func exists(_ selection: Selection) -> Bool {
         switch selection {
         case .none: true
-        case .part(let id): partIndex(id) != nil
+        case .layer(let id): partIndex(id) != nil
+        case .layers(let ids): !ids.isEmpty && ids.allSatisfy { partIndex($0) != nil }
         case .shape(let p, let s): indices(part: p, shape: s) != nil
         case .shapes(let refs): !refs.isEmpty && refs.allSatisfy { indices($0) != nil }
         case .reference(let id): referenceIndex(id) != nil
@@ -486,9 +543,12 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             return nil
-        case .part(let id):
+        case .layer(let id):
             // A part carries its accessories, so the frame takes them in.
             let bounds = family(of: id).reduce(Rect.null) { $0.union(parts[$1].bounds) }
+            return bounds.isNull ? nil : SelectionFrame(rect: bounds)
+        case .layers(let ids):
+            let bounds = families(of: ids).reduce(Rect.null) { $0.union(parts[$1].bounds) }
             return bounds.isNull ? nil : SelectionFrame(rect: bounds)
         case .shape(let p, let s):
             return shape(part: p, shape: s).map { SelectionFrame(rect: $0.bounds) }
@@ -503,9 +563,11 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// The shapes a selection covers, as (part index, shape index).
     public func shapeIndices(in selection: Selection) -> [(Int, Int)] {
         switch selection {
-        case .part(let id):
+        case .layer(let id):
             guard let p = partIndex(id) else { return [] }
             return parts[p].shapes.indices.map { (p, $0) }
+        case .layers(let ids):
+            return parts.indices.filter { ids.contains(parts[$0].id) }.flatMap { p in parts[p].shapes.indices.map { (p, $0) } }
         case .shape(let p, let s):
             return indices(part: p, shape: s).map { [$0] } ?? []
         case .shapes(let refs):
@@ -540,9 +602,14 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             break
-        case .part(let id):
+        case .layer(let id):
             // Accessories move with their part.
             for p in family(of: id) {
+                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            }
+        case .layers(let ids):
+            for p in families(of: ids) {
                 for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
                 parts[p].pivot = t.apply(parts[p].pivot)
             }

@@ -236,6 +236,19 @@ private struct EditMenu: View {
             Button("Paste", systemImage: "doc.on.clipboard") { store.paste() }
             Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
                 .disabled(ui.selection == .none)
+            Menu("Select", systemImage: "cursorarrow.rays") {
+                Button("Select Layer", systemImage: "arrow.up.square") { store.selectParent() }
+                    .disabled(!ui.canSelectParent)
+                Button("Select All in Layer", systemImage: "square.stack") { store.selectAllInLayer() }
+                    .disabled(!ui.canSelectAllInLayer)
+                Button("Invert Selection", systemImage: "circle.lefthalf.filled") { store.invertSelection() }
+                    .disabled(!ui.canInvertSelection)
+                Divider()
+                Button("Same Fill", systemImage: "drop.fill") { store.selectSameFill() }
+                    .disabled(!ui.canSelectSame)
+                Button("Same Outline", systemImage: "circle") { store.selectSameOutline() }
+                    .disabled(!ui.canSelectSame)
+            }
 
             Divider()
             Menu("Arrange", systemImage: "square.3.layers.3d.top.filled") {
@@ -370,6 +383,24 @@ private struct ContextBar: View {
                 .accessibilityLabel("Exit isolation")
                 Divider().frame(height: 24)
             }
+            if ui.isolatedPart == nil, ui.activeLayer != nil, [Tool.pencil, .pen, .shape].contains(ui.tool) {
+                // Where new art goes, chosen in the layers panel (or by auto-join).
+                HStack(spacing: 6) {
+                    Image(systemName: "square.3.layers.3d")
+                    Text("Into \(ui.activeLayerName)").lineLimit(1)
+                    if ui.activeLayerIsChosen {
+                        Button("Draw New Parts", systemImage: "xmark.circle.fill") { store.clearActiveLayer() }
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.subheadline)
+                Divider().frame(height: 24)
+            }
+            if [Tool.select, .directSelect].contains(ui.tool), ui.selectionCrumbs.contains(where: \.isCurrent) {
+                breadcrumbs
+                Divider().frame(height: 24)
+            }
             switch ui.tool {
             case .pencil:
                 Toggle(isOn: Binding(get: { ui.autoJoin }, set: { store.setAutoJoin($0) })) {
@@ -423,6 +454,26 @@ private struct ContextBar: View {
                 nudgeControls
             }
         }
+    }
+
+    /// Where the selection sits, such as "Hair › Bangs › Shape": tapping an outer level
+    /// selects it.
+    private var breadcrumbs: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(ui.selectionCrumbs.enumerated()), id: \.offset) { index, crumb in
+                if index > 0 {
+                    Image(systemName: "chevron.compact.right").foregroundStyle(.secondary)
+                }
+                if crumb.isCurrent {
+                    Text(crumb.title).lineLimit(1).fontWeight(.semibold)
+                } else {
+                    Button(crumb.title) { store.selectCrumb(crumb.level) }
+                        .lineLimit(1)
+                        .accessibilityHint("Selects this level")
+                }
+            }
+        }
+        .font(.subheadline)
     }
 
     /// Draw or adjust bones, and the selected bone's name, parent and commands.
