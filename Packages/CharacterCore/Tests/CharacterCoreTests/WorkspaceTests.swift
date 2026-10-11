@@ -54,7 +54,7 @@ final class CharacterFrameTests: XCTestCase {
         let head = addRect(&d, "Head", rect(0, 0, 40, 40))
         addRect(&d, "Body", rect(0, 50, 40, 100))
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(head)
+        e.selection = .layer(head)
         e.fitFrame()
         XCTAssertEqual(e.drawing.frame?.bounds, rect(-16, -16, 72, 72))
         XCTAssertEqual(e.drawing.frame?.ground, 40)
@@ -104,7 +104,7 @@ final class ViewOptionTests: XCTestCase {
         var e = DrawingEditor(drawing: d)
         e.ghostsUnselected = true
         XCTAssertNil(e.ghostFocus, "Nothing selected: nothing fades")
-        e.selection = .part(a)
+        e.selection = .layer(a)
         XCTAssertEqual(e.ghostFocus, [e.drawing.parts[0].shapes[0].id])
 
         var builder = ArtBuilder()

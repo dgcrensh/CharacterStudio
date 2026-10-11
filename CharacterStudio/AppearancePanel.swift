@@ -15,6 +15,15 @@ struct AppearancePanel: View {
                     opacityRow(appearance.opacity)
                     Toggle("Clip to Shape Below", isOn: Binding(get: { appearance.isClipped }, set: { store.setClipped($0) }))
                         .disabled(!ui.canClip && !appearance.isClipped)
+                    if let group = ui.selectedGroupID, let part = ui.selectedGroupPart {
+                        Toggle("Clip Group to Shape Below", isOn: Binding(get: { ui.selectedGroupClipped },
+                                                                          set: { store.setGroupClipped(group, inPart: part, $0) }))
+                            .disabled(!ui.canClipSelectedGroup && !ui.selectedGroupClipped)
+                    }
+                    if appearance.isInAccessory {
+                        Toggle("Draw Behind Owner", isOn: Binding(get: { appearance.isBehindOwner },
+                                                                  set: { store.setBehindOwner($0) }))
+                    }
                 }
                 if appearance.isClosed {
                     GradientSection(store: store, ui: ui, gradient: appearance.gradient)

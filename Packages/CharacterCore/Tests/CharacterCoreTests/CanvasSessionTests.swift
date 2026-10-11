@@ -290,7 +290,7 @@ final class CanvasSessionTests: XCTestCase {
         s.touchMoved(id: 2, samples: [Vec2(200, 150), Vec2(200, 200)])
         s.touchEnded(id: 2, location: Vec2(200, 200))
         let part = s.editor.drawing.parts[0]
-        XCTAssertEqual(s.editor.selection, .part(part.id))
+        XCTAssertEqual(s.editor.selection, .layer(part.id))
         let first = part.shapes[0].path.points[0].position
         XCTAssertTrue(s.camera.toScreen(first).isApproximately(Vec2(100, 200), tolerance: 1e-6))
         s.undo()

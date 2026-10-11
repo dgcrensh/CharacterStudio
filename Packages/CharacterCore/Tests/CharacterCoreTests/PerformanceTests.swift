@@ -148,7 +148,7 @@ final class PerformanceTests: XCTestCase {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
         editor.outlineView = true
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measure {
             _ = EditorOverlay.vertices(for: editor, zoom: 1)
         }
