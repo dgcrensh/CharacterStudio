@@ -86,8 +86,23 @@ struct Workload: @unchecked Sendable {
     }
 
     /// One overlay frame in the outline view during a pinch: a warm cache, with the zoom
-    /// changed by 1% (the wireframe's cache key is the exact zoom).
+    /// changed by 1% inside one zoom bucket (1 and 0.99 both round up to 1), which keeps
+    /// the wireframe since plan step 4.
     static let overlayWireframeAtNewZoom = Workload(name: "Outline view, overlay at a new zoom") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.outlineView = true
+        var cache = OverlayCache()
+        _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
+        var flip = false
+        return {
+            flip.toggle()
+            _ = EditorOverlay.layers(for: editor, zoom: flip ? 0.99 : 1, cache: &cache)
+        }
+    }
+
+    /// The same, with the 1% zoom change crossing a zoom bucket (1.01 rounds up to 2), so
+    /// every frame rebuilds the wireframe: what a pinch pays once per power of two.
+    static let overlayWireframeAcrossZoomBucket = Workload(name: "Outline view, overlay across a zoom bucket") { drawing in
         var editor = DrawingEditor(drawing: drawing)
         editor.outlineView = true
         var cache = OverlayCache()
@@ -268,7 +283,8 @@ struct Workload: @unchecked Sendable {
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
         [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, hoverFrame,
-         selectHoverHitTest, overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
+         selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
+         scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
          undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
          svgImport]
     }

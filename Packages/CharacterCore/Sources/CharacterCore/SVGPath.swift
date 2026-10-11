@@ -273,7 +273,9 @@ struct NumberScanner {
         skipSeparators()
         let start = i
         var j = i
+        let negative = j < bytes.count && bytes[j] == UInt8(ascii: "-")
         if j < bytes.count, bytes[j] == UInt8(ascii: "-") || bytes[j] == UInt8(ascii: "+") { j += 1 }
+        let digitsStart = j
         var digits = 0
         while j < bytes.count, Self.isDigit(bytes[j]) { j += 1; digits += 1 }
         if j < bytes.count, bytes[j] == UInt8(ascii: ".") {
@@ -281,12 +283,22 @@ struct NumberScanner {
             while j < bytes.count, Self.isDigit(bytes[j]) { j += 1; digits += 1 }
         }
         guard digits > 0 else { return nil }
+        var hasExponent = false
         if j < bytes.count, bytes[j] == UInt8(ascii: "e") || bytes[j] == UInt8(ascii: "E") {
             var k = j + 1
             if k < bytes.count, bytes[k] == UInt8(ascii: "-") || bytes[k] == UInt8(ascii: "+") { k += 1 }
             var expDigits = 0
             while k < bytes.count, Self.isDigit(bytes[k]) { k += 1; expDigits += 1 }
-            if expDigits > 0 { j = k }
+            if expDigits > 0 {
+                j = k
+                hasExponent = true
+            }
+        }
+        // A plain decimal ("12", "-3.25", "+.5", "5.") straight from the bytes; exponents
+        // and long mantissas go through Double(text) below.
+        if !hasExponent, let value = FastDecimal.value(bytes, from: digitsStart, to: j, negative: negative) {
+            i = j
+            return value
         }
         var text = String(decoding: bytes[start..<j], as: UTF8.self)
         // "5." and "-.5" are numbers in SVG; give Double a digit on each side of the point.

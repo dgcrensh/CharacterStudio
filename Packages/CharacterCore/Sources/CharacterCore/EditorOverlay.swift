@@ -1,8 +1,9 @@
 import Foundation
 
 /// Builds the editing overlay (selection frame, transform handles, anchors and
-/// Bézier handles) as capsule vertices. Sizes are in screen points, converted to
-/// world units with the zoom, so the overlay looks the same at any zoom.
+/// Bézier handles) as capsule vertices. Line widths and dot sizes are in screen points
+/// (screen-space capsules, which the shader scales with the zoom), so the overlay
+/// looks the same at any zoom.
 public enum EditorOverlay {
     public static let accent = RGBAColor(r: 0.18, g: 0.49, b: 0.96)
     public static let handleFill = RGBAColor.white
@@ -43,17 +44,20 @@ public enum EditorOverlay {
                               darkMode: Bool = false, cache: inout OverlayCache) -> OverlayLayers {
         var layers = OverlayLayers()
         let px = 1 / max(zoom, 1e-9)
+        // The kept layers depend on the zoom only through flattening and dash lengths, so
+        // they are built for the zoom bucket and kept while a pinch stays inside it.
+        let bucket = zoomBucket(zoom)
 
         // Outline view: every shown shape as a thin line, dimmed outside isolation and the
         // ghost focus. The wiggle preview moves the art every frame, so it is never kept.
         if editor.outlineView {
             let focus = editor.ghostFocus
-            let key = OverlayCache.WireframeKey(revision: editor.revision, zoom: zoom, isolatedPart: editor.isolatedPart,
+            let key = OverlayCache.WireframeKey(revision: editor.revision, bucket: bucket, isolatedPart: editor.isolatedPart,
                                                 isolatedGroup: editor.isolatedGroup, ghostFocus: focus, darkMode: darkMode)
             if art == nil, cache.wireframeKey == key {
                 layers.wireframe = cache.wireframe
             } else {
-                var b = Builder(editor: editor, px: px)
+                var b = Builder(editor: editor, px: 1 / bucket)
                 b.wireframe(of: art ?? editor.drawing, focus: focus, darkMode: darkMode)
                 layers.wireframe = b.out
                 cache.wireframeKey = art == nil ? key : nil
@@ -71,12 +75,12 @@ public enum EditorOverlay {
         layers.guides = guides.out
 
         // The selection's outlines and anchors, which can be every shape in the drawing.
-        let key = OverlayCache.SelectionKey(revision: editor.revision, zoom: zoom, tool: editor.tool,
+        let key = OverlayCache.SelectionKey(revision: editor.revision, bucket: bucket, tool: editor.tool,
                                             selection: editor.selection, selectedAnchors: editor.selectedAnchors)
         if cache.selectionKey == key {
             layers.selection = cache.selection
         } else {
-            var b = Builder(editor: editor, px: px)
+            var b = Builder(editor: editor, px: 1 / bucket)
             b.selection()
             layers.selection = b.out
             cache.selectionKey = key
@@ -88,6 +92,13 @@ public enum EditorOverlay {
         top.top()
         layers.top = top.out
         return layers
+    }
+
+    /// The zoom rounded up to a power of two (as the art's tessellation is): one point at
+    /// the bucket is at most one point on screen, so a layer flattened for the bucket is
+    /// never coarser than one flattened for the exact zoom, and at most 2x finer.
+    static func zoomBucket(_ zoom: Double) -> Double {
+        pow(2, ceil(log2(max(zoom, 1.0 / 64))))
     }
 }
 
@@ -108,13 +119,13 @@ public struct OverlayLayers: Sendable {
 
 /// The overlay layers that can cost as much as tessellating the whole drawing, kept
 /// between frames: the outline view's wireframe and the selection's outlines and
-/// anchors. Each is rebuilt only when the drawing (its `revision`), the zoom or the
-/// editor state it shows changed, so hovering, the marquee and the select tool's
-/// handles don't rebuild them.
+/// anchors. Each is rebuilt only when the drawing (its `revision`), the zoom bucket
+/// (`EditorOverlay.zoomBucket`) or the editor state it shows changed, so hovering, the
+/// marquee, the select tool's handles and a pinch within a bucket don't rebuild them.
 public struct OverlayCache: Sendable {
     struct WireframeKey: Equatable, Sendable {
         var revision: Int
-        var zoom: Double
+        var bucket: Double
         var isolatedPart: Int?
         var isolatedGroup: Int?
         var ghostFocus: Set<Int>?
@@ -123,7 +134,7 @@ public struct OverlayCache: Sendable {
 
     struct SelectionKey: Equatable, Sendable {
         var revision: Int
-        var zoom: Double
+        var bucket: Double
         var tool: Tool
         var selection: Selection
         var selectedAnchors: Set<Int>
@@ -140,7 +151,10 @@ public struct OverlayCache: Sendable {
     public init() {}
 }
 
-/// Appends one layer's capsules. Sizes are in screen points (`px` is one point in world units).
+/// Appends one layer's capsules. Widths and dot sizes are in screen points and written as
+/// screen-space capsules; `px` is one point in world units, for flattening tolerances,
+/// dash lengths and offsets. The kept layers use the zoom bucket's `px`, which is never
+/// larger than the exact zoom's.
 private struct Builder {
     typealias Overlay = EditorOverlay
     let editor: DrawingEditor
@@ -151,10 +165,10 @@ private struct Builder {
     var accent: RGBAColor { Overlay.accent }
 
     mutating func line(_ a: Vec2, _ b: Vec2, width: Double = 1.5, color: RGBAColor = Overlay.accent) {
-        CapsuleTessellator.append(points: [a, b], width: width * px, color: color, to: &out)
+        CapsuleTessellator.append(points: [a, b], width: width, color: color, screenSpace: true, to: &out)
     }
     mutating func dot(_ p: Vec2, radius: Double, color: RGBAColor) {
-        CapsuleTessellator.append(points: [p], width: radius * 2 * px, color: color, to: &out)
+        CapsuleTessellator.append(points: [p], width: radius * 2, color: color, screenSpace: true, to: &out)
     }
     mutating func ringDot(_ p: Vec2, radius: Double, ring: Double = 1.5) {
         dot(p, radius: radius, color: accent)
@@ -174,13 +188,13 @@ private struct Builder {
                 let pieces = path.points[i].stroked ? nil
                     : Stroker.dashes(points: poly, radii: poly.map { _ in 0 }, pattern: [4 * px, 4 * px], offset: 0)
                 for piece in pieces?.map({ $0.points }) ?? [poly] {
-                    CapsuleTessellator.append(points: piece, width: 1.5 * px, color: accent, to: &out)
+                    CapsuleTessellator.append(points: piece, width: 1.5, color: accent, screenSpace: true, to: &out)
                 }
             }
         } else {
             let poly = path.flattened(tolerance: 0.5 * px)
             let outline = path.closed && poly.count > 2 ? poly + [poly[0]] : poly
-            CapsuleTessellator.append(points: outline, width: 1.5 * px, color: accent, to: &out)
+            CapsuleTessellator.append(points: outline, width: 1.5, color: accent, screenSpace: true, to: &out)
         }
 
         if showHandles {
@@ -207,7 +221,7 @@ private struct Builder {
         guard let path = drawing.shape(ref)?.path else { return }
         let poly = path.flattened(tolerance: 0.5 * px)
         CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                  width: 2 * px, color: color, to: &out)
+                                  width: 2, color: color, screenSpace: true, to: &out)
     }
     mutating func ring(_ center: Vec2, radius: Double, color: RGBAColor) {
         let steps = 48
@@ -216,7 +230,7 @@ private struct Builder {
             let angle = 2 * Double.pi * Double(i) / Double(steps)
             points.append(center + Vec2(cos(angle), sin(angle)) * radius)
         }
-        CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
+        CapsuleTessellator.append(points: points, width: 1.5, color: color, screenSpace: true, to: &out)
     }
     mutating func dashedLine(_ a: Vec2, _ b: Vec2, dash: Double, width: Double, color: RGBAColor) {
         let d = b - a, len = d.length
@@ -239,7 +253,8 @@ private struct Builder {
                 let poly = shape.path.flattened(tolerance: 0.5 * px)
                 guard !poly.isEmpty else { continue }
                 CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                          width: 1 * px, color: dimmed ? colors.dimmed : colors.normal, to: &out)
+                                          width: 1, color: dimmed ? colors.dimmed : colors.normal, screenSpace: true,
+                                          to: &out)
             }
         }
     }
@@ -273,7 +288,7 @@ private struct Builder {
             for path in editor.mirrorPreview {
                 let poly = path.flattened(tolerance: 0.5 * px)
                 CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                          width: 1.5 * px, color: Overlay.symmetryColor, to: &out)
+                                          width: 1.5, color: Overlay.symmetryColor, screenSpace: true, to: &out)
             }
         }
 
@@ -312,7 +327,8 @@ private struct Builder {
                                               color: fill, to: &out)
                 }
                 let ring = outlinePoints + [outlinePoints[0]]
-                CapsuleTessellator.append(points: ring, width: (selected || hovered ? 2 : 1.5) * px, color: color, to: &out)
+                CapsuleTessellator.append(points: ring, width: selected || hovered ? 2 : 1.5, color: color,
+                                          screenSpace: true, to: &out)
                 let jointRadius = 4.5
                 for (handle, point) in [(BoneHandle.head, bone.head), (.tail, bone.tail)] {
                     let lit = hovered && hover?.handle == handle
@@ -387,7 +403,7 @@ private struct Builder {
                 if let preview = editor.penPreview {
                     var rubber = [preview.p0]
                     preview.flatten(tolerance: 0.5 * px, into: &rubber)
-                    CapsuleTessellator.append(points: rubber, width: 1 * px, color: accent, to: &out)
+                    CapsuleTessellator.append(points: rubber, width: 1, color: accent, screenSpace: true, to: &out)
                 }
             }
 

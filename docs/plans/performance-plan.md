@@ -143,6 +143,14 @@ from 300 to 4,800 shapes at 60 shapes per part, under 1 ms on the Mac.
 
 ## Step 3: open and import without the wait (M)
 
+**Done (except Open bullet 3).** Numbers are read from bytes (`FastDecimal`, shared by `JSONParser` and the
+SVG `NumberScanner`, with `Double(text)` as the fallback for exponents and more than 15 significant digits),
+whitespace is a `switch`, and strings without escapes skip the byte buffer. `Node` keeps a parent link and a key
+or index, so decoding builds no path strings unless it throws. Import parses in a detached task behind an
+"Importing..." toast and ignores a second import while one runs; `XMLReader` no longer allocates arrays per tag.
+`NumberParsingTests` checks every path against `Double(text)` bit for bit. Open bullet 3 (art after the first
+frame) is deferred: it needs step 1's background job. Numbers in the audit under "Step 3".
+
 ### Open
 
 **Today.** 390 ms at 2,400 shapes, all of it string work as far as the code shows:
@@ -198,6 +206,15 @@ in one `edit`. 406 ms at 2,400 shapes, during which nothing responds.
 and can't be tested on Linux; say so in the PR.
 
 ## Step 4: a pinch in outline view keeps the wireframe (S-M)
+
+**Done** (bullets 1 and 2). Every overlay capsule is screen-space: `CapsuleTessellator.append(screenSpace:)`
+sets the `StrokeVertex` flag (the old padding float) and the vertex shader scales the radius by a new
+`worldPerPoint` uniform (in the `Uniforms` padding slot) rather than `worldPerPixel`, since the overlay's
+widths are in points and the core doesn't know the screen scale. The live stroke and the bones' fill leave
+the flag clear. The wireframe and selection layers key on `EditorOverlay.zoomBucket` and flatten and dash
+at the bucket's `px`. `overlayWireframeAtNewZoom` now changes zoom inside a bucket (1 to 0.99); the new
+`overlayWireframeAcrossZoomBucket` (1 to 1.01) times a rebuild. Bullet 3 is deferred: it needs step 1's
+`TessellationCache`. The shader is checked by eye only (outline view, pinch 0.25x to 8x).
 
 **Today.** `OverlayCache.WireframeKey` and `SelectionKey` include the exact `zoom` (`EditorOverlay.swift:115-130`)
 because capsule widths are baked in world units (`width * px`) when the vertices are built, so every pinch frame

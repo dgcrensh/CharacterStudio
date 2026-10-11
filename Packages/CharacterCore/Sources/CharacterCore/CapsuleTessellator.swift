@@ -7,8 +7,14 @@ import Foundation
 ///
 /// The vertex shader pushes each corner outward by the radius plus a pixel of
 /// anti-aliasing margin, which depends on zoom, so vertices hold only a corner sign.
+///
+/// A capsule's radius is in world units (ink, whose width zooms with the art) or, with
+/// `screenSpace`, in screen points (the editing overlay, which looks the same at any
+/// zoom). The vertex shader converts a screen-space radius to world units with the
+/// current zoom, so the overlay's vertices don't depend on the exact zoom.
 public enum CapsuleTessellator {
-    /// Floats per vertex: a.xy, b.xy, corner.xy, radius, padding, color.rgba.
+    /// Floats per vertex: a.xy, b.xy, corner.xy, radius, flags, color.rgba. `flags` is
+    /// 1 when `radius` is in screen points, 0 when it is in world units.
     /// Must match `StrokeVertex` in the Metal shader source.
     public static let floatsPerVertex = 12
     public static let verticesPerSegment = 6
@@ -25,14 +31,16 @@ public enum CapsuleTessellator {
 
     /// Appends vertices for `points` to `out`. A single point becomes a round dot.
     /// `widths`, one per point, multiply `width` (each segment uses the mean of its ends).
+    /// With `screenSpace`, `width` is in screen points instead of world units.
     public static func append(points: [Vec2], width: Double, widths: [Double]? = nil, color: RGBAColor,
-                              to out: inout [Float]) {
+                              screenSpace: Bool = false, to out: inout [Float]) {
         guard let first = points.first else { return }
         let widths = widths?.count == points.count ? widths : nil
         var radius = Float(width / 2) * Float(widths?[0] ?? 1)
         // Shaders blend premultiplied colors.
         let alpha = Float(color.a)
         let rgba = (Float(color.r) * alpha, Float(color.g) * alpha, Float(color.b) * alpha, alpha)
+        let flags: Float = screenSpace ? 1 : 0
 
         out.reserveAdditional(segmentCount(pointCount: points.count) * verticesPerSegment * floatsPerVertex)
 
@@ -40,7 +48,7 @@ public enum CapsuleTessellator {
             for (end, side) in corners {
                 out.append(contentsOf: [
                     Float(a.x), Float(a.y), Float(b.x), Float(b.y),
-                    end, side, radius, 0,
+                    end, side, radius, flags,
                     rgba.0, rgba.1, rgba.2, rgba.3,
                 ])
             }
