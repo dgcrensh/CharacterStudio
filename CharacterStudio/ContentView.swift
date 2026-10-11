@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Binding var document: CharacterDocument
     @State private var store: CanvasStore
+    @Environment(\.scenePhase) private var scenePhase
     /// The canvas width, which bounds the context bar in the navigation bar.
     @State private var canvasWidth: CGFloat = 0
 
@@ -65,6 +66,11 @@ struct ContentView: View {
             .onChange(of: document.package) { _, package in
                 store.documentChanged(package)
             }
+            // A held color change reaches the document before it closes or the app leaves.
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { store.flushDocument() }
+            }
+            .onDisappear { store.flushDocument() }
     }
 }
 

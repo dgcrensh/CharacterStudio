@@ -23,119 +23,238 @@ public enum EditorOverlay {
             : (RGBAColor(r: 0.16, g: 0.16, b: 0.18), RGBAColor(r: 0.74, g: 0.74, b: 0.76))
     }
 
+    /// The whole overlay as one array, in drawing order. The renderer keeps the costly
+    /// layers between frames with `layers(for:zoom:viewRect:art:darkMode:cache:)` instead.
+    public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil,
+                                art: Drawing? = nil, darkMode: Bool = false) -> [Float] {
+        var cache = OverlayCache()
+        let layers = layers(for: editor, zoom: zoom, viewRect: viewRect, art: art, darkMode: darkMode, cache: &cache)
+        return layers.wireframe + layers.guides + layers.selection + layers.top
+    }
+
+    /// The overlay in its four layers. `wireframe` and `selection` come from `cache` when
+    /// nothing they show changed since it last built them (see `OverlayCache`); the
+    /// other two are built on every call.
+    ///
     /// `viewRect` (world space) bounds lines that run across the whole view, such as the
     /// symmetry axis and the ground line. `art` is the drawing as the canvas shows it
     /// (the wiggle preview's), for the outline view; it defaults to the editor's.
-    public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil,
-                                art: Drawing? = nil, darkMode: Bool = false) -> [Float] {
-        var out: [Float] = []
+    public static func layers(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil, art: Drawing? = nil,
+                              darkMode: Bool = false, cache: inout OverlayCache) -> OverlayLayers {
+        var layers = OverlayLayers()
         let px = 1 / max(zoom, 1e-9)
-        let drawing = editor.drawing
-
-        func line(_ a: Vec2, _ b: Vec2, width: Double = 1.5, color: RGBAColor = accent) {
-            CapsuleTessellator.append(points: [a, b], width: width * px, color: color, to: &out)
-        }
-        func dot(_ p: Vec2, radius: Double, color: RGBAColor) {
-            CapsuleTessellator.append(points: [p], width: radius * 2 * px, color: color, to: &out)
-        }
-        func ringDot(_ p: Vec2, radius: Double, ring: Double = 1.5) {
-            dot(p, radius: radius, color: accent)
-            dot(p, radius: radius - ring, color: handleFill)
-        }
-
-        // Draws one shape's outline, handles and anchors (the anchor state comes from the editor).
-        func drawAnchors(of ref: ShapeRef, showHandles: Bool) {
-            guard let shape = drawing.shape(ref) else { return }
-            let path = shape.path
-            // Highlight the path itself, with edges that have no outline dashed.
-            if path.hasUnstrokedSegments {
-                for i in 0..<path.segmentCount {
-                    var poly = [path.points[i].position]
-                    path.segment(i).flatten(tolerance: 0.5 * px, into: &poly)
-                    let pieces = path.points[i].stroked ? nil
-                        : Stroker.dashes(points: poly, radii: poly.map { _ in 0 }, pattern: [4 * px, 4 * px], offset: 0)
-                    for piece in pieces?.map({ $0.points }) ?? [poly] {
-                        CapsuleTessellator.append(points: piece, width: 1.5 * px, color: accent, to: &out)
-                    }
-                }
-            } else {
-                let poly = path.flattened(tolerance: 0.5 * px)
-                let outline = path.closed && poly.count > 2 ? poly + [poly[0]] : poly
-                CapsuleTessellator.append(points: outline, width: 1.5 * px, color: accent, to: &out)
-            }
-
-            if showHandles {
-                for h in editor.visibleHandles(of: path) where path.points[h.index].position.distance(to: h.position) > 1e-6 {
-                    line(path.points[h.index].position, h.position, width: 1)
-                    dot(h.position, radius: 4, color: accent)
-                }
-            }
-            let selected = editor.activeShape == ref ? editor.selectedAnchors : []
-            for (i, point) in path.points.enumerated() {
-                if selected.contains(i) {
-                    dot(point.position, radius: 6.5, color: accent)
-                } else if point.mode == .corner {
-                    // Corner points get a smaller, heavier ring.
-                    ringDot(point.position, radius: 4.5, ring: 2.5)
-                } else {
-                    ringDot(point.position, radius: 5)
-                }
-            }
-        }
-
-        // Hover: what a touch would hit, the brush size, the eraser's reach, the cut point.
-        func outline(of ref: ShapeRef, color: RGBAColor) {
-            guard let path = drawing.shape(ref)?.path else { return }
-            let poly = path.flattened(tolerance: 0.5 * px)
-            CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                      width: 2 * px, color: color, to: &out)
-        }
-        func ring(_ center: Vec2, radius: Double, color: RGBAColor) {
-            let steps = 48
-            var points: [Vec2] = []
-            for i in 0...steps {
-                let angle = 2 * Double.pi * Double(i) / Double(steps)
-                points.append(center + Vec2(cos(angle), sin(angle)) * radius)
-            }
-            CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
-        }
-        func dashedLine(_ a: Vec2, _ b: Vec2, dash: Double, width: Double, color: RGBAColor) {
-            let d = b - a, len = d.length
-            guard len > 1e-9 else { return }
-            var s = 0.0
-            while s < len {
-                line(a + d * (s / len), a + d * (min(s + dash, len) / len), width: width, color: color)
-                s += dash * 2
-            }
-        }
 
         // Outline view: every shown shape as a thin line, dimmed outside isolation and the
-        // ghost focus.
+        // ghost focus. The wiggle preview moves the art every frame, so it is never kept.
         if editor.outlineView {
-            let colors = wireColors(darkMode: darkMode)
             let focus = editor.ghostFocus
-            for part in (art ?? drawing).parts {
-                let away = editor.isolatedPart.map { $0 != part.id } ?? false
-                for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
-                    let outsideGroup = !away && editor.isolatedGroup.map { $0 != shape.group } ?? false
-                    let dimmed = away || outsideGroup || (focus.map { !$0.contains(shape.id) } ?? false)
-                    let poly = shape.path.flattened(tolerance: 0.5 * px)
-                    guard !poly.isEmpty else { continue }
-                    CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                              width: 1 * px, color: dimmed ? colors.dimmed : colors.normal, to: &out)
-                }
+            let key = OverlayCache.WireframeKey(revision: editor.revision, zoom: zoom, isolatedPart: editor.isolatedPart,
+                                                isolatedGroup: editor.isolatedGroup, ghostFocus: focus, darkMode: darkMode)
+            if art == nil, cache.wireframeKey == key {
+                layers.wireframe = cache.wireframe
+            } else {
+                var b = Builder(editor: editor, px: px)
+                b.wireframe(of: art ?? editor.drawing, focus: focus, darkMode: darkMode)
+                layers.wireframe = b.out
+                cache.wireframeKey = art == nil ? key : nil
+                cache.wireframe = b.out
+                cache.generation &+= 1
             }
+        } else if cache.wireframeKey != nil || !cache.wireframe.isEmpty {
+            cache.wireframeKey = nil
+            cache.wireframe = []
+            cache.generation &+= 1
         }
 
+        var guides = Builder(editor: editor, px: px)
+        guides.guides(viewRect: viewRect, zoom: zoom)
+        layers.guides = guides.out
+
+        // The selection's outlines and anchors, which can be every shape in the drawing.
+        let key = OverlayCache.SelectionKey(revision: editor.revision, zoom: zoom, tool: editor.tool,
+                                            selection: editor.selection, selectedAnchors: editor.selectedAnchors)
+        if cache.selectionKey == key {
+            layers.selection = cache.selection
+        } else {
+            var b = Builder(editor: editor, px: px)
+            b.selection()
+            layers.selection = b.out
+            cache.selectionKey = key
+            cache.selection = b.out
+            cache.generation &+= 1
+        }
+
+        var top = Builder(editor: editor, px: px)
+        top.top()
+        layers.top = top.out
+        return layers
+    }
+}
+
+/// The editing overlay as capsule vertices, in four layers drawn in this order.
+public struct OverlayLayers: Sendable {
+    /// The outline view's wireframe of every shown shape. Kept between frames.
+    public var wireframe: [Float] = []
+    /// The character frame, symmetry axis, bones, hover feedback and a part's pivot.
+    public var guides: [Float] = []
+    /// The selection's outlines, and in direct select its anchors and handles. Kept
+    /// between frames.
+    public var selection: [Float] = []
+    /// The select tool's frame and handles, the pen path and the marquee.
+    public var top: [Float] = []
+
+    public init() {}
+}
+
+/// The overlay layers that can cost as much as tessellating the whole drawing, kept
+/// between frames: the outline view's wireframe and the selection's outlines and
+/// anchors. Each is rebuilt only when the drawing (its `revision`), the zoom or the
+/// editor state it shows changed, so hovering, the marquee and the select tool's
+/// handles don't rebuild them.
+public struct OverlayCache: Sendable {
+    struct WireframeKey: Equatable, Sendable {
+        var revision: Int
+        var zoom: Double
+        var isolatedPart: Int?
+        var isolatedGroup: Int?
+        var ghostFocus: Set<Int>?
+        var darkMode: Bool
+    }
+
+    struct SelectionKey: Equatable, Sendable {
+        var revision: Int
+        var zoom: Double
+        var tool: Tool
+        var selection: Selection
+        var selectedAnchors: Set<Int>
+    }
+
+    var wireframeKey: WireframeKey?
+    var wireframe: [Float] = []
+    var selectionKey: SelectionKey?
+    var selection: [Float] = []
+    /// Changes whenever `wireframe` or `selection` is rebuilt, so a renderer that keeps
+    /// them in a GPU buffer knows when to upload them again.
+    public internal(set) var generation = 0
+
+    public init() {}
+}
+
+/// Appends one layer's capsules. Sizes are in screen points (`px` is one point in world units).
+private struct Builder {
+    typealias Overlay = EditorOverlay
+    let editor: DrawingEditor
+    let px: Double
+    var out: [Float] = []
+
+    var drawing: Drawing { editor.drawing }
+    var accent: RGBAColor { Overlay.accent }
+
+    mutating func line(_ a: Vec2, _ b: Vec2, width: Double = 1.5, color: RGBAColor = Overlay.accent) {
+        CapsuleTessellator.append(points: [a, b], width: width * px, color: color, to: &out)
+    }
+    mutating func dot(_ p: Vec2, radius: Double, color: RGBAColor) {
+        CapsuleTessellator.append(points: [p], width: radius * 2 * px, color: color, to: &out)
+    }
+    mutating func ringDot(_ p: Vec2, radius: Double, ring: Double = 1.5) {
+        dot(p, radius: radius, color: accent)
+        dot(p, radius: radius - ring, color: Overlay.handleFill)
+    }
+
+    // Draws one shape's outline, handles and anchors (the anchor state comes from the editor).
+    // `active` is the one shape whose anchors can be selected.
+    mutating func drawAnchors(of ref: ShapeRef, showHandles: Bool, active: ShapeRef?) {
+        guard let shape = drawing.shape(ref) else { return }
+        let path = shape.path
+        // Highlight the path itself, with edges that have no outline dashed.
+        if path.hasUnstrokedSegments {
+            for i in 0..<path.segmentCount {
+                var poly = [path.points[i].position]
+                path.segment(i).flatten(tolerance: 0.5 * px, into: &poly)
+                let pieces = path.points[i].stroked ? nil
+                    : Stroker.dashes(points: poly, radii: poly.map { _ in 0 }, pattern: [4 * px, 4 * px], offset: 0)
+                for piece in pieces?.map({ $0.points }) ?? [poly] {
+                    CapsuleTessellator.append(points: piece, width: 1.5 * px, color: accent, to: &out)
+                }
+            }
+        } else {
+            let poly = path.flattened(tolerance: 0.5 * px)
+            let outline = path.closed && poly.count > 2 ? poly + [poly[0]] : poly
+            CapsuleTessellator.append(points: outline, width: 1.5 * px, color: accent, to: &out)
+        }
+
+        if showHandles {
+            for h in editor.visibleHandles(of: path) where path.points[h.index].position.distance(to: h.position) > 1e-6 {
+                line(path.points[h.index].position, h.position, width: 1)
+                dot(h.position, radius: 4, color: accent)
+            }
+        }
+        let selected = active == ref ? editor.selectedAnchors : []
+        for (i, point) in path.points.enumerated() {
+            if selected.contains(i) {
+                dot(point.position, radius: 6.5, color: accent)
+            } else if point.mode == .corner {
+                // Corner points get a smaller, heavier ring.
+                ringDot(point.position, radius: 4.5, ring: 2.5)
+            } else {
+                ringDot(point.position, radius: 5)
+            }
+        }
+    }
+
+    // Hover: what a touch would hit, the brush size, the eraser's reach, the cut point.
+    mutating func outline(of ref: ShapeRef, color: RGBAColor) {
+        guard let path = drawing.shape(ref)?.path else { return }
+        let poly = path.flattened(tolerance: 0.5 * px)
+        CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                  width: 2 * px, color: color, to: &out)
+    }
+    mutating func ring(_ center: Vec2, radius: Double, color: RGBAColor) {
+        let steps = 48
+        var points: [Vec2] = []
+        for i in 0...steps {
+            let angle = 2 * Double.pi * Double(i) / Double(steps)
+            points.append(center + Vec2(cos(angle), sin(angle)) * radius)
+        }
+        CapsuleTessellator.append(points: points, width: 1.5 * px, color: color, to: &out)
+    }
+    mutating func dashedLine(_ a: Vec2, _ b: Vec2, dash: Double, width: Double, color: RGBAColor) {
+        let d = b - a, len = d.length
+        guard len > 1e-9 else { return }
+        var s = 0.0
+        while s < len {
+            line(a + d * (s / len), a + d * (min(s + dash, len) / len), width: width, color: color)
+            s += dash * 2
+        }
+    }
+
+    /// The outline view's wireframe of `art`.
+    mutating func wireframe(of art: Drawing, focus: Set<Int>?, darkMode: Bool) {
+        let colors = Overlay.wireColors(darkMode: darkMode)
+        for part in art.parts {
+            let away = editor.isolatedPart.map { $0 != part.id } ?? false
+            for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
+                let outsideGroup = !away && editor.isolatedGroup.map { $0 != shape.group } ?? false
+                let dimmed = away || outsideGroup || (focus.map { !$0.contains(shape.id) } ?? false)
+                let poly = shape.path.flattened(tolerance: 0.5 * px)
+                guard !poly.isEmpty else { continue }
+                CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                          width: 1 * px, color: dimmed ? colors.dimmed : colors.normal, to: &out)
+            }
+        }
+    }
+
+    /// The frame, symmetry, bones, hover feedback and a part's pivot.
+    mutating func guides(viewRect: Rect?, zoom: Double) {
         // The character frame: a dashed box and the ground line across the view.
         if let frame = drawing.frame, !frame.isHidden {
             let c = frame.bounds.corners
-            for i in 0..<4 { dashedLine(c[i], c[(i + 1) % 4], dash: 8 * px, width: 1.5, color: frameColor) }
+            for i in 0..<4 { dashedLine(c[i], c[(i + 1) % 4], dash: 8 * px, width: 1.5, color: Overlay.frameColor) }
             let pad = 40 * px
             let left = min(viewRect.map { $0.minPoint.x } ?? c[0].x, c[0].x) - pad
             let right = max(viewRect.map { $0.maxPoint.x } ?? c[1].x, c[1].x) + pad
-            line(Vec2(left, frame.ground), Vec2(right, frame.ground), width: 2, color: frameColor.withAlpha(0.45))
-            line(Vec2(c[0].x, frame.ground), Vec2(c[1].x, frame.ground), width: 2, color: frameColor)
+            line(Vec2(left, frame.ground), Vec2(right, frame.ground), width: 2, color: Overlay.frameColor.withAlpha(0.45))
+            line(Vec2(c[0].x, frame.ground), Vec2(c[1].x, frame.ground), width: 2, color: Overlay.frameColor)
         }
 
         // The symmetry axis, and what symmetry will add for a shape or pen path in progress.
@@ -148,13 +267,13 @@ public enum EditorOverlay {
             let dash = 12 * px
             var y = top
             while y < bottom {
-                line(Vec2(axis, y), Vec2(axis, min(y + dash, bottom)), width: 1.5, color: symmetryColor)
+                line(Vec2(axis, y), Vec2(axis, min(y + dash, bottom)), width: 1.5, color: Overlay.symmetryColor)
                 y += dash * 2
             }
             for path in editor.mirrorPreview {
                 let poly = path.flattened(tolerance: 0.5 * px)
                 CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
-                                          width: 1.5 * px, color: symmetryColor, to: &out)
+                                          width: 1.5 * px, color: Overlay.symmetryColor, to: &out)
             }
         }
 
@@ -172,19 +291,19 @@ public enum EditorOverlay {
             for bone in drawing.bones {
                 let selected = bone.id == editor.selectedBone
                 let hovered = hover?.bone == bone.id
-                let color = selected ? accent : boneColor
+                let color = selected ? accent : Overlay.boneColor
                 // A line to the parent's tip when the bone doesn't start there.
                 if let parent = bone.parent.flatMap({ drawing.bone($0) }), parent.tail.distance(to: bone.head) > 1e-6 {
                     var dashY = 0.0
                     let d = bone.head - parent.tail, len = d.length, step = 6 * px
                     while dashY < len {
                         line(parent.tail + d * (dashY / len), parent.tail + d * (min(dashY + step, len) / len),
-                             width: 1, color: boneColor)
+                             width: 1, color: Overlay.boneColor)
                         dashY += step * 2
                     }
                 }
                 let outlinePoints = BoneMetrics.outline(of: bone, zoom: zoom)
-                let fill = selected ? accent.withAlpha(0.35) : boneColor.withAlpha(0.25)
+                let fill = selected ? accent.withAlpha(0.35) : Overlay.boneColor.withAlpha(0.25)
                 // A soft fill down the middle of the bone (one capsule, so nothing overlaps and darkens).
                 let w = BoneMetrics.halfWidth(of: bone, zoom: zoom)
                 if bone.length > 1e-6 {
@@ -198,13 +317,16 @@ public enum EditorOverlay {
                 for (handle, point) in [(BoneHandle.head, bone.head), (.tail, bone.tail)] {
                     let lit = hovered && hover?.handle == handle
                     dot(point, radius: lit ? jointRadius + 2 : jointRadius, color: color)
-                    dot(point, radius: (lit ? jointRadius + 2 : jointRadius) - 1.5, color: handleFill)
+                    dot(point, radius: (lit ? jointRadius + 2 : jointRadius) - 1.5, color: Overlay.handleFill)
                 }
             }
         }
 
-        if let target = editor.hoverTarget, !drawing.shapeRefs(in: editor.selection).contains(target) || editor.tool == .eraser {
-            outline(of: target, color: editor.tool == .eraser ? eraserColor : accent)
+        // The scissors find the target and the cut point in one search.
+        let cut = editor.tool == .scissors ? editor.hoverCut : nil
+        let target = editor.tool == .scissors ? cut?.ref : editor.hoverTarget
+        if let target, editor.tool == .eraser || !drawing.shapeRefs(in: editor.selection).contains(target) {
+            outline(of: target, color: editor.tool == .eraser ? Overlay.eraserColor : accent)
         }
         if let hover = editor.hoverPoint {
             switch editor.tool {
@@ -213,9 +335,9 @@ public enum EditorOverlay {
                     ring(hover, radius: max(editor.style.outlineWidth / 2, 1.5 * px), color: editor.style.outline)
                 }
             case .eraser:
-                ring(hover, radius: EditorMetrics.eraserRadius * px, color: eraserColor)
+                ring(hover, radius: EditorMetrics.eraserRadius * px, color: Overlay.eraserColor)
             case .scissors:
-                if let cut = editor.scissorsPreview { ringDot(cut, radius: 6) }
+                if let point = cut?.point { ringDot(point, radius: 6) }
             case .pen, .select, .directSelect, .shape, .bone:
                 break
             }
@@ -227,18 +349,29 @@ public enum EditorOverlay {
             line(part.pivot - Vec2(0, 8 * px), part.pivot + Vec2(0, 8 * px), width: 1.5)
             ringDot(part.pivot, radius: 3.5)
         }
+    }
 
+    /// The selection's outlines (scissors) or outlines, anchors and handles (direct select).
+    mutating func selection() {
         switch editor.tool {
-        case .pencil, .shape, .eraser, .bone:
-            break
-
         case .scissors:
             for ref in drawing.shapeRefs(in: editor.selection) { outline(of: ref, color: accent) }
+        case .directSelect:
+            let refs = drawing.shapeRefs(in: editor.selection)
+            let active = refs.count == 1 ? refs[0] : nil
+            for ref in refs { drawAnchors(of: ref, showHandles: true, active: active) }
+        case .pencil, .shape, .eraser, .bone, .pen, .select:
+            break
+        }
+    }
 
+    /// The pen path, the select tool's frame and handles, and the marquee.
+    mutating func top() {
+        switch editor.tool {
         case .pen:
             if let pen = editor.penPath {
                 let ref = ShapeRef(part: pen.part, shape: pen.shape)
-                drawAnchors(of: ref, showHandles: false)
+                drawAnchors(of: ref, showHandles: false, active: editor.activeShape)
                 if let path = drawing.shape(ref)?.path, let last = pen.fromStart ? path.points.first : path.points.last {
                     // Handles of the point just placed, so the pull is visible.
                     if last.inHandle != .zero { line(last.position, last.inControl, width: 1); dot(last.inControl, radius: 4, color: accent) }
@@ -278,14 +411,13 @@ public enum EditorOverlay {
                 }
             }
 
-        case .directSelect:
-            for ref in drawing.shapeRefs(in: editor.selection) { drawAnchors(of: ref, showHandles: true) }
+        case .pencil, .shape, .eraser, .bone, .scissors, .directSelect:
+            break
         }
 
         if let marquee = editor.marquee {
             let c = marquee.corners
             for i in 0..<4 { line(c[i], c[(i + 1) % 4], width: 1) }
         }
-        return out
     }
 }

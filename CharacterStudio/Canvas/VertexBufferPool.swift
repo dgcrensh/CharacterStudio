@@ -42,9 +42,9 @@ final class VertexBufferPool {
         var isPinned = false
     }
 
-    /// Enough for the art, the live and mirrored strokes and the overlay with three
-    /// frames in flight.
-    private static let maxSlots = 16
+    /// Enough for the art and the overlay's kept layers (pinned), and the live and
+    /// mirrored strokes and the overlay's two per-frame layers with three frames in flight.
+    private static let maxSlots = 20
     private static let minimumLength = 64 * 1024
 
     private let device: any MTLDevice

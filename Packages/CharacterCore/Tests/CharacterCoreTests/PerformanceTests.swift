@@ -238,15 +238,70 @@ final class PerformanceTests: XCTestCase {
 
     // MARK: Overlay
 
-    /// The outline view draws every shape as a wireframe in the overlay, every frame.
+    /// The outline view draws every shape as a wireframe in the overlay: one frame that
+    /// rebuilds it, as after an edit or a zoom.
     func testOverlayInOutlineView() {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
         editor.outlineView = true
         editor.selection = .part(drawing.parts[0].id)
         measure {
-            _ = EditorOverlay.vertices(for: editor, zoom: 1)
+            var cache = OverlayCache()
+            _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
         }
+    }
+
+    /// 20 frames of the Pencil hovering across the middle of the art, the overlay built
+    /// for each as the renderer builds it: the kept layers come from a cache warmed by
+    /// the frame before the hover starts.
+    private func measureHoverFrames(_ editor: DrawingEditor) {
+        let start = StressDrawing.busyPoint()
+        var warm = OverlayCache()
+        _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &warm)
+        measure {
+            var editor = editor
+            var cache = warm
+            var floats = 0
+            for i in 0..<20 {
+                editor.pencilHovered(at: start + Vec2(Double(i) * 2, 0), zoom: 1)
+                let layers = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
+                floats += layers.wireframe.count + layers.guides.count + layers.selection.count + layers.top.count
+            }
+            XCTAssertGreaterThan(floats, 0)
+        }
+    }
+
+    /// Hovering in the outline view, with a part selected.
+    func testOverlayHoverInOutlineView() {
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .select
+        editor.outlineView = true
+        editor.selection = .part(drawing.parts[0].id)
+        measureHoverFrames(editor)
+    }
+
+    /// Hovering in direct select with everything selected: every shape's anchors show.
+    func testOverlayHoverDirectSelectAll() {
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .directSelect
+        editor.selection = everything
+        measureHoverFrames(editor)
+    }
+
+    /// Hovering with the scissors over one selected part: the cut point follows the Pencil.
+    func testOverlayHoverScissors() {
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .scissors
+        editor.selection = .part(drawing.parts[0].id)
+        measureHoverFrames(editor)
+    }
+
+    /// Hovering in the select tool, which outlines what a tap would pick.
+    func testOverlayHoverSelect() {
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .select
+        editor.selection = .part(drawing.parts[0].id)
+        measureHoverFrames(editor)
     }
 
     // MARK: Undo

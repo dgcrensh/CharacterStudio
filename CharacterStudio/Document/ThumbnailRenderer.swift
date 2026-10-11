@@ -2,6 +2,7 @@ import CharacterCore
 import CoreGraphics
 import Foundation
 import ImageIO
+import Synchronization
 import UniformTypeIdentifiers
 
 /// Draws the character's art into the package's `thumbnail.png`, and into PNG exports,
@@ -10,7 +11,19 @@ enum ThumbnailRenderer {
     /// The longest side an exported PNG may have, in pixels.
     static let maxExportSide = 8192.0
 
+    /// The last thumbnail made, and what it was made from: a save with no change to the
+    /// art since the last one reuses it. Comparing is cheap when nothing changed, since
+    /// the drawing's arrays then share storage.
+    private static let lastThumbnail = Mutex<(drawing: Drawing, size: Int, png: Data?)?>(nil)
+
     static func png(for drawing: Drawing, size: Int = 512) -> Data? {
+        if let last = lastThumbnail.withLock({ $0 }), last.size == size, last.drawing == drawing { return last.png }
+        let png = renderPNG(for: drawing, size: size)
+        lastThumbnail.withLock { $0 = (drawing, size, png) }
+        return png
+    }
+
+    private static func renderPNG(for drawing: Drawing, size: Int) -> Data? {
         let bounds = drawing.parts.reduce(Rect.null) { $0.union($1.bounds) }
         guard !bounds.isNull, max(bounds.width, bounds.height) > 0 else { return nil }
         guard let context = makeContext(width: size, height: size) else { return nil }
@@ -23,7 +36,8 @@ enum ThumbnailRenderer {
         context.translateBy(x: CGFloat(side / 2), y: CGFloat(side / 2))
         context.scaleBy(x: CGFloat(k), y: CGFloat(k))
         context.translateBy(x: CGFloat(-bounds.center.x), y: CGFloat(-bounds.center.y))
-        drawArt(drawing, in: context, tolerance: 0.5 / k, skipHidden: false)
+        // A pixel's tolerance: finer flattening and joins don't show at this size.
+        drawArt(drawing, in: context, tolerance: 1 / k, skipHidden: false)
         return encode(context)
     }
 
@@ -51,13 +65,17 @@ enum ThumbnailRenderer {
     private static func drawArt(_ drawing: Drawing, in context: CGContext, tolerance: Double, skipHidden: Bool) {
         for part in drawing.parts {
             let clips = part.clipPlan()
+            // Each base's mask, made once for all the shapes it clips.
+            var masks: [Int: CGPath] = [:]
             for (index, shape) in part.shapes.enumerated() {
                 if skipHidden, !part.isShown(index) { continue }
                 if let base = clips.base(of: index) {
                     if skipHidden, !part.isShown(base) { continue }
+                    let mask = masks[base] ?? clipMask(part.shapes[base], tolerance: tolerance)
+                    masks[base] = mask
                     // Clipped shapes draw only where their base draws.
                     context.saveGState()
-                    context.addPath(clipMask(part.shapes[base], tolerance: tolerance))
+                    context.addPath(mask)
                     context.clip(using: .winding)
                     draw(shape, in: context, tolerance: tolerance)
                     context.restoreGState()

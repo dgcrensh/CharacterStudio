@@ -24,18 +24,19 @@ frame or every touch sample.**
 | 2 | A drag rebuilds the whole drawing and re-uploads every vertex per sample (shipped) | `DrawingEditor.swift:437-441`, `ArtBatch.swift:155-179`, `CanvasRenderer.swift:282-302` | Moving a part with many shapes | M |
 | 3 | Clip-base lookups are O(n) per shape, so a part's art pass is O(n²) (shipped; smaller than estimated) | `Drawing.swift:168-193`, `ArtBatch.swift:189-219` | Parts with hundreds of shapes, worse with clipping (#17) | S |
 | 4 | `refresh()` recomputes ~90 derived values, several O(all shapes), after every edit and every color-picker tick (shipped) | `CanvasStore.swift:221-331` | Picker drags, layers panel open | M |
-| 5 | Overlay re-flattens the selection, hover target and (in outline view) every shape each frame | `EditorOverlay.swift:62-64`, `114-128`, `206-208`, `262-283` | Outline view, large selections | S-M |
+| 5 | Overlay re-flattens the selection, hover target and (in outline view) every shape each frame (shipped) | `EditorOverlay.swift:62-64`, `114-128`, `206-208`, `262-283` | Outline view, large selections | S-M |
 | 6 | Three fresh `MTLBuffer`s per frame and a full vertex re-upload per art rebuild (shipped) | `CanvasRenderer.swift:301`, `397-406` | Every frame while drawing or editing | S |
 | 7 | Undo history is unbounded and holds whole-drawing snapshots (shipped) | `UndoStack.swift:6`, `DrawingEditor.swift:1541` | Long sessions, memory | S |
-| 8 | Full-screen stencil passes per clip base and group; 4x MSAA everywhere | `ArtBatch.swift:199-203`, `243`; `CanvasRenderer.swift:75` | Many clipped shapes, fill-rate on 12.9" at 2x | M |
-| 9 | Document hand-off and thumbnail re-render on every finished change, including picker ticks | `CanvasStore.swift:187-197`, `CharacterDocument.swift:28-31` | Autosave churn, I/O | S |
+| 8 | Full-screen stencil passes per clip base and group; 4x MSAA everywhere (clip clears shipped; MSAA unmeasured) | `ArtBatch.swift:199-203`, `243`; `CanvasRenderer.swift:75` | Many clipped shapes, fill-rate on 12.9" at 2x | M |
+| 9 | Document hand-off and thumbnail re-render on every finished change, including picker ticks (shipped) | `CanvasStore.swift:187-197`, `CharacterDocument.swift:28-31` | Autosave churn, I/O | S |
 | 10 | No benchmarks or signposts, so none of this is measured (shipped: see below) | `Packages/CharacterCore/Tests` | Now | S |
 
 Suggested order: 10 first (so the rest can be checked), then 1, 3, 6, 7 as quick wins, then 2 and 4,
 then 5, 8, 9. 10 shipped first; the quick wins 1 (its cheap half), 3, 6 and 7 shipped next, on top of
 it, with before and after numbers under "Measuring performance". 2 and 4 followed, and found what
 really dominated art rebuilds and the outline view: a `reserveCapacity` call that made appending
-vertices quadratic (see finding 2).
+vertices quadratic (see finding 2). 5, 8 and 9 came last; the biggest find there was direct select
+looking up the whole selection once per selected shape (see finding 5).
 
 ## What already works well
 
@@ -289,6 +290,33 @@ Recommendations:
   result on the editor, rather than per rendered frame; hover events are the only thing that changes
   them.
 
+Shipped (2026-10-11), measured with new hover tests (20 hover frames over the middle of the full
+stress drawing, overlay built for each):
+
+- The worst case was not flattening. Direct select drew each selected shape's anchors after asking
+  `editor.activeShape`, which walks the whole selection, so select all in direct select was quadratic:
+  about 227 ms per frame at full size. The overlay now asks once per frame.
+- `EditorOverlay.layers(for:...cache:)` returns four layers in drawing order: the outline view's
+  wireframe, the guides (frame, symmetry, bones, hover feedback, a part's pivot), the selection's
+  outlines and anchors (scissors, direct select), and the top (pen path, the select tool's frame and
+  handles, the marquee). `OverlayCache` keeps the wireframe and selection layers and rebuilds each only
+  when its key changes: the drawing's `revision` and the exact zoom, plus isolation, ghost focus and
+  dark mode for the wireframe, and tool, selection and selected anchors for the selection. The wiggle
+  preview's moving art is never kept. The renderer uploads the kept layers into one pinned pool buffer
+  when the cache's `generation` changes and draws them between the per-frame layers, so a hover frame
+  copies nothing large. `EditorOverlay.vertices` still returns everything in one array, and a test
+  steps one cache through hover, selection, anchor, zoom, tool, view and undo changes and checks every
+  frame against a fresh build.
+- The scissors' hover outline and cut point come from one search (`DrawingEditor.hoverCut`) rather
+  than two.
+- Not done: the zoom key is exact, so a pinch still rebuilds the kept layers every frame (widths are
+  baked into the capsules in world units; a zoom bucket would draw them too thick or thin until the
+  next bucket). Hover results are not stored on the editor: frames are drawn when something changes,
+  so per frame is already per hover event, and a stored result would go stale on undo or a keyboard
+  command while hovering. The wireframe still flattens on its own rather than reading the art cache,
+  which the outline view skips; a rebuild costs 16 ms at full size, which only edits and pinches pay.
+  The scissors' cut search is still a pass over every editable shape (about 1.3 ms per frame).
+
 ### 6. Three fresh `MTLBuffer`s per frame and a full vertex re-upload per art rebuild (S)
 
 `drawCapsules` allocates a new shared-storage `MTLBuffer` for the live stroke, the mirrored stroke
@@ -371,6 +399,20 @@ Recommendations:
   (`CanvasRenderer.swift:332-335`), which is fine, but note that it is rebuilt per step rather than
   stored in the batch.
 
+Shipped (2026-10-11), on the tree without PR #17, which has no clipped groups yet, so only the
+clip base's clear existed:
+
+- A clip base clears the clip bit with a `stencil` step over a rectangle instead of `stencilView`:
+  the union of the cover rectangles of the shapes it clips, which are the only places those shapes
+  test the bit. No other shape reads the clip bit, so a stale bit outside the rectangle is harmless,
+  and a base with nothing clipped shown clears nothing. While a live transform moves the base or one
+  of its clipped shapes the clear stays full-view, since one rectangle can't follow both. Tests
+  check the rectangle and play overlapping bases through the stencil simulator; the existing
+  "clip starts over for each base" test covers a stale bit under a later base's clipped shape.
+  PR #17's `copyClipToMask` and `restoreClip` should get the same treatment when it lands.
+- MSAA and the double-drawn covers are untouched: GPU time can't be measured off a device, and
+  nothing here shows fill rate is a problem. Record a Metal System Trace on a 12.9-inch iPad first.
+
 ### 9. Document hand-off and thumbnail re-render on every finished change (S)
 
 `updateDocument()` (`CanvasStore.swift:187-197`) builds a `CharacterPackage` and hands it to the
@@ -392,6 +434,22 @@ Recommendations:
   skipping it when the drawing hasn't changed since the last thumbnail.
 - Compare `sentDocuments` by drawing identity (a revision tag stored in the package) rather than by
   value.
+
+Shipped (2026-10-11):
+
+- `DocumentHandOff` (CharacterCore) decides when `CanvasStore` hands the drawing to the document.
+  Restyles (`refreshStyle`: colors, outline width, opacity, gradients, global colors) are held until
+  `quietPeriod` (0.5 s) passes without another, then handed off once; any other finished change hands
+  off at once, with whatever was held. The store flushes a held change when the document's view goes
+  away or the scene leaves the foreground. A two-second picker drag at 60 ticks a second went from 120
+  hand-offs (and as many chances for an autosave) to one, which the tests check.
+- `ThumbnailRenderer.png` keeps the last thumbnail and the drawing it came from, and reuses it when a
+  save finds the same art (a reference image or name change, a save on close). It flattens and strokes
+  at one thumbnail pixel instead of half of one, and builds each clip base's mask once instead of once
+  per clipped shape. None of this can run on Linux, so it has no benchmark.
+- `sentDocuments` still compares by value: equality of a package the editor sent returns at the first
+  array whose storage is shared, so it is a few pointer checks, and the tag would have to be kept out
+  of the package's `==`.
 
 ### 10. Nothing is measured (S): shipped
 
@@ -491,6 +549,26 @@ the new tests is PR #19's code with the new test file:
 So a select-all drag of the full stress drawing went from about 0.9 s per sample to about 1 ms of
 editor work per sample and no art work, plus one 55 ms rebuild when the Pencil lifts. The hit-test
 and undo rows are within run-to-run noise.
+
+After findings 5, 8 and 9 (on top of the table above), same machine and settings. The new hover
+tests time 20 hover frames each; their "before" is PR #20's code with the new tests:
+
+| Test | Before | After |
+| --- | --- | --- |
+| `testOverlayHoverDirectSelectAll` (new: everything selected in direct select) | 4.549 | 0.008 |
+| `testOverlayHoverInOutlineView` (new) | 0.245 | 0.008 |
+| `testOverlayHoverScissors` (new: one part selected) | 0.055 | 0.027 |
+| `testOverlayHoverSelect` (new: one part selected) | 0.007 | 0.007 |
+| `testOverlayInOutlineView` (one frame that rebuilds the wireframe) | 0.016 | 0.016 |
+| `testArtBuildCold` / `testArtBuildWarm` | 0.069 / 0.011 | 0.069 / 0.011 |
+| `testArtBuildWarmOnePart` (a third of the shapes clipped) | 0.011 | 0.011 |
+| `testEncodeAndFormat` | 0.157 | 0.158 |
+
+So a hover frame in direct select with everything selected went from about 227 ms to 0.4 ms, and one
+in the outline view from about 12 ms to 0.4 ms, which is the select tool's hit test. Rebuilding the
+wireframe after an edit costs what a frame used to. The art rows (two runs each, side by side) show
+the clip rectangles cost nothing measurable to build; they add six vertices per base. Finding 9's
+gains are in hand-offs and saves, not in anything these tests time.
 
 What they said before these fixes: a warm art rebuild costs nearly as much as a cold one at this size, so the
 per-shape cache is not what dominates; the outline view's overlay is the worst case by an order of

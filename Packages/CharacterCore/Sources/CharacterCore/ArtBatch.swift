@@ -90,7 +90,8 @@ public enum ArtStep: Hashable, Sendable {
     case stencil(vertices: Range<Int>, state: StencilState, reference: UInt8)
     /// A rectangle (two triangles) painted with `paint` where the stencil test passes.
     case cover(vertices: Range<Int>, paint: ArtPaint, state: StencilState, reference: UInt8)
-    /// A stencil-only pass over the whole view.
+    /// A stencil-only pass over the whole view. Clearing the clip uses a rectangle
+    /// (`stencil`) instead, except while a live transform moves the shapes involved.
     case stencilView(state: StencilState, reference: UInt8)
     /// Dims everything drawn so far: the parts outside isolation.
     case veil
@@ -197,8 +198,31 @@ public struct ArtBuilder: Sendable {
             }
             let geometry = tessellation(of: shape, tolerance: tolerance)
             let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1
-            append(shape, geometry, role: role, fade: fade, to: &batch)
+            let clear = role == .base ? clipArea(of: index, in: part, clips: clips, drawn: drawn, tolerance: tolerance) : nil
+            append(shape, geometry, role: role, clipArea: clear, fade: fade, to: &batch)
         }
+    }
+
+    /// Where clearing the clip for base `index` matters: the union of the cover
+    /// rectangles of the shapes it clips, which test the clip only inside them. Other
+    /// shapes never read the clip bit, so a stale bit elsewhere does no harm. Nil while
+    /// a live transform moves the base or a shape it clips, since the rectangle would
+    /// have to move with some of them and not others; the clear then covers the view.
+    private mutating func clipArea(of index: Int, in part: Part, clips: ClipPlan, drawn: Set<Int>,
+                                   tolerance: Double) -> Rect? {
+        guard !moving.contains(part.shapes[index].id) else { return nil }
+        var area = Rect.null
+        var j = index + 1
+        while j < part.shapes.count, clips.base(of: j) == index {
+            defer { j += 1 }
+            let shape = part.shapes[j]
+            guard part.isShown(j), drawn.contains(j) else { continue }
+            if moving.contains(shape.id) { return nil }
+            let geometry = tessellation(of: shape, tolerance: tolerance)
+            if shape.visibleFill != nil, !geometry.fan.isEmpty { area = area.union(geometry.fanBounds) }
+            if shape.stroke != nil, !geometry.outline.isEmpty { area = area.union(geometry.outlineBounds) }
+        }
+        return area
     }
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {
@@ -219,13 +243,23 @@ public struct ArtBuilder: Sendable {
         return result
     }
 
-    private mutating func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, fade: Double,
-                        to batch: inout ArtBatch) {
-        if role == .base { batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0)) }
+    /// `clipArea` bounds the clip clear before a base (see `clipArea(of:in:clips:drawn:tolerance:)`).
+    private mutating func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, clipArea: Rect?,
+                                 fade: Double, to batch: inout ArtBatch) {
         let moves = moving.contains(shape.id)
         if moves != isMoving {
             batch.steps.append(.moving(moves))
             isMoving = moves
+        }
+        if role == .base {
+            if let clipArea {
+                // Nothing clipped draws: no clip to clear.
+                if !clipArea.isNull {
+                    batch.steps.append(.stencil(vertices: batch.addRect(clipArea), state: ArtStencil.clearClip, reference: 0))
+                }
+            } else {
+                batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0))
+            }
         }
 
         if let fill = shape.visibleFill, !geometry.fan.isEmpty {

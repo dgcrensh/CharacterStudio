@@ -115,6 +115,13 @@ final class CanvasRenderer {
     private var liveTessellator = LiveStrokeTessellator()
     private var mirroredTessellator = LiveStrokeTessellator()
 
+    // The overlay's kept layers (the outline view's wireframe and the selection's
+    // outlines and anchors), in one pinned buffer uploaded when they change.
+    private var overlayCache = OverlayCache()
+    private var overlayGeneration = -1
+    private var overlayBuffer: VertexBufferPool.Handle?
+    private var overlayKept: (wireframe: Range<Int>, selection: Range<Int>) = (0..<0, 0..<0)
+
     private var textures: [Int: any MTLTexture] = [:]
 
     /// Supplies the pixels for a reference image id.
@@ -247,8 +254,9 @@ final class CanvasRenderer {
         let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
         if !editor.outlineView { drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen)) }
 
-        // The overlay changes every frame, so it is built fresh. The live strokes keep
-        // their committed segments and add only what is new.
+        // The live strokes keep their committed segments and add only what is new. The
+        // overlay keeps its costly layers until what they show changes and builds the
+        // rest every frame.
         encoder.setDepthStencilState(plainState)
         encoder.setRenderPipelineState(strokePipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
@@ -262,10 +270,20 @@ final class CanvasRenderer {
         }
         let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
         let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
-            EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
-                                   art: shown, darkMode: darkMode)
+            EditorOverlay.layers(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
+                                 art: shown, darkMode: darkMode, cache: &overlayCache)
         }
-        drawCapsules(overlay, encoder: encoder)
+        if overlayCache.generation != overlayGeneration {
+            overlayGeneration = overlayCache.generation
+            if let overlayBuffer { buffers.release(overlayBuffer) }
+            overlayBuffer = buffers.upload([overlay.wireframe, overlay.selection], pin: true)
+            let wire = overlay.wireframe.count
+            overlayKept = (0..<wire, wire..<(wire + overlay.selection.count))
+        }
+        drawKeptOverlay(overlayKept.wireframe, encoder: encoder)
+        drawCapsules(overlay.guides, encoder: encoder)
+        drawKeptOverlay(overlayKept.selection, encoder: encoder)
+        drawCapsules(overlay.top, encoder: encoder)
 
         encoder.endEncoding()
         commandBuffer.present(drawable)
@@ -454,6 +472,14 @@ final class CanvasRenderer {
             encoder.setVertexBuffer(handle.buffer, offset: 0, index: 0)
         }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: count / CapsuleTessellator.floatsPerVertex)
+    }
+
+    /// Draws `floats` of the kept overlay buffer.
+    private func drawKeptOverlay(_ floats: Range<Int>, encoder: any MTLRenderCommandEncoder) {
+        guard let overlayBuffer, !floats.isEmpty else { return }
+        buffers.use(overlayBuffer)
+        encoder.setVertexBuffer(overlayBuffer.buffer, offset: floats.lowerBound * MemoryLayout<Float>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: floats.count / CapsuleTessellator.floatsPerVertex)
     }
 
     // MARK: Reference images
