@@ -700,7 +700,21 @@ What the split says:
 
 #### Step 5: hover index
 
-Numbers to follow.
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Hover frame (select tool) | before | 0.062 | 0.100 | 0.120 | 0.213 | 0.331 |
+| | after | 0.048 | 0.050 | 0.049 | 0.049 | 0.049 |
+| Select hover, hit test only | after | 0.005 | 0.008 | 0.005 | 0.007 | 0.005 |
+| Scissors hover | before | 0.898 | 0.936 | 0.381 | 1.20 | 1.09 |
+| | after | 0.080 | 0.080 | 0.027 | 0.079 | 0.032 |
+| Eraser sample | before | 0.044 | 0.100 | 0.223 | 0.399 | 0.906 |
+| | after | 0.024 | 0.037 | 0.078 | 0.081 | 0.214 |
+
+Hover and scissors are now flat across sizes; scissors is 10 to 30x faster, mostly from the segment skip.
+The eraser is 4x faster at 2,400 shapes but still grows, since the stress drawing packs more shapes under
+the same eraser path as it gets denser.
 
 ## Smaller notes
 
