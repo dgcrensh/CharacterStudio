@@ -117,6 +117,8 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertEqual(torso.gradient?.stops.map(\.color.hexString), ["#5A8DEEFF", "#3655A0FF"])
         XCTAssertEqual(torso.stroke, StrokeStyle(color: RGBAColor(hex: "#222222")!, width: 3, join: .miter, global: ink))
         XCTAssertFalse(torso.path.points[0].isSmooth)
+        // The neck edge is bare, so the head covers it without a seam.
+        XCTAssertEqual(torso.path.points.map(\.stroked), [false, true, true, true, true])
         XCTAssertTrue(torso.path.points[2].isSmooth)
         XCTAssertEqual(torso.path.points[2].outHandle, Vec2(-8, 14))
         XCTAssertTrue(d.parts[0].shapes[1].isClipped)

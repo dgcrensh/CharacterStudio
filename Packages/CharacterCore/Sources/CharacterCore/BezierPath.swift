@@ -111,6 +111,10 @@ public struct PathPoint: Hashable, Sendable, Codable {
     /// The outline's width here, as a multiple of the stroke width (the file's `w`).
     /// Widths blend linearly along each segment; 1 everywhere is a uniform outline.
     public var width: Double = 1
+    /// Whether the segment leaving this point is outlined (the file's `stroked`).
+    /// False leaves that edge bare while the fill still covers it. Ignored on the
+    /// last point of an open path, which has no segment leaving it.
+    public var stroked = true
 
     public init(_ position: Vec2, in inHandle: Vec2 = .zero, out outHandle: Vec2 = .zero, smooth: Bool = true) {
         self.position = position
@@ -211,6 +215,35 @@ public struct BezierPath: Hashable, Sendable, Codable {
         return (out, widths)
     }
 
+    /// True when some segment of the path is left without an outline.
+    public var hasUnstrokedSegments: Bool {
+        (0..<segmentCount).contains { !points[$0].stroked }
+    }
+
+    /// The outlined parts of the path as open paths, in order, each running over
+    /// consecutive stroked segments. The whole path when every segment is stroked.
+    public func strokedRuns() -> [BezierPath] {
+        let count = segmentCount
+        guard count > 0, hasUnstrokedSegments else { return [self] }
+        let n = points.count
+        // A closed path is walked from just after a bare segment, so no run wraps past its start.
+        let start = closed ? ((0..<count).first { !points[$0].stroked }! + 1) % n : 0
+        var runs: [BezierPath] = []
+        var current: [PathPoint] = []
+        for k in 0..<count {
+            let i = (start + k) % n
+            if points[i].stroked {
+                if current.isEmpty { current.append(points[i]) }
+                current.append(points[(i + 1) % n])
+            } else if !current.isEmpty {
+                runs.append(BezierPath(points: current))
+                current = []
+            }
+        }
+        if !current.isEmpty { runs.append(BezierPath(points: current)) }
+        return runs
+    }
+
     /// True when some anchor's width is not 1.
     public var hasVariableWidth: Bool { points.contains { $0.width != 1 } }
 
@@ -248,6 +281,8 @@ public struct BezierPath: Hashable, Sendable, Codable {
         points[b].inHandle = r.p2 - r.p3
         var new = PathPoint(l.p3, in: l.p2 - l.p3, out: r.p1 - r.p0, smooth: true)
         new.width = points[a].width + (points[b].width - points[a].width) * t
+        // Both halves of a bare segment stay bare.
+        new.stroked = points[a].stroked
         points.insert(new, at: a + 1)
         return a + 1
     }
@@ -384,13 +419,17 @@ public struct BezierPath: Hashable, Sendable, Codable {
 
     /// The path traversed backwards: points reversed and each point's handles swapped.
     public func reversed() -> BezierPath {
-        let flipped = points.reversed().map { point -> PathPoint in
+        let n = points.count
+        var flipped = points.reversed().map { point -> PathPoint in
             var p = point
             let tmp = p.inHandle
             p.inHandle = p.outHandle
             p.outHandle = tmp
             return p
         }
+        // Segment j now runs from old point n-1-j to old point n-2-j, whose flag it carries.
+        for j in flipped.indices { flipped[j].stroked = points[((n - 2 - j) % n + n) % n].stroked }
+        if !closed, n > 0 { flipped[n - 1].stroked = true }
         return BezierPath(points: flipped, closed: closed)
     }
 
@@ -409,9 +448,13 @@ public struct BezierPath: Hashable, Sendable, Codable {
         if let last = points.last, let head = rest.first, last.position.distance(to: head.position) <= tolerance {
             var merged = last
             merged.outHandle = head.outHandle
+            merged.stroked = head.stroked
             merged.mode = .corner
             points[points.count - 1] = merged
             rest.removeFirst()
+        } else if !points.isEmpty {
+            // The new connecting segment is outlined.
+            points[points.count - 1].stroked = true
         }
         return BezierPath(points: points + rest, closed: false)
     }
@@ -427,6 +470,9 @@ public struct BezierPath: Hashable, Sendable, Codable {
             result.points[0].inHandle = last.inHandle
             result.points[0].mode = .corner
             result.points.removeLast()
+        } else {
+            // The closing segment is outlined.
+            result.points[result.points.count - 1].stroked = true
         }
         return result
     }
@@ -444,12 +490,14 @@ public struct BezierPath: Hashable, Sendable, Codable {
             pts[0].mode = .corner
             pts[n].outHandle = .zero
             pts[n].mode = .corner
+            pts[n].stroked = true
             return [BezierPath(points: pts, closed: false)]
         }
         guard i > 0, i < points.count - 1 else { return nil }
         var head = Array(points[0...i])
         head[i].outHandle = .zero
         head[i].mode = .corner
+        head[i].stroked = true
         var tail = Array(points[i...])
         tail[0].inHandle = .zero
         tail[0].mode = .corner

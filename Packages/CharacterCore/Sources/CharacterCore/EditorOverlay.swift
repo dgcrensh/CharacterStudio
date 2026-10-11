@@ -47,10 +47,22 @@ public enum EditorOverlay {
         func drawAnchors(of ref: ShapeRef, showHandles: Bool) {
             guard let shape = drawing.shape(ref) else { return }
             let path = shape.path
-            // Highlight the path itself.
-            let poly = path.flattened(tolerance: 0.5 * px)
-            let outline = path.closed && poly.count > 2 ? poly + [poly[0]] : poly
-            CapsuleTessellator.append(points: outline, width: 1.5 * px, color: accent, to: &out)
+            // Highlight the path itself, with edges that have no outline dashed.
+            if path.hasUnstrokedSegments {
+                for i in 0..<path.segmentCount {
+                    var poly = [path.points[i].position]
+                    path.segment(i).flatten(tolerance: 0.5 * px, into: &poly)
+                    let pieces = path.points[i].stroked ? nil
+                        : Stroker.dashes(points: poly, radii: poly.map { _ in 0 }, pattern: [4 * px, 4 * px], offset: 0)
+                    for piece in pieces?.map({ $0.points }) ?? [poly] {
+                        CapsuleTessellator.append(points: piece, width: 1.5 * px, color: accent, to: &out)
+                    }
+                }
+            } else {
+                let poly = path.flattened(tolerance: 0.5 * px)
+                let outline = path.closed && poly.count > 2 ? poly + [poly[0]] : poly
+                CapsuleTessellator.append(points: outline, width: 1.5 * px, color: accent, to: &out)
+            }
 
             if showHandles {
                 for h in editor.visibleHandles(of: path) where path.points[h.index].position.distance(to: h.position) > 1e-6 {
