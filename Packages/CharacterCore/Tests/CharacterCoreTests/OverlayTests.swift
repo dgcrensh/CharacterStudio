@@ -16,7 +16,9 @@ final class OverlayTests: XCTestCase {
     }
 
     /// Steps through hover, selection, anchor, tool, view, zoom and drawing changes with
-    /// one cache, comparing each frame with a fresh build.
+    /// one cache, comparing each frame with a fresh build at the same zoom (so the same
+    /// zoom bucket). Hovering and a zoom inside the bucket keep the kept layers; a zoom
+    /// across a bucket rebuilds them.
     func testCachedLayersMatchAFreshBuild() {
         var editor = editor()
         var cache = OverlayCache()
@@ -30,11 +32,16 @@ final class OverlayTests: XCTestCase {
             ("one shape", { e, _ in e.selection = .shape(part: first.part, shape: first.shape) }),
             ("an anchor", { e, _ in e.selectedAnchors = [2] }),
             ("two anchors", { e, _ in e.selectedAnchors = [2, 5] }),
-            ("zoom", { _, z in z = 2.5 }),
+            ("zoom inside the bucket", { _, z in z = 0.75 }),
+            ("zoom across a bucket", { _, z in z = 2.5 }),
+            ("zoom inside the new bucket", { _, z in z = 3.9 }),
             ("edit", { e, _ in e.setFill(.white) }),
             ("scissors", { e, _ in e.tool = .scissors }),
             ("scissors hover", { e, _ in e.pencilHovered(at: StressDrawing.busyPoint(parts: 3), zoom: 2.5) }),
             ("outline view", { e, _ in e.outlineView = true }),
+            ("pinch inside the bucket", { _, z in z = 2.1 }),
+            ("pinch across a bucket", { _, z in z = 4.5 }),
+            ("pinch out across a bucket", { _, z in z = 0.3 }),
             ("ghosting", { e, _ in e.ghostsUnselected = true }),
             ("select tool", { e, _ in e.tool = .select }),
             ("dark", { _, _ in }),
@@ -47,11 +54,37 @@ final class OverlayTests: XCTestCase {
             let dark = name == "dark"
             let layers = EditorOverlay.layers(for: editor, zoom: zoom, darkMode: dark, cache: &cache)
             XCTAssertEqual(flat(layers), EditorOverlay.vertices(for: editor, zoom: zoom, darkMode: dark), name)
-            if name.hasPrefix("hover") {
+            if name.hasPrefix("hover") || name.contains("inside") {
                 XCTAssertEqual(cache.generation, generation, "\(name) rebuilt a kept layer")
+            }
+            if name.contains("across") {
+                XCTAssertNotEqual(cache.generation, generation, "\(name) kept a layer built for another bucket")
             }
             generation = cache.generation
         }
+    }
+
+    /// The overlay's capsules carry their widths in screen points (the shader scales them
+    /// with the zoom), so the kept layers are the same at any zoom within a bucket.
+    func testOverlayCapsulesAreScreenSpace() {
+        var editor = editor()
+        editor.outlineView = true
+        let n = CapsuleTessellator.floatsPerVertex
+        var cache = OverlayCache()
+        let near = EditorOverlay.layers(for: editor, zoom: 1.6, cache: &cache)
+        var fresh = OverlayCache()
+        let far = EditorOverlay.layers(for: editor, zoom: 1.1, cache: &fresh)
+        XCTAssertFalse(near.wireframe.isEmpty)
+        XCTAssertFalse(near.selection.isEmpty)
+        XCTAssertEqual(near.wireframe, far.wireframe)
+        XCTAssertEqual(near.selection, far.selection)
+        for layer in [near.wireframe, near.selection] {
+            for v in stride(from: 0, to: layer.count, by: n) {
+                XCTAssertEqual(layer[v + 7], 1, "screen-space flag")
+            }
+        }
+        // The wireframe is one point wide, whatever the zoom.
+        XCTAssertEqual(near.wireframe[6], 0.5)
     }
 
     /// The wiggle preview's art changes every frame, so the wireframe is never kept for it.
