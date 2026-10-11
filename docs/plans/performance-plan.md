@@ -30,6 +30,12 @@ each other and can ship in any order, one PR each. Suggested order: 1 (the hitch
 
 ## Step 0: split the slow rows before changing them (S)
 
+**Done.** The split is in the audit under "The slow rows, split". In short: the appends are 87% of the
+edit rebuild (step 2 starts with 2.1 as written), the upload is 15 MB per edit at 2,400 shapes (so 2.3
+is likely needed), parsing is 69% of open (step 3 starts with numbers), and scissors hover is about
+1 ms at every size, dominated by `nearestSegment` near the point rather than by the scan (step 5 leads
+with the segment skip for the scissors).
+
 Two rows are a sum of parts the tests don't separate, and the right fix depends on which part dominates.
 
 - **Art rebuild after one edit.** Split into the cache walk (`live.insert`, one `cache[shape.id]` lookup and

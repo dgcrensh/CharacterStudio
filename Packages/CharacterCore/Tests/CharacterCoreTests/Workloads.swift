@@ -27,6 +27,21 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The same rebuild with no vertices written: the cache walk alone (lookups, shape
+    /// comparisons, clip plans and steps). The difference from the row above is the appends.
+    static let artRebuildAfterOneEditWalkOnly = Workload(name: "Art rebuild after one edit, no vertices") { drawing in
+        var edited = drawing
+        edited.parts[0].shapes[0].fill = RGBAColor(r: 1, g: 0, b: 0)
+        var builder = ArtBuilder()
+        builder.skipsVertices = true
+        _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        var flip = false
+        return {
+            flip.toggle()
+            _ = builder.build(flip ? edited : drawing, isolatedPart: nil, tolerance: 0.5)
+        }
+    }
+
     /// A zoom that crosses a power-of-two bucket changes the flattening tolerance, which
     /// re-tessellates every shape (`CanvasRenderer.updateArt`).
     static let artRebuildAtNewZoomBucket = Workload(name: "Art rebuild, new zoom bucket") { drawing in
@@ -53,6 +68,34 @@ struct Workload: @unchecked Sendable {
             i += 1
             editor.pencilHovered(at: start + Vec2(Double(i % 20) * 2, 0), zoom: 1)
             _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
+        }
+    }
+
+    /// One overlay frame in the outline view during a pinch: a warm cache, with the zoom
+    /// changed by 1% (the wireframe's cache key is the exact zoom).
+    static let overlayWireframeAtNewZoom = Workload(name: "Outline view, overlay at a new zoom") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.outlineView = true
+        var cache = OverlayCache()
+        _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
+        var flip = false
+        return {
+            flip.toggle()
+            _ = EditorOverlay.layers(for: editor, zoom: flip ? 1.01 : 1, cache: &cache)
+        }
+    }
+
+    /// One hover frame with the scissors and nothing selected, on the busy point: the
+    /// search for the outline to cut, which the overlay and the hover target both read.
+    static let scissorsHover = Workload(name: "Scissors hover") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .scissors
+        let start = StressDrawing.busyPoint(parts: drawing.parts.count)
+        var i = 0
+        return {
+            i += 1
+            editor.pencilHovered(at: start + Vec2(Double(i % 20) * 2, 0), zoom: 1)
+            _ = editor.hoverCut
         }
     }
 
@@ -185,6 +228,18 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The first half of opening: the JSON text into a `JSONValue`.
+    static let openParse = Workload(name: "Open: parse only") { drawing in
+        let data = Data(CharacterFormat.encode(drawing).formatted().utf8)
+        return { _ = try! JSONValue(parsing: data) }
+    }
+
+    /// The second half of opening: the `JSONValue` into a drawing.
+    static let openDecode = Workload(name: "Open: decode only") { drawing in
+        let json = try! JSONValue(parsing: Data(CharacterFormat.encode(drawing).formatted().utf8))
+        return { _ = try! CharacterFormat.decode(json) }
+    }
+
     static let svgExport = Workload(name: "SVG export") { drawing in
         let editor = DrawingEditor(drawing: drawing)
         return { precondition(editor.svgDocument() != nil) }
@@ -198,8 +253,9 @@ struct Workload: @unchecked Sendable {
 
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
-        [artRebuildAfterOneEdit, artRebuildAtNewZoomBucket, hoverFrame, pencilStroke, quickShapeCheck, eraserSample,
-         dragSampleEverything, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, svgExport,
+        [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, hoverFrame,
+         overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
+         undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
          svgImport]
     }
 

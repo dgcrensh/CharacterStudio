@@ -148,6 +148,9 @@ public struct ArtBuilder: Sendable {
     }
 
     private var cache: [Int: Tessellation] = [:]
+    /// Builds the steps without writing any vertices (their ranges are empty), so
+    /// `ScalingTests` can time the cache walk apart from the vertex appends.
+    var skipsVertices = false
     /// While building: the shapes to mark as moving, and whether the last mark was on.
     private var moving: Set<Int> = []
     private var isMoving = false
@@ -290,7 +293,7 @@ public struct ArtBuilder: Sendable {
             if let clipArea {
                 // Nothing clipped draws: no clip to clear.
                 if !clipArea.isNull {
-                    batch.steps.append(.stencil(vertices: batch.addRect(clipArea), state: ArtStencil.clearClip, reference: 0))
+                    batch.steps.append(.stencil(vertices: addRect(to: &batch, clipArea), state: ArtStencil.clearClip, reference: 0))
                 }
             } else {
                 batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0))
@@ -298,9 +301,9 @@ public struct ArtBuilder: Sendable {
         }
 
         if let fill = shape.visibleFill, !geometry.fan.isEmpty {
-            let fan = batch.add(geometry.fan)
+            let fan = add(to: &batch, geometry.fan)
             batch.steps.append(.stencil(vertices: fan, state: ArtStencil.winding, reference: 0))
-            let cover = batch.addRect(geometry.fanBounds)
+            let cover = addRect(to: &batch, geometry.fanBounds)
             let (state, reference) = Self.fillCover(role, masked: masked)
             let paint = ArtPaint(color: fill, gradient: shape.gradient, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
@@ -308,13 +311,13 @@ public struct ArtBuilder: Sendable {
 
         if let stroke = shape.stroke, !geometry.outline.isEmpty {
             let alignment = shape.path.closed && !geometry.fan.isEmpty ? stroke.alignment : .center
-            let marks = batch.add(geometry.outline)
+            let marks = add(to: &batch, geometry.outline)
             batch.steps.append(.stencil(vertices: marks, state: ArtStencil.outline, reference: ArtStencil.outlineBit))
             if alignment != .center {
-                let fan = batch.add(geometry.fan)
+                let fan = add(to: &batch, geometry.fan)
                 batch.steps.append(.stencil(vertices: fan, state: ArtStencil.winding, reference: 0))
             }
-            let cover = batch.addRect(geometry.outlineBounds)
+            let cover = addRect(to: &batch, geometry.outlineBounds)
             let (state, reference) = Self.outlineCover(role, alignment, masked: masked)
             let paint = ArtPaint(color: stroke.color, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
@@ -322,6 +325,14 @@ public struct ArtBuilder: Sendable {
                 batch.steps.append(.stencil(vertices: cover, state: ArtStencil.cleanUp, reference: 0))
             }
         }
+    }
+
+    private func add(to batch: inout ArtBatch, _ points: [Vec2]) -> Range<Int> {
+        skipsVertices ? batch.vertexCount..<batch.vertexCount : batch.add(points)
+    }
+
+    private func addRect(to batch: inout ArtBatch, _ rect: Rect) -> Range<Int> {
+        skipsVertices ? batch.vertexCount..<batch.vertexCount : batch.addRect(rect)
     }
 
     /// The cover state for a fill: paint where the winding is non-zero, and with
