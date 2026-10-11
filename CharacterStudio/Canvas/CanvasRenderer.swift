@@ -102,7 +102,13 @@ final class CanvasRenderer {
     /// True when the cached art was built from the wiggle preview's moving picture.
     private var artWiggled = false
     private var artSteps: [ArtStep] = []
-    private var artBuffer: (any MTLBuffer)?
+    private var artBuffer: VertexBufferPool.Handle?
+
+    // Vertex buffers reused between frames, and the live strokes' committed segments.
+    private let clock = FrameClock()
+    private let buffers: VertexBufferPool
+    private var liveTessellator = LiveStrokeTessellator()
+    private var mirroredTessellator = LiveStrokeTessellator()
 
     private var textures: [Int: any MTLTexture] = [:]
 
@@ -115,6 +121,7 @@ final class CanvasRenderer {
         else { return nil }
         self.device = device
         self.queue = queue
+        buffers = VertexBufferPool(device: device, clock: clock)
 
         do {
             let library = try device.makeLibrary(source: ShaderSource.metal, options: nil)
@@ -197,6 +204,9 @@ final class CanvasRenderer {
         let frameInterval = Signposts.canvas.beginInterval("Frame")
         defer { Signposts.canvas.endInterval("Frame", frameInterval) }
         guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return false }
+        let frame = clock.beginFrame()
+        let clock = clock
+        commandBuffer.addCompletedHandler { _ in clock.complete(frame) }
 
         ensureTargets(width: drawable.texture.width, height: drawable.texture.height)
         guard let msaaTexture, let stencilTexture else { return true }
@@ -232,15 +242,18 @@ final class CanvasRenderer {
         let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
         if !editor.outlineView { drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen)) }
 
-        // The live stroke and the overlay change every frame, so they are built fresh.
+        // The overlay changes every frame, so it is built fresh. The live strokes keep
+        // their committed segments and add only what is new.
         encoder.setDepthStencilState(plainState)
         encoder.setRenderPipelineState(strokePipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
         if let live = session.liveStroke {
-            drawCapsules(CapsuleTessellator.vertices(for: live), encoder: encoder)
+            let tail = liveTessellator.update(for: live)
+            drawCapsules(liveTessellator.committed, tail, encoder: encoder)
         }
         if let mirrored = session.mirroredLiveStroke {
-            drawCapsules(CapsuleTessellator.vertices(for: mirrored), encoder: encoder)
+            let tail = mirroredTessellator.update(for: mirrored)
+            drawCapsules(mirroredTessellator.committed, tail, encoder: encoder)
         }
         let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
         let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
@@ -306,11 +319,13 @@ final class CanvasRenderer {
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
                                      tolerance: tolerance, ghostFocus: ghost)
         artSteps = batch.steps
-        artBuffer = makeBuffer(batch.vertices)
+        if let artBuffer { buffers.release(artBuffer) }
+        artBuffer = buffers.upload([batch.vertices], pin: true)
     }
 
     private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms, viewRect: Rect) {
         guard !artSteps.isEmpty else { return }
+        if let artBuffer { buffers.use(artBuffer) }
         var view: [Float] = []
         let corners = viewRect.corners
         for i in [0, 1, 2, 0, 2, 3] {
@@ -323,7 +338,7 @@ final class CanvasRenderer {
             guard bound != kind else { return }
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
-            if let artBuffer { encoder.setVertexBuffer(artBuffer, offset: 0, index: 0) }
+            if let artBuffer { encoder.setVertexBuffer(artBuffer.buffer, offset: 0, index: 0) }
             bound = kind
         }
 
@@ -402,15 +417,19 @@ final class CanvasRenderer {
         }
     }
 
-    private func drawCapsules(_ floats: [Float], encoder: any MTLRenderCommandEncoder) {
-        guard !floats.isEmpty, let buffer = makeBuffer(floats) else { return }
-        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: floats.count / CapsuleTessellator.floatsPerVertex)
-    }
-
-    private func makeBuffer(_ floats: [Float]) -> (any MTLBuffer)? {
-        guard !floats.isEmpty else { return nil }
-        return device.makeBuffer(bytes: floats, length: floats.count * MemoryLayout<Float>.stride, options: .storageModeShared)
+    /// Draws `chunks` of capsule vertices, one after another, from a pooled buffer.
+    private func drawCapsules(_ chunks: [Float]..., encoder: any MTLRenderCommandEncoder) {
+        let count = chunks.reduce(0) { $0 + $1.count }
+        guard count > 0 else { return }
+        if count * MemoryLayout<Float>.stride <= 4096 {
+            // Small enough for Metal to copy into the command buffer itself.
+            let floats = chunks.count == 1 ? chunks[0] : chunks.flatMap { $0 }
+            encoder.setVertexBytes(floats, length: count * MemoryLayout<Float>.stride, index: 0)
+        } else {
+            guard let handle = buffers.upload(chunks) else { return }
+            encoder.setVertexBuffer(handle.buffer, offset: 0, index: 0)
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: count / CapsuleTessellator.floatsPerVertex)
     }
 
     // MARK: Reference images

@@ -54,6 +54,12 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
         path.bounds().outset(by: outlineReach)
     }
 
+    /// A conservative `bounds` (from the control points, so it needs no flattening) for
+    /// rejecting points and rectangles that can't touch the shape.
+    public var hitBounds: Rect {
+        path.controlBounds.outset(by: outlineReach)
+    }
+
     /// Transforms the path and gradient; outline width and dashes scale with the
     /// transform's area scale.
     public mutating func apply(_ t: Affine2D) {
@@ -69,9 +75,22 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
 
     /// True when `p` is inside the fill or within `tolerance` of the outline.
     public func contains(_ p: Vec2, tolerance: Double) -> Bool {
-        let outline = outlineReach + tolerance
-        guard bounds.outset(by: tolerance).contains(p) else { return false }
+        guard hitBounds.outset(by: tolerance).contains(p) else { return false }
+        return contains(p, tolerance: tolerance, polygon: path.flattened(tolerance: 0.5))
+    }
+
+    /// True when any of `points` is on the shape, as `contains`, flattening the path at
+    /// most once.
+    public func containsAny(of points: [Vec2], tolerance: Double) -> Bool {
+        let reject = hitBounds.outset(by: tolerance)
+        let candidates = points.filter { reject.contains($0) }
+        guard !candidates.isEmpty else { return false }
         let poly = path.flattened(tolerance: 0.5)
+        return candidates.contains { contains($0, tolerance: tolerance, polygon: poly) }
+    }
+
+    private func contains(_ p: Vec2, tolerance: Double, polygon poly: [Vec2]) -> Bool {
+        let outline = outlineReach + tolerance
         if visibleFill != nil, poly.count >= 3, windingNumber(of: p, polygon: poly) != 0 {
             return true
         }
@@ -99,6 +118,24 @@ public func windingNumber(of p: Vec2, polygon: [Vec2]) -> Int {
         }
     }
     return wn
+}
+
+/// Every shape's clip bases in one part, from `Part.clipPlan()`.
+public struct ClipPlan: Hashable, Sendable {
+    /// `clipBase(of:)` by shape index.
+    public let bases: [Int?]
+    /// `groupClipBase(of:)` by shape index.
+    public let groupBases: [Int?]
+
+    public func base(of index: Int) -> Int? { bases[index] }
+
+    public func groupBase(of index: Int) -> Int? { groupBases[index] }
+
+    /// True when shape `index` is the base of the clipped shapes, or the clipped group,
+    /// right above it.
+    public func isBase(_ index: Int) -> Bool {
+        index + 1 < bases.count && (bases[index + 1] == index || groupBases[index + 1] == index)
+    }
 }
 
 /// A named set of shapes inside one part, such as an eye's white, iris and highlight.
@@ -190,6 +227,34 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// right above it.
     public func isClipBase(_ index: Int) -> Bool {
         index + 1 < shapes.count && (clipBase(of: index + 1) == index || groupClipBase(of: index + 1) == index)
+    }
+
+    /// `clipBase(of:)` and `groupClipBase(of:)` for every shape, in one pass. Use it when
+    /// walking the whole part, where asking shape by shape would be quadratic.
+    public func clipPlan() -> ClipPlan {
+        var bases: [Int?] = [], groupBases: [Int?] = []
+        bases.reserveCapacity(shapes.count)
+        groupBases.reserveCapacity(shapes.count)
+        let clippedGroups = Set(groups.filter(\.isClipped).map(\.id))
+        // The last shape that isn't clipped or in a clipped group, and in each group the
+        // last shape that isn't clipped.
+        var lastBase: Int?
+        var lastInGroup: [Int: Int] = [:]
+        var groupBase: [Int: Int?] = [:]
+        for (index, shape) in shapes.enumerated() {
+            if let group = shape.group {
+                if groupBase[group] == nil { groupBase[group] = clippedGroups.contains(group) ? lastBase : nil }
+                groupBases.append(groupBase[group] ?? nil)
+                bases.append(shape.isClipped ? lastInGroup[group] : nil)
+                if !shape.isClipped { lastInGroup[group] = index }
+            } else {
+                groupBases.append(nil)
+                bases.append(shape.isClipped ? lastBase : nil)
+            }
+            let inClippedGroup = shape.group.map(clippedGroups.contains) ?? false
+            if !shape.isClipped, !inClippedGroup { lastBase = index }
+        }
+        return ClipPlan(bases: bases, groupBases: groupBases)
     }
 
     public func group(_ id: Int) -> ShapeGroup? { groups.first { $0.id == id } }

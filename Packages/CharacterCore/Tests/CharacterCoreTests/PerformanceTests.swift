@@ -45,6 +45,51 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
+    /// Every shape of the stress drawing in one part, as an SVG import might make, with
+    /// every third shape clipped, so the per-part clip-base work is at its largest. A
+    /// rebuild with nothing changed.
+    func testArtBuildWarmOnePart() {
+        var part = Part(id: drawing.nextID, name: "All", shapes: drawing.parts.flatMap(\.shapes))
+        part.groups = drawing.parts.flatMap(\.groups)
+        for i in part.shapes.indices where i % 3 == 2 { part.shapes[i].isClipped = true }
+        var drawing = Drawing()
+        drawing.parts = [part]
+        var builder = ArtBuilder()
+        _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        measure {
+            _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        }
+    }
+
+    // MARK: Live stroke
+
+    /// A 5-second stroke at 240 Hz, tessellated once per 120 Hz frame as it grows,
+    /// with two predicted points: `frame` returns the floats it drew.
+    private func measureLiveStroke(_ frame: @escaping (InkStroke) -> Int) {
+        measure {
+            var stroke = InkStroke(id: 1, start: .zero, brush: Brush(width: 4, color: .black))
+            var floats = 0
+            for i in 1...1200 {
+                stroke.append(Vec2(Double(i), sin(Double(i) / 40) * 100), minSpacing: 0)
+                guard i % 2 == 0 else { continue }
+                stroke.predicted = [stroke.points[i] + Vec2(1, 0), stroke.points[i] + Vec2(2, 0)]
+                floats += frame(stroke)
+            }
+            XCTAssertGreaterThan(floats, 0)
+        }
+    }
+
+    /// Re-tessellating the whole stroke every frame, as the renderer did before.
+    func testLiveStrokeFullEveryFrame() {
+        measureLiveStroke { CapsuleTessellator.vertices(for: $0).count }
+    }
+
+    /// Only the new segments and the predicted tail each frame.
+    func testLiveStrokeIncremental() {
+        var live = LiveStrokeTessellator()
+        measureLiveStroke { live.update(for: $0).count + live.committed.count }
+    }
+
     // MARK: Hit-testing and erasing
 
     /// What every hover frame and select tap off the art costs.
@@ -103,7 +148,7 @@ final class PerformanceTests: XCTestCase {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
         editor.outlineView = true
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measure {
             _ = EditorOverlay.vertices(for: editor, zoom: 1)
         }
@@ -111,7 +156,8 @@ final class PerformanceTests: XCTestCase {
 
     // MARK: Undo
 
-    /// 500 separate fill changes, each one undo step holding a whole-drawing snapshot.
+    /// 500 separate fill changes, each one undo step holding a whole-drawing snapshot;
+    /// the stack keeps only the newest `UndoStack.defaultLimit`.
     func testUndoGrowthOver500Commits() {
         let start = DrawingEditor(drawing: drawing)
         let refs = drawing.parts.flatMap { part in part.shapes.map { ShapeRef(part: part.id, shape: $0.id) } }
@@ -123,7 +169,7 @@ final class PerformanceTests: XCTestCase {
                 editor.selection = .shape(part: ref.part, shape: ref.shape)
                 editor.setFill(RGBAColor(r: Double(i) / 500, g: 0.5, b: 0.5))
             }
-            XCTAssertEqual(editor.undoStack.undoStates.count, 500)
+            XCTAssertEqual(editor.undoStack.undoStates.count, min(500, UndoStack<Drawing>.defaultLimit))
         }
     }
 }

@@ -418,8 +418,10 @@ public struct DrawingEditor: Sendable {
     func cutTarget(at p: Vec2, zoom: Double) -> (ref: ShapeRef, segment: Int, t: Double)? {
         var best: (ref: ShapeRef, segment: Int, t: Double, distance: Double)?
         for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
-            guard let shape = drawing.shape(ref), let near = shape.path.nearestSegment(to: p),
-                  near.distance <= EditorMetrics.curveHit / zoom + (shape.stroke?.width ?? 0) / 2,
+            guard let shape = drawing.shape(ref) else { continue }
+            let reach = EditorMetrics.curveHit / zoom + (shape.stroke?.width ?? 0) / 2
+            guard shape.path.controlBounds.outset(by: reach).contains(p),
+                  let near = shape.path.nearestSegment(to: p), near.distance <= reach,
                   near.distance < (best?.distance ?? .infinity) else { continue }
             best = (ref, near.segment, near.t, near.distance)
         }
@@ -732,7 +734,7 @@ public struct DrawingEditor: Sendable {
     }
 
     private func marqueeTouches(_ shape: VectorShape, _ rect: Rect) -> Bool {
-        guard shape.bounds.intersects(rect) else { return false }
+        guard shape.hitBounds.intersects(rect) else { return false }
         let poly = shape.path.flattened(tolerance: 0.5)
         if poly.contains(where: { rect.contains($0) }) { return true }
         guard poly.count > 1 else { return false }
@@ -1247,13 +1249,13 @@ public struct DrawingEditor: Sendable {
     private mutating func eraseAlong(_ a: Vec2, _ b: Vec2) {
         let radius = EditorMetrics.eraserRadius / gestureZoom
         let steps = max(1, Int((a.distance(to: b) / (radius / 2)).rounded(.up)))
+        let samples = (0...steps).map { Vec2.lerp(a, b, Double($0) / Double(steps)) }
+        let swept = Rect(points: [a, b]).outset(by: radius)
         var doomed: [ShapeRef] = []
         for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
-            guard let shape = drawing.shape(ref) else { continue }
-            for i in 0...steps where shape.contains(Vec2.lerp(a, b, Double(i) / Double(steps)), tolerance: radius) {
-                doomed.append(ref)
-                break
-            }
+            guard let shape = drawing.shape(ref), shape.hitBounds.intersects(swept),
+                  shape.containsAny(of: samples, tolerance: radius) else { continue }
+            doomed.append(ref)
         }
         guard !doomed.isEmpty else { return }
         for ref in doomed { removeShape(ref) }

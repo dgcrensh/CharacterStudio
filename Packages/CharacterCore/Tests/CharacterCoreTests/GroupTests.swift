@@ -204,6 +204,25 @@ final class GroupTests: XCTestCase {
         XCTAssertTrue(e.drawing.parts[0].isClipBase(2))
     }
 
+    func testClipPlanMatchesShapeByShapeLookups() {
+        // Every clipped / grouped combination of five shapes, with a group in the middle.
+        var e = editor(squares: 5)
+        e.selection = .covering(refs(e, [1, 2, 3]))
+        e.groupSelection()
+        // The group clipped and not.
+        for mask in 0..<64 {
+            for s in 0..<5 { e.drawing.parts[0].shapes[s].isClipped = mask & (1 << s) != 0 }
+            e.drawing.parts[0].groups[0].isClipped = mask & 32 != 0
+            let part = e.drawing.parts[0]
+            let plan = part.clipPlan()
+            for i in 0..<5 {
+                XCTAssertEqual(plan.base(of: i), part.clipBase(of: i), "mask \(mask) shape \(i)")
+                XCTAssertEqual(plan.groupBase(of: i), part.groupClipBase(of: i), "mask \(mask) shape \(i)")
+                XCTAssertEqual(plan.isBase(i), part.isClipBase(i), "mask \(mask) shape \(i)")
+            }
+        }
+    }
+
     func testDuplicatingAWholeGroupMakesANewGroup() {
         var e = editor(squares: 3)
         e.selection = .covering(refs(e, [0, 1]))

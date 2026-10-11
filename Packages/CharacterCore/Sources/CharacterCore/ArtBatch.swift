@@ -184,12 +184,13 @@ public struct ArtBuilder: Sendable {
     private mutating func appendShapes(_ indices: [Int], of part: Part, skippingBases: Set<Int>, tolerance: Double,
                                        ghostFocus: Set<Int>?, to batch: inout ArtBatch) {
         let drawn = Set(indices)
+        let clips = part.clipPlan()
         // The clipped group whose mask is up.
         var masking: Int?
         for index in indices {
             let shape = part.shapes[index]
             guard part.isShown(index) else { continue }
-            var mask = part.groupClipBase(of: index)
+            var mask = clips.groupBase(of: index)
             if let base = mask {
                 guard part.isShown(base), !skippingBases.contains(base) else { continue }
                 if !drawn.contains(base) { mask = nil }
@@ -204,13 +205,13 @@ public struct ArtBuilder: Sendable {
                 masking = group
             }
             let role: ClipRole
-            if let base = part.clipBase(of: index) {
+            if let base = clips.base(of: index) {
                 // Nothing to clip to when the base is hidden.
                 guard part.isShown(base), !skippingBases.contains(base) else { continue }
                 role = .clipped
             } else {
                 // A base whose clipped shapes draw in another pass needn't mark the clip.
-                role = part.isClipBase(index) && drawn.contains(index + 1) ? .base : .none
+                role = clips.isBase(index) && drawn.contains(index + 1) ? .base : .none
             }
             let geometry = tessellation(of: shape, tolerance: tolerance)
             let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1

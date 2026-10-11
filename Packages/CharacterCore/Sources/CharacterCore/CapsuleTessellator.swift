@@ -64,3 +64,56 @@ public enum CapsuleTessellator {
         return out
     }
 }
+
+/// Tessellates the live stroke a frame at a time: the committed points' segments are
+/// kept between frames and only the new ones are added, so a long stroke costs the
+/// same per frame as a short one. The predicted tail is rebuilt every frame.
+/// `committed + tail` equals `CapsuleTessellator.vertices(for:)`.
+public struct LiveStrokeTessellator: Sendable {
+    private struct Key: Equatable {
+        var id: Int, width: Double, color: RGBAColor, showsPressure: Bool
+    }
+
+    private var key: Key?
+    private var points: [Vec2] = []
+    private var widths: [Double]?
+    /// Vertices for the segments between `points`.
+    public private(set) var committed: [Float] = []
+
+    public init() {}
+
+    /// Brings `committed` up to date with `stroke` and returns the vertices to draw
+    /// after it: the predicted tail, or a dot for a stroke of one point.
+    public mutating func update(for stroke: InkStroke) -> [Float] {
+        let display = stroke.displayWidths
+        let widths = display.map { Array($0.prefix(stroke.points.count)) }
+        let key = Key(id: stroke.id, width: stroke.width, color: stroke.color, showsPressure: stroke.showsPressure)
+        // Anything but new points appended (a new stroke, a quick shape taking over,
+        // a style change) starts again.
+        if key != self.key || !stroke.points.starts(with: points) || (widths == nil) != (self.widths == nil) ||
+            !(widths ?? []).starts(with: self.widths ?? []) {
+            self.key = key
+            points = []
+            self.widths = widths.map { _ in [] }
+            committed = []
+        }
+        let count = stroke.points.count
+        if count >= 2, count > points.count {
+            let from = max(0, points.count - 1)
+            CapsuleTessellator.append(points: Array(stroke.points[from...]), width: stroke.width,
+                                      widths: widths.map { Array($0[from...]) }, color: stroke.color, to: &committed)
+            points = stroke.points
+            self.widths = widths
+        }
+
+        var tail: [Float] = []
+        guard let last = stroke.points.last else { return tail }
+        if !stroke.predicted.isEmpty {
+            CapsuleTessellator.append(points: [last] + stroke.predicted, width: stroke.width,
+                                      widths: display.map { Array($0[(count - 1)...]) }, color: stroke.color, to: &tail)
+        } else if count == 1 {
+            CapsuleTessellator.append(points: [last], width: stroke.width, widths: widths, color: stroke.color, to: &tail)
+        }
+        return tail
+    }
+}

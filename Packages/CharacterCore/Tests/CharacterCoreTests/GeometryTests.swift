@@ -129,3 +129,66 @@ final class TessellatorTests: XCTestCase {
         XCTAssertTrue(out.isEmpty)
     }
 }
+
+final class HitBoundsTests: XCTestCase {
+    private func shapes() -> [VectorShape] {
+        let ellipse = ShapePrimitives.ellipse(Rect(from: Vec2(10, 20), to: Vec2(110, 70)))
+        let curve = BezierPath(points: [PathPoint(Vec2(0, 0), out: Vec2(80, -60)), PathPoint(Vec2(100, 0), in: Vec2(-10, 90))])
+        var outlined = VectorShape(id: 2, path: curve, stroke: StrokeStyle(color: .black, width: 12))
+        outlined.path.points[1].width = 2
+        return [VectorShape(id: 1, path: ellipse, fill: .black), outlined]
+    }
+
+    func testHitBoundsContainTheTightBounds() {
+        for shape in shapes() {
+            let tight = shape.bounds, loose = shape.hitBounds
+            XCTAssertTrue(loose.contains(tight.minPoint) && loose.contains(tight.maxPoint), "\(shape.id)")
+        }
+    }
+
+    func testContainsAnyMatchesContainsOnAGrid() {
+        for shape in shapes() {
+            for y in stride(from: -60.0, through: 100, by: 7) {
+                let row = stride(from: -20.0, through: 130, by: 7).map { Vec2($0, y) }
+                XCTAssertEqual(shape.containsAny(of: row, tolerance: 3),
+                               row.contains { shape.contains($0, tolerance: 3) }, "\(shape.id) y \(y)")
+                for p in row where shape.contains(p, tolerance: 3) {
+                    XCTAssertTrue(shape.hitBounds.outset(by: 3).contains(p))
+                }
+            }
+        }
+    }
+}
+
+final class LiveStrokeTessellatorTests: XCTestCase {
+    func testMatchesTheFullTessellationAsTheStrokeGrows() {
+        for pressure in [false, true] {
+            var stroke = InkStroke(id: 1, start: Vec2(0, 0), brush: Brush(width: 5, color: .black))
+            if pressure {
+                stroke.pressures = [0.3]
+                stroke.showsPressure = true
+            }
+            var live = LiveStrokeTessellator()
+            func check(_ label: String) {
+                let tail = live.update(for: stroke)
+                XCTAssertEqual(live.committed + tail, CapsuleTessellator.vertices(for: stroke), "\(label) pressure \(pressure)")
+            }
+            check("one point")
+            for i in 1..<12 {
+                stroke.append(Vec2(Double(i) * 4, Double(i * i % 7)), pressure: Double(i % 5) / 5, minSpacing: 0)
+                stroke.predicted = i % 3 == 0 ? [] : [Vec2(Double(i) * 4 + 3, 1), Vec2(Double(i) * 4 + 6, 2)]
+                check("point \(i)")
+            }
+            // A quick shape replaces the points.
+            stroke.points = [Vec2(0, 0), Vec2(50, 0), Vec2(50, 50)]
+            if pressure { stroke.pressures = [0.5, 0.5, 0.5] }
+            stroke.predicted = []
+            check("replaced")
+            // A new stroke with the same points.
+            let points = stroke.points
+            stroke = InkStroke(id: 2, start: points[0], brush: Brush(width: 9, color: .black))
+            stroke.points = points
+            check("new stroke")
+        }
+    }
+}

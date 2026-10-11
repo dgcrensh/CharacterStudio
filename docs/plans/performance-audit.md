@@ -20,19 +20,20 @@ frame or every touch sample.**
 
 | # | Finding | Where | When it hurts | Effort |
 | --- | --- | --- | --- | --- |
-| 1 | Hit-testing flattens every path twice, on every hover frame, tap and eraser sample | `Drawing.swift:71-85`, `444-452` | Hovering, erasing, select taps on large drawings | S |
+| 1 | Hit-testing flattens every path twice, on every hover frame, tap and eraser sample (partly shipped) | `Drawing.swift:71-85`, `444-452` | Hovering, erasing, select taps on large drawings | S |
 | 2 | A drag rebuilds the whole drawing and re-uploads every vertex per sample | `DrawingEditor.swift:437-441`, `ArtBatch.swift:155-179`, `CanvasRenderer.swift:282-302` | Moving a part with many shapes | M |
-| 3 | Clip-base lookups are O(n) per shape, so a part's art pass is O(n²) | `Drawing.swift:168-193`, `ArtBatch.swift:189-219` | Parts with hundreds of shapes, worse with clipping (#17) | S |
+| 3 | Clip-base lookups are O(n) per shape, so a part's art pass is O(n²) (shipped; smaller than estimated) | `Drawing.swift:168-193`, `ArtBatch.swift:189-219` | Parts with hundreds of shapes, worse with clipping (#17) | S |
 | 4 | `refresh()` recomputes ~90 derived values, several O(all shapes), after every edit and every color-picker tick | `CanvasStore.swift:221-331` | Picker drags, layers panel open | M |
 | 5 | Overlay re-flattens the selection, hover target and (in outline view) every shape each frame | `EditorOverlay.swift:62-64`, `114-128`, `206-208`, `262-283` | Outline view, large selections | S-M |
-| 6 | Three fresh `MTLBuffer`s per frame and a full vertex re-upload per art rebuild | `CanvasRenderer.swift:301`, `397-406` | Every frame while drawing or editing | S |
-| 7 | Undo history is unbounded and holds whole-drawing snapshots | `UndoStack.swift:6`, `DrawingEditor.swift:1541` | Long sessions, memory | S |
+| 6 | Three fresh `MTLBuffer`s per frame and a full vertex re-upload per art rebuild (shipped) | `CanvasRenderer.swift:301`, `397-406` | Every frame while drawing or editing | S |
+| 7 | Undo history is unbounded and holds whole-drawing snapshots (shipped) | `UndoStack.swift:6`, `DrawingEditor.swift:1541` | Long sessions, memory | S |
 | 8 | Full-screen stencil passes per clip base and group; 4x MSAA everywhere | `ArtBatch.swift:199-203`, `243`; `CanvasRenderer.swift:75` | Many clipped shapes, fill-rate on 12.9" at 2x | M |
 | 9 | Document hand-off and thumbnail re-render on every finished change, including picker ticks | `CanvasStore.swift:187-197`, `CharacterDocument.swift:28-31` | Autosave churn, I/O | S |
 | 10 | No benchmarks or signposts, so none of this is measured (shipped: see below) | `Packages/CharacterCore/Tests` | Now | S |
 
 Suggested order: 10 first (so the rest can be checked), then 1, 3, 6, 7 as quick wins, then 2 and 4,
-then 5, 8, 9.
+then 5, 8, 9. 10 shipped first; the quick wins 1 (its cheap half), 3, 6 and 7 shipped next, on top of
+it, with before and after numbers under "Measuring performance".
 
 ## What already works well
 
@@ -97,6 +98,15 @@ Recommendations:
 - For the eraser, sample along the segment against bounds first, then test only the candidates, and
   stop at the first hit per shape (it already breaks, but after flattening).
 
+Shipped (2026-10-11), the cheap half: `BezierPath.controlBounds` (the anchors and handle control
+points, which contain the curve) and `VectorShape.hitBounds` (that plus the outline's reach) reject
+points without flattening, so `contains` flattens only shapes the point is near, once.
+`VectorShape.containsAny(of:tolerance:)` flattens once for all of an eraser move's samples, and
+`eraseAlong` first drops shapes whose `hitBounds` miss the swept segment. `cutTarget` and the
+marquee reject by the same bounds. The tight `bounds` is unchanged for selection frames. Still open:
+the shared geometry cache and spatial index, and `Drawing.frame(of:)` and `visibleArtBounds`, which
+still flatten.
+
 ### 2. A drag rebuilds the whole drawing and re-uploads every vertex per sample (M)
 
 `pencilMoved` for a transform does `drawing = before.applying(transform, to: target)`
@@ -145,11 +155,24 @@ million `isClipping` calls per frame during a drag, before any tessellation. `Pa
 (`ThumbnailRenderer.swift:57`) per shape per save. PR #17 added the group variants and doubled the
 constant.
 
+Correction after measuring: the cost is smaller than this says. `clipBase(of:)` returns at once for
+an unclipped shape, and `lastIndex` searches backwards from the shape, so it stops at the nearest
+unclipped shape below; only the group variant's `firstIndex` scans from the bottom of the part. The
+one-pass plan below shipped anyway (it is simpler to reason about and #17's group variants build on
+it), but `testArtBuildWarmOnePart` (the whole stress drawing in one part, every third shape clipped)
+measures the same before and after, 0.857 s and 0.854 s.
+
 Recommendation: compute clip bases for a whole part in one forward pass. Walk the shapes once,
 tracking "last unclipped index" (and, inside a group, "last unclipped index since the group started"),
 and emit `[Int?]` arrays `clipBase` and `groupClipBase` plus a `isClipBase` bit set. Expose it as
 `Part.clipPlan()` and have `appendShapes`, `hitTest` and the thumbnail ask the plan. This also makes
 the clip rules easier to test in one place.
+
+Shipped (2026-10-11): `Part.clipPlan()` returns a `ClipPlan` (`base(of:)`, `isBase(_:)`) built in one
+pass; `ArtBuilder.appendShapes`, `ThumbnailRenderer` and `SVGWriter` use it, and a test checks it
+against `clipBase(of:)` for every clipping combination of a part with a group. `Part.shape(_:contains:)`
+keeps the single lookup, since hit-testing asks only about the shapes under the point. PR #17's
+`groupClipBase` should join the plan when it lands.
 
 ### 4. `refresh()` recomputes ~90 derived values after every edit (M)
 
@@ -235,6 +258,17 @@ Recommendations:
   points plus the predicted tail each frame.
 - Only upload the art buffer when `vertices` changed; with finding 2 done, a drag won't change it.
 
+Shipped (2026-10-11): `VertexBufferPool` (`CharacterStudio/Canvas/VertexBufferPool.swift`) keeps
+up to 16 shared-storage buffers, grown in powers of two, and writes into one only when every frame
+that used it has finished (a `FrameClock` counts committed frames and the command buffers'
+completion handlers report the finished ones); with none free it falls back to a one-off buffer, so
+it never blocks. The art buffer is pinned until the next rebuild. Capsule draws under 4 KB use
+`setVertexBytes`. `LiveStrokeTessellator` (CharacterCore) keeps the committed points' segments
+between frames and tessellates only the new points and the predicted tail; a test checks it matches
+`CapsuleTessellator.vertices(for:)` as a stroke grows, with pressure, and when a quick shape replaces
+the points. The art buffer is still uploaded on every rebuild (that waits on finding 2), and the
+per-frame copy of the live stroke into its buffer remains.
+
 ### 7. Undo history is unbounded and holds whole-drawing snapshots (S)
 
 `UndoStack` never trims `undoStates` (`UndoStack.swift:6-22`). Snapshots share storage, but any edit
@@ -251,6 +285,12 @@ Recommendations:
 - Cap the stack (100-200 steps; Procreate-style apps use 250) and drop the oldest.
 - Skip the `before != drawing` compare when the caller already knows it changed (most do); keep it
   only for the restyle path where a no-op is common, or compare `revision` instead.
+
+Shipped (2026-10-11): `UndoStack` keeps the newest `limit` steps (default 200) and drops the oldest,
+on record and on redo. The compare stays: after a real edit it stops at the first difference, and
+synthesized `==` on arrays takes the shared-buffer fast path for every untouched part, so it only
+walks a whole drawing when nothing changed, which is the case it is there to catch. 500 commits
+measure 0.011 s either way.
 
 ### 8. Full-screen stencil passes per clip base and group, and 4x MSAA everywhere (M)
 
@@ -357,7 +397,27 @@ iPad), average seconds per `measure` run:
 | `testOverlayInOutlineView` | 11.912 | far beyond the flattening cost finding 5 describes; profile it first |
 | `testUndoGrowthOver500Commits` | 0.011 | time only; XCTest can't measure memory on Linux |
 
-What they say so far: a warm art rebuild costs nearly as much as a cold one at this size, so the
+After findings 1, 3, 6 and 7, same machine, same settings:
+
+| Test | Before | After |
+| --- | --- | --- |
+| `testArtBuildCold` | 0.970 | 0.956 |
+| `testArtBuildWarm` | 0.852 | 0.823 |
+| `testArtBuildWarmOnePart` (new) | 0.857 | 0.854 |
+| `testHitTestMiss` (20 calls) | 0.186 | 0.010 (~0.5 ms per hover frame) |
+| `testHitTestHit` (20 calls) | 0.098 | 0.007 |
+| `testEraseAlongDiagonal` (20 samples) | 2.686 | 0.015 (~0.75 ms per eraser sample) |
+| `testLiveStrokeFullEveryFrame` / `Incremental` (new, 600 frames) | 0.006 | 0.002 |
+| `testEncodeAndFormat` | 0.164 | 0.159 |
+| `testOverlayInOutlineView` | 13.357 | 12.086 (noise; finding 5) |
+| `testUndoGrowthOver500Commits` | 0.011 | 0.011 |
+
+The live-stroke pair times the old per-frame full tessellation against the incremental one on the
+same 1,200-point stroke, so its "before" is `testLiveStrokeFullEveryFrame`. The GPU-side half of
+finding 6 (no buffer allocation per frame) can't be measured here; check it in Metal System Trace.
+Art rebuilds are unchanged: what dominates them is still unknown and belongs with finding 2.
+
+What they said before these fixes: a warm art rebuild costs nearly as much as a cold one at this size, so the
 per-shape cache is not what dominates; the outline view's overlay is the worst case by an order of
 magnitude and is not explained by this document yet; hit-testing and erasing are slow enough to
 drop frames on a big drawing, as finding 1 predicts.
