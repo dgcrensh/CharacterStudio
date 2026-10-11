@@ -242,7 +242,7 @@ The design keeps outfits a pure addition, following Spine's skins, which the for
 3. **Layers panel (M, app).** Tree/Stack picker, disclosure rows, root row, active layer, multi-select, `.layers`
    selection. Mostly SwiftUI over `LayerTree`; logic stays in CharacterCore. Can't be built off a Mac, so CI's
    app-build job is the check.
-4. **Selection extras (S).** Select Layer, Select All in Layer, Same Fill/Outline, Invert, breadcrumbs, marquee
+4. **Selection extras (S). Shipped** (Select menu, breadcrumbs, Cmd-Up and Cmd-A; group and marquee rules came with phase 1). Select Layer, Select All in Layer, Same Fill/Outline, Invert, breadcrumbs, marquee
    group rule, keyboard shortcuts (Cmd-G, Shift-Cmd-G, Cmd-Up for select parent).
 5. **Outfits (later, L).** Skins in the model, outfit picker on the root row, per-outfit contents for accessories,
    onion-skin of other outfits. Lines up with milestone 6's "slots and skins in the file".

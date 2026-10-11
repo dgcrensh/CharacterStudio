@@ -33,6 +33,16 @@ struct EditorCommands: Commands {
             Button("Delete") { store?.deleteSelection() }
                 .keyboardShortcut(.delete, modifiers: [])
         }
+        CommandMenu("Select") {
+            Button("Select Layer") { store?.selectParent() }
+                .keyboardShortcut(.upArrow)
+            Button("Select All in Layer") { store?.selectAllInLayer() }
+                .keyboardShortcut("a")
+            Button("Invert Selection") { store?.invertSelection() }
+            Divider()
+            Button("Same Fill") { store?.selectSameFill() }
+            Button("Same Outline") { store?.selectSameOutline() }
+        }
         CommandMenu("Arrange") {
             Button("Bring to Front") { store?.arrange(.bringToFront) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
