@@ -8,6 +8,7 @@ Character Studio is a personal iPad app (SwiftUI + Metal) for drawing 2D cutout 
 - `Packages/CharacterCore/`: a UI-free Swift package with everything that can be tested: geometry, camera, curve fitting, Bézier paths, the `Drawing` model, `DrawingEditor` and its commands, undo, tessellation, touch routing, snapping and the JSON file format. The app links it as a local package.
 - `Schema/`: JSON Schema for `character.json`, the `robo.charstudio` example and `validate.py`.
 - `.github/workflows/ci.yml`: the three CI jobs. `scripts/check.sh` runs the same three locally.
+- `docs/plans/`: planning docs (feature reviews, implementation plans). This is the source of truth for plans: read the relevant one before starting planned work, and update it in the same PR when a plan changes or an item ships. Don't keep plans only outside the repo.
 
 ## Rules of the codebase
 
