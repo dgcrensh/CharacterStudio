@@ -145,9 +145,19 @@ public struct ArtBuilder: Sendable {
         /// Outline triangles, and their bounds.
         var outline: [Vec2]
         var outlineBounds: Rect
+
+        /// What the cache counts against its second-tier limit.
+        var vertexCount: Int { fan.count + outline.count }
     }
 
-    private var cache: [Int: Tessellation] = [:]
+    /// Each shape's tessellation. Public so the renderer can refine a copy in the
+    /// background and merge the result (see `TessellationCache`).
+    public var tessellations = TessellationCache()
+    /// While building: use a cached tessellation of an unchanged shape at any tolerance
+    /// rather than tessellating it again.
+    private var reusesOtherTolerances = false
+    /// How many shapes builds have tessellated, for tests.
+    var tessellationCount = 0
     /// Builds the steps without writing any vertices (their ranges are empty), so
     /// `ScalingTests` can time the cache walk apart from the vertex appends.
     var skipsVertices = false
@@ -164,10 +174,16 @@ public struct ArtBuilder: Sendable {
     /// `isolatedGroup` in it, only that group does, and the rest of the part stays under
     /// the veil. With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
     /// The shapes in `moving` are bracketed by `.moving` steps.
+    ///
+    /// With `reusingOtherTolerances`, an unchanged shape cached at another tolerance
+    /// keeps that tessellation; only new and edited shapes are tessellated, at
+    /// `tolerance`. The renderer builds that way while a background refine is under way.
     public mutating func build(_ drawing: Drawing, isolatedPart: Int?, isolatedGroup: Int? = nil, tolerance: Double,
-                               ghostFocus: Set<Int>? = nil, moving: Set<Int> = []) -> ArtBatch {
+                               ghostFocus: Set<Int>? = nil, moving: Set<Int> = [],
+                               reusingOtherTolerances: Bool = false) -> ArtBatch {
         var batch = ArtBatch()
         self.moving = moving
+        reusesOtherTolerances = reusingOtherTolerances
         isMoving = false
         var live: Set<Int> = []
         var parts = drawing.drawStack
@@ -190,8 +206,8 @@ public struct ArtBuilder: Sendable {
         }
         if isMoving { batch.steps.append(.moving(false)) }
         self.moving = []
-        // Forget shapes that are gone, without copying the cache.
-        for id in cache.keys where !live.contains(id) { cache.removeValue(forKey: id) }
+        reusesOtherTolerances = false
+        tessellations.removeAll(except: live)
         return batch
     }
 
@@ -264,7 +280,16 @@ public struct ArtBuilder: Sendable {
     }
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {
-        if let cached = cache[shape.id], cached.shape == shape, cached.tolerance == tolerance { return cached }
+        if let cached = tessellations.use(shape, tolerance: tolerance) { return cached }
+        if reusesOtherTolerances, let cached = tessellations.anyTessellation(of: shape) { return cached }
+        let result = Self.tessellate(shape, tolerance: tolerance)
+        tessellationCount += 1
+        tessellations.store(result)
+        return result
+    }
+
+    /// Flattens and strokes one shape. Pure, so a background refine can call it.
+    static func tessellate(_ shape: VectorShape, tolerance: Double) -> Tessellation {
         let poly = shape.path.flattened(tolerance: tolerance)
         var fan: [Vec2] = []
         if shape.path.closed, poly.count >= 3 {
@@ -275,10 +300,8 @@ public struct ArtBuilder: Sendable {
             let aligned = shape.path.closed && stroke.alignment != .center
             outline = Stroker.triangles(for: shape.path, style: stroke, widthScale: aligned ? 2 : 1, tolerance: tolerance)
         }
-        let result = Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: Rect(points: poly),
-                                  outline: outline, outlineBounds: Rect(points: outline))
-        cache[shape.id] = result
-        return result
+        return Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: Rect(points: poly),
+                            outline: outline, outlineBounds: Rect(points: outline))
     }
 
     /// `clipArea` bounds the clip clear before a base (see `clipArea(of:in:clips:drawn:tolerance:)`).

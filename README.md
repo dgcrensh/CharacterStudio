@@ -69,7 +69,7 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 
 - **Curve fitting** (`CurveFitter`): light [1 2 1] smoothing, corner detection by turning angle, then Schneider's least-squares cubic fitting with Newton reparameterization between corners. Tolerances are in screen points, so fitting feels the same at any zoom.
 - **Fills** use stencil-then-cover: a triangle fan writes winding numbers to the stencil and a cover quad paints non-zero pixels, so any freehand outline (even self-intersecting) fills correctly. The canvas is now 4x multisampled into memoryless targets for smooth fill edges.
-- **Caching:** each shape's triangles are cached and rebuilt only when that shape changes or zoom crosses a power of two.
+- **Caching:** each shape's triangles are cached and rebuilt only when that shape changes or zoom crosses a power of two. A new zoom level is refined in the background, shapes on screen first, so a pinch never waits on it: zooming in shows slightly coarser curves for a moment, and zooming out keeps the finer ones until the fingers lift.
 - **Model:** `Drawing` holds parts (groups of shapes with a pivot), reference images and the palette. Path points store `in` and `out` handles as offsets, matching the spec's file format. Undo stores `Drawing` snapshots, which share storage thanks to copy-on-write.
 - All editing logic (`DrawingEditor`, `EditorOverlay`) lives in CharacterCore and is unit-tested on Linux.
 

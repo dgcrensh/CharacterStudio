@@ -72,8 +72,9 @@ private struct PaintUniforms {
 /// keeps the art built from the drawing as it began and draws the moved shapes through
 /// the drag's transform, so it re-tessellates nothing until the Pencil lifts (see
 /// `LiveTransform`). Vertices are in world space and the
-/// camera is applied in the vertex shader, so navigation never re-tessellates, except
-/// for a refinement pass when zoom crosses a power of two.
+/// camera is applied in the vertex shader, so navigation never re-tessellates in a
+/// frame: when zoom crosses a power of two, the shapes are re-flattened in a background
+/// job, visible ones first, while the current art keeps drawing (see `updateArt`).
 @MainActor
 final class CanvasRenderer {
     private static let sampleCount = 4
@@ -110,6 +111,23 @@ final class CanvasRenderer {
     private var liveTransform = Affine2D.identity
     private var artSteps: [ArtStep] = []
     private var artBuffer: VertexBufferPool.Handle?
+    /// The drawing the art was last built from, which a refine merges against.
+    private var artDrawing = Drawing()
+
+    // Background refinement at a new zoom bucket.
+    private var refineJob: Task<Void, Never>?
+    /// The tolerance the running job flattens at.
+    private var refineTolerance: Double?
+    /// Bumped for every job, so a cancelled job's late result is ignored.
+    private var refineGeneration = 0
+    /// Some shapes are refined and the rest still at an older tolerance, because the
+    /// job's visible result merged and the rest hasn't (or the job was cancelled).
+    private var artMixed = false
+    /// A refine merged: rebuild the art from the cache on the next frame.
+    private var artRefined = false
+
+    /// Asks the view for a frame; a refine calls it when its result is merged.
+    var onNeedsRender: (@MainActor () -> Void)?
 
     // Vertex buffers reused between frames, and the live strokes' committed segments.
     private let clock = FrameClock()
@@ -236,8 +254,13 @@ final class CanvasRenderer {
 
         let editor = session.editor
         let time = CACurrentMediaTime()
+        let w = Double(viewSize.width), h = Double(viewSize.height)
+        let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
         // The outline view draws the art as a wireframe in the overlay instead.
-        if !editor.outlineView { updateArt(editor: editor, zoom: session.camera.zoom, time: time) }
+        if !editor.outlineView {
+            updateArt(editor: editor, zoom: session.camera.zoom, navigating: session.isNavigating,
+                      viewRect: Rect(points: screen), time: time)
+        }
         loadMissingTextures(for: editor.drawing.references, commandBuffer: commandBuffer)
 
         var uniforms = makeUniforms(camera: session.camera, viewSize: viewSize, scale: scale, darkMode: darkMode)
@@ -261,8 +284,6 @@ final class CanvasRenderer {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         drawReferences(editor.drawing.references, encoder: encoder, uniforms: &uniforms)
-        let w = Double(viewSize.width), h = Double(viewSize.height)
-        let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
         if !editor.outlineView {
             Signposts.canvas.withIntervalSignpost("Art draw") {
                 drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen))
@@ -339,43 +360,121 @@ final class CanvasRenderer {
 
     // MARK: Art
 
-    /// Rebuilds the art when the drawing, zoom bucket, isolation or ghost focus changed,
-    /// and on every frame of the wiggle preview (only the wiggling shapes re-tessellate).
-    /// During a drag that `LiveTransform` can draw, it builds the drag's starting
-    /// drawing once and then only updates the transform.
-    private func updateArt(editor: DrawingEditor, zoom: Double, time: Double) {
-        // Flatten finely enough for the current zoom, in power-of-two steps.
+    /// Rebuilds the art when the drawing, isolation or ghost focus changed, when a
+    /// background refine merged, and on every frame of the wiggle preview (only the
+    /// wiggling shapes re-tessellate). During a drag that `LiveTransform` can draw, it
+    /// builds the drag's starting drawing once and then only updates the transform.
+    ///
+    /// The art is flattened finely enough for the zoom, in power-of-two buckets. A new
+    /// bucket never re-tessellates in the frame (see `scheduleRefine`).
+    private func updateArt(editor: DrawingEditor, zoom: Double, navigating: Bool, viewRect: Rect, time: Double) {
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
-        let tolerance = 0.2 / bucket
+        let wanted = 0.2 / bucket
         let wiggling = editor.wigglePart != nil
-        let ghost = editor.ghostFocus
         let live = wiggling ? nil : editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
+        let drawing = live?.base ?? (wiggling ? editor.displayDrawing(at: time) : editor.drawing)
+        // The first build has nothing to show meanwhile, so it flattens at the zoom's tolerance.
+        if artTolerance == 0 { artTolerance = wanted }
+        scheduleRefine(to: wanted, drawing: drawing, navigating: navigating, viewRect: viewRect)
+
+        let ghost = editor.ghostFocus
         liveTransform = live?.transform ?? .identity
         let current = live.map { artLive == $0.id } ?? (artLive == nil && editor.revision == artRevision)
-        guard wiggling || artWiggled || !current || tolerance != artTolerance ||
+        guard wiggling || artWiggled || !current || artRefined ||
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
-        // Why, for the signpost: a zoom bucket change re-tessellates every shape.
-        let reason = wiggling || artWiggled ? "wiggle" : tolerance != artTolerance ? "zoom"
-            : live != nil ? "drag" : !current ? "edit" : "focus"
+        // Why, for the signpost.
+        let reason = wiggling || artWiggled ? "wiggle" : !current ? (live != nil ? "drag" : "edit")
+            : artRefined ? "refine" : "focus"
         // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
         artRevision = live == nil ? editor.revision : -1
         artLive = live?.id
-        artTolerance = tolerance
         artIsolation = editor.isolatedPart
         artGroupIsolation = editor.isolatedGroup
         artGhost = ghost
         artWiggled = wiggling
+        artRefined = false
+        artDrawing = drawing
         let interval = Signposts.canvas.beginInterval("Art rebuild")
         defer { Signposts.canvas.endInterval("Art rebuild", interval, "\(reason, privacy: .public)") }
-        let drawing = live?.base ?? (wiggling ? editor.displayDrawing(at: time) : editor.drawing)
+        // While a refine is under way, unchanged shapes keep whatever tessellation they
+        // have; only new and edited ones are tessellated, at the art's tolerance.
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
-                                     tolerance: tolerance, ghostFocus: ghost, moving: live?.shapes ?? [])
+                                     tolerance: artTolerance, ghostFocus: ghost, moving: live?.shapes ?? [],
+                                     reusingOtherTolerances: refineJob != nil || artMixed)
         artSteps = batch.steps
         if let artBuffer { buffers.release(artBuffer) }
         artBuffer = Signposts.canvas.withIntervalSignpost("Art upload", "\(batch.vertices.count) floats") {
             buffers.upload([batch.vertices], pin: true)
         }
+    }
+
+    /// Moves the art toward `wanted`, the zoom bucket's tolerance, without stalling a frame.
+    ///
+    /// - Zooming out during a two-finger gesture changes nothing: the finer art looks the
+    ///   same and only costs vertices. The coarser tolerance follows once the gesture ends.
+    /// - Otherwise a detached job flattens the shapes at `wanted` from a copy of the
+    ///   cache, those in view (plus a quarter-screen margin) first, and the main actor
+    ///   merges each result and rebuilds from the cache. Shapes cached at `wanted` in
+    ///   either tier are skipped, so returning to the last bucket costs one warm build.
+    /// - A newer bucket cancels the running job.
+    private func scheduleRefine(to wanted: Double, drawing: Drawing, navigating: Bool, viewRect: Rect) {
+        // Where the art is headed: the running job's tolerance, or the art's own once
+        // every shape is at it.
+        let target = refineTolerance ?? (artMixed ? nil : artTolerance)
+        guard wanted != target else { return }
+        // Back at the art's own tolerance, or zooming out mid-gesture: drop the job.
+        if wanted == artTolerance && !artMixed || navigating && wanted > artTolerance {
+            cancelRefine()
+            return
+        }
+        cancelRefine()
+        refineTolerance = wanted
+        refineGeneration += 1
+        let generation = refineGeneration
+        let cache = artBuilder.tessellations
+        refineJob = Task.detached(priority: .userInitiated) { [weak self] in
+            let interval = Signposts.canvas.beginInterval("Art refine")
+            var made = 0
+            defer { Signposts.canvas.endInterval("Art refine", interval, "\(made) shapes") }
+            let plan = cache.refinePlan(for: drawing, tolerance: wanted, viewRect: viewRect)
+            // An empty first result has nothing to show early.
+            if !plan.visible.isEmpty {
+                guard let visible = TessellationCache.tessellate(plan.visible, tolerance: wanted,
+                                                                 isCancelled: { Task.isCancelled })
+                else { return }
+                made += visible.count
+                await self?.mergeRefinement(visible, final: false, generation: generation)
+            }
+            guard let rest = TessellationCache.tessellate(plan.rest, tolerance: wanted, isCancelled: { Task.isCancelled })
+            else { return }
+            made += rest.count
+            await self?.mergeRefinement(rest, final: true, generation: generation)
+        }
+    }
+
+    private func cancelRefine() {
+        refineJob?.cancel()
+        refineJob = nil
+        refineTolerance = nil
+    }
+
+    /// Takes a refine's result into the cache and asks for a frame, which rebuilds the
+    /// art at the job's tolerance (`reason` "refine"). After the first result the art is
+    /// mixed: shapes off screen keep their old tessellation until the rest arrives.
+    private func mergeRefinement(_ result: TessellationCache.Refinement, final: Bool, generation: Int) {
+        guard generation == refineGeneration, refineJob != nil else { return }
+        _ = Signposts.canvas.withIntervalSignpost("Art merge", "\(result.count) shapes") {
+            artBuilder.tessellations.merge(result, for: artDrawing)
+        }
+        artTolerance = result.tolerance
+        artMixed = !final
+        artRefined = true
+        if final {
+            refineJob = nil
+            refineTolerance = nil
+        }
+        onNeedsRender?()
     }
 
     private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms, viewRect: Rect) {
