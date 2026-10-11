@@ -43,14 +43,37 @@ struct Workload: @unchecked Sendable {
     }
 
     /// A zoom that crosses a power-of-two bucket changes the flattening tolerance, which
-    /// re-tessellates every shape (`CanvasRenderer.updateArt`).
+    /// re-tessellates every shape. Since plan step 1 the renderer no longer does this in
+    /// a frame (it refines in the background, `zoomInRefineVisible`); the row stays as
+    /// the total work of a refine and for comparison with earlier tables. With no second
+    /// tier, since that would turn this back-and-forth into warm builds.
     static let artRebuildAtNewZoomBucket = Workload(name: "Art rebuild, new zoom bucket") { drawing in
         var builder = ArtBuilder()
+        builder.tessellations.secondTierLimit = 0
         _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2)
         var flip = false
         return {
             flip.toggle()
             _ = builder.build(drawing, isolatedPart: nil, tolerance: flip ? 0.1 : 0.2)
+        }
+    }
+
+    /// What a zoom-in across a bucket costs since plan step 1, in the background job's
+    /// first result: planning the refine (every shape's bounds, against a warm cache at
+    /// the old tolerance) and tessellating the shapes that meet an iPad-sized view
+    /// (1,180 × 820 points) at 4x around the busy point, plus the quarter-screen margin.
+    /// The renderer keeps drawing meanwhile; this is how long the coarse art shows.
+    static let zoomInRefineVisible = Workload(name: "Zoom-in refine, visible shapes") { drawing in
+        var builder = ArtBuilder()
+        _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2)
+        let cache = builder.tessellations
+        let center = StressDrawing.busyPoint(parts: drawing.parts.count)
+        let half = Vec2(1180, 820) / 8
+        let view = Rect(minPoint: center - half, maxPoint: center + half)
+        return {
+            let plan = cache.refinePlan(for: drawing, tolerance: 0.1, viewRect: view)
+            precondition(!plan.visible.isEmpty)
+            _ = TessellationCache.tessellate(plan.visible, tolerance: 0.1)
         }
     }
 
@@ -253,7 +276,7 @@ struct Workload: @unchecked Sendable {
 
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
-        [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, hoverFrame,
+        [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, zoomInRefineVisible, hoverFrame,
          overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
          undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
          svgImport]

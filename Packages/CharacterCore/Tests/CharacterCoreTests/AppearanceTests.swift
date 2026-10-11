@@ -160,7 +160,7 @@ final class StrokerTests: XCTestCase {
 
 /// Plays an art batch's stencil and color steps at one sample point, as the GPU
 /// would for the sample there. Colors are composited premultiplied over a white page.
-private struct StencilSimulator {
+struct StencilSimulator {
     var stencil: UInt8 = 0
     /// Premultiplied red, green, blue and alpha.
     var color = (r: 1.0, g: 1.0, b: 1.0, a: 1.0)

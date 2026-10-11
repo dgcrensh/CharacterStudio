@@ -41,6 +41,7 @@ final class MetalCanvasView: UIView {
         super.init(frame: .zero)
         renderer?.attach(to: metalLayer)
         renderer?.referenceImage = { [weak store] id in store?.referenceImage(id) }
+        renderer?.onNeedsRender = { [weak self] in self?.setNeedsRender() }
         isMultipleTouchEnabled = true
         // Pencil (and pointer) hover drives the pen tool's rubber band and the hover highlights.
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))

@@ -57,6 +57,14 @@ starts with its second bullet instead of its first.
 
 ## Step 1: never stall a pinch on re-tessellation (M)
 
+**Done.** Bullets 1 to 4 shipped: `TessellationCache` (CharacterCore) with `refinePlan`, `tessellate` and
+`merge`; the renderer refines in a detached task, visible shapes first, and builds with
+`reusingOtherTolerances` while a refine is under way; the second tier is capped at 1,000,000 first-tier
+vertices. Signposts: `Art rebuild` ends with `refine` (no more `zoom`), plus `Art refine` (the job) and
+`Art merge`. `Workload.zoomInRefineVisible` is in the scaling table. Not done: a vertex cap for zooming out
+mid-gesture (bullet 1's optional cap), until a device shows it matters. A device trace is still the
+acceptance check.
+
 **Today.** `updateArt` (`CanvasRenderer.swift:344-377`) flattens at `0.2 / bucket`, where `bucket` is the zoom
 rounded up to a power of two. When a pinch crosses a bucket, the tolerance changes, every cached tessellation
 misses (`ArtBuilder.tessellation` compares `cached.tolerance == tolerance`, `ArtBatch.swift:228-229`), and the whole

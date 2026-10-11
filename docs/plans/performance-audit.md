@@ -592,7 +592,9 @@ Everything the app marks for Instruments, all in the Points of Interest track. I
 | `No drawable` | event | `CanvasRenderer.render` | A dropped frame, retried on the next tick |
 | `GPU frame` | event | command buffer completion | The frame's GPU time in ms (`gpuEndTime - gpuStartTime`) |
 | `Render targets` | event | `CanvasRenderer.ensureTargets` | The MSAA and stencil targets reallocated, with the size |
-| `Art rebuild` | interval | `CanvasRenderer.updateArt` | Tessellating the art; ends with why: `edit`, `zoom` (a new zoom bucket, which re-tessellates everything), `drag`, `wiggle` or `focus` |
+| `Art rebuild` | interval | `CanvasRenderer.updateArt` | Building the art; ends with why: `edit`, `refine` (a background refine merged; a warm build), `drag`, `wiggle` or `focus` |
+| `Art refine` | interval | background task | The job that re-flattens shapes at a new zoom bucket, off the main thread, with the number of shapes it made |
+| `Art merge` | interval | `CanvasRenderer.mergeRefinement` | Taking one of the job's results into the cache on the main thread |
 | `Art upload` | interval | `CanvasRenderer.updateArt` | Copying the art's vertices to the GPU, with the float count |
 | `Encode` / `Art draw` / `Live stroke` / `Overlay build` | interval | `CanvasRenderer.render` | Encoding the pass, the art's draw calls inside it, the live stroke's incremental tessellation, and the overlay |
 | `Reference texture` / `Reference decode` | interval | `CanvasRenderer`, `CanvasStore` | First use of a reference image: decoding it, then uploading it with mipmaps |
@@ -697,6 +699,10 @@ What the split says:
   So the per-frame cost is `nearestSegment` on the few shapes near the point, not the bounds pass
   over every shape. Step 5's segment skip (its third bullet) matters more for the scissors than
   the grid; the grid still matters for `hitTest` and the eraser, which do scale.
+
+#### Step 1: pinch refine
+
+Numbers to follow.
 
 ## Smaller notes
 
