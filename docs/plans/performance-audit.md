@@ -700,7 +700,29 @@ What the split says:
 
 #### Step 2: edit frame proportional to the edit
 
-Numbers to follow.
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild after one edit | before | 0.996 | 1.91 | 3.87 | 7.69 | 15.8 |
+| | after | 0.288 | 0.462 | 0.861 | 1.62 | 3.22 |
+| Art rebuild after one edit, no vertices | before | 0.168 | 0.261 | 0.477 | 1.01 | 2.26 |
+| | after | 0.108 | 0.124 | 0.155 | 0.213 | 0.345 |
+| Art rebuild after one edit, with upload (what the app does) | after | 0.152 | 0.169 | 0.203 | 0.278 | 0.434 |
+| Art rebuild, new zoom bucket | before | 11.3 | 22.5 | 44.6 | 90.9 | 179.7 |
+| | after | 9.05 | 18.2 | 36.0 | 72.6 | 144.3 |
+
+| Shapes | Uploaded after one edit, before | After |
+| ---: | ---: | ---: |
+| 300 | 1.9 MB | 0.38 MB |
+| 2,400 | 15.2 MB | 0.38 MB |
+| 4,800 | 30.3 MB | 0.38 MB |
+
+The app's path (no concatenated array, only the edited part's buffer made) is 0.28 ms at 2,400 shapes,
+down from 7.7 ms plus a 15 MB upload, and grows slowly with the number of parts rather than shapes. The
+"after one edit" row still concatenates every part's floats, so it stays linear; it is kept for
+comparison with the older tables. Storing floats in the shape cache also took 20% off the new-bucket
+rebuild. The per-part Metal buffers are app code; check the `Art upload` signpost on an iPad.
 
 ## Smaller notes
 
