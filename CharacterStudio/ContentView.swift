@@ -251,6 +251,16 @@ private struct EditMenu: View {
                     }
                 }
             }
+            if let owner = ui.accessoryOwner {
+                Menu("New Accessory", systemImage: "hat.widebrim") {
+                    Button("In Front of \(ui.accessoryOwnerName)", systemImage: "square.2.layers.3d.top.filled") {
+                        store.addAccessory(to: owner)
+                    }
+                    Button("Behind \(ui.accessoryOwnerName)", systemImage: "square.2.layers.3d.bottom.filled") {
+                        store.addAccessory(to: owner, behind: true)
+                    }
+                }
+            }
             if ui.canMoveShapes {
                 Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
                 Menu("Move to Part", systemImage: "arrow.right.square") {

@@ -103,8 +103,9 @@ extension DrawingEditor {
         guard !targets.isEmpty else { return }
         cancelGesture()
         let before = drawing
-        if case .part(let id) = selection, let i = drawing.partIndex(id) {
-            partChange(&drawing.parts[i])
+        if case .part(let id) = selection {
+            // A part's accessories hide and lock with it.
+            for i in drawing.family(of: id) { partChange(&drawing.parts[i]) }
         } else {
             for (p, s) in targets { shapeChange(&drawing.parts[p].shapes[s]) }
         }
@@ -113,11 +114,12 @@ extension DrawingEditor {
         commit(from: before)
     }
 
+    /// Changes part `id` and its accessories.
     private mutating func changePart(_ id: Int, _ change: (inout Part) -> Void) {
-        guard let i = drawing.partIndex(id) else { return }
+        guard drawing.partIndex(id) != nil else { return }
         cancelGesture()
         let before = drawing
-        change(&drawing.parts[i])
+        for i in drawing.family(of: id) { change(&drawing.parts[i]) }
         // Hidden or locked art can't stay selected.
         let selected = drawing.shapeIndices(in: selection)
         if selected.contains(where: { !drawing.parts[$0.0].isEditable($0.1) }) { selection = .none }
@@ -146,6 +148,8 @@ extension DrawingEditor {
     public var canArrange: Bool { !drawing.shapeIndices(in: selection).isEmpty }
 
     /// Moves a selected part among the parts, or selected shapes within their own parts.
+    /// A part with accessories moves among the other parts, and its accessories move by
+    /// as many places (see `Drawing.placing`).
     /// A group moves as one unit among its part's shapes (with any of its shapes
     /// selected); shapes picked inside one group, or inside the isolated group, move
     /// among that group's shapes.
@@ -154,7 +158,14 @@ extension DrawingEditor {
         cancelGesture()
         let before = drawing
         if case .part(let id) = selection {
-            drawing.parts = Self.arranged(drawing.parts, move) { $0.id == id }
+            let family = Set(drawing.family(of: id).map { drawing.parts[$0].id })
+            if family.count > 1 {
+                let moved = Self.arranged(drawing.parts.filter { !family.contains($0.id) || $0.id == id }, move) { $0.id == id }
+                let slot = moved.firstIndex { $0.id == id } ?? 0
+                drawing.parts = Drawing.placing(id, at: slot, among: moved.filter { $0.id != id }, from: drawing.parts)
+            } else {
+                drawing.parts = Self.arranged(drawing.parts, move) { $0.id == id }
+            }
         } else {
             let refs = Set(drawing.shapeRefs(in: selection))
             for p in drawing.parts.indices {
@@ -217,9 +228,12 @@ extension DrawingEditor {
     }
 
     /// Reorders the parts to `ids`, listed front to back as the layers panel shows them.
+    /// A part that moves past parts outside its family carries its accessories along by
+    /// as many places.
     public mutating func setPartOrder(frontToBack ids: [Int]) {
         guard ids.count == drawing.parts.count, Set(ids) == Set(drawing.parts.map(\.id)) else { return }
-        let reordered = ids.reversed().compactMap { id in drawing.parts.first { $0.id == id } }
+        let requested = ids.reversed().compactMap { id in drawing.parts.first { $0.id == id } }
+        let reordered = drawing.carryingAccessories(to: requested)
         guard reordered.map(\.id) != drawing.parts.map(\.id) else { return }
         cancelGesture()
         let before = drawing
@@ -240,6 +254,10 @@ extension DrawingEditor {
         let target = drawing.parts[i - 1].id
         drawing.parts[i - 1].shapes += drawing.parts[i].shapes
         drawing.parts[i - 1].groups += drawing.parts[i].groups
+        // The merged part's accessories go to the part it merged into (or its owner).
+        if drawing.parts[i - 1].accessoryOf == id { drawing.parts[i - 1].accessoryOf = nil }
+        let owner = drawing.parts[i - 1].accessoryOf ?? target
+        for p in drawing.parts.indices where drawing.parts[p].accessoryOf == id { drawing.parts[p].accessoryOf = owner }
         drawing.parts.remove(at: i)
         if wasIsolated { isolatedPart = target }
         selection = .part(target)
@@ -359,6 +377,11 @@ extension DrawingEditor {
             drawing.renewGroups(of: &copy)
             copy.pivot = shift.apply(copy.pivot)
             drawing.parts.insert(copy, at: i + 1)
+            // Its accessories are copied along, each just in front of its original.
+            copyAccessories(of: id, to: copy.id) { part in
+                for s in part.shapes.indices { part.shapes[s].apply(shift) }
+                part.pivot = shift.apply(part.pivot)
+            }
             selection = .part(copy.id)
             return true
         }

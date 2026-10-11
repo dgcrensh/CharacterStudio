@@ -190,9 +190,10 @@ extension DrawingEditor {
         commit(from: before)
     }
 
-    /// Puts part `id`'s slot on bone `bone` (nil for the root).
+    /// Puts part `id`'s slot on bone `bone` (nil for the root), with its accessories.
+    /// An accessory is always on its owner's bone, so for one this moves the owner.
     public mutating func setPartBone(_ id: Int, bone: Int?) {
-        guard let p = drawing.partIndex(id), drawing.parts[p].bone != bone else { return }
+        guard let p = drawing.partIndex(drawing.part(id)?.accessoryOf ?? id), drawing.parts[p].bone != bone else { return }
         if let bone { guard drawing.boneIndex(bone) != nil else { return } }
         cancelGesture()
         let before = drawing
@@ -419,7 +420,19 @@ extension DrawingEditor {
             copy.groups[g].name = SideName.flipped(copy.groups[g].name) ?? copy.groups[g].name
         }
         copy.pivot = symmetry.mirror(copy.pivot)
+        // A copied accessory goes on its owner's partner on the other side, when there is one.
+        if let owner = copy.accessoryOf.flatMap({ drawing.part($0) }), let other = SideName.flipped(owner.name),
+           let match = drawing.parts.first(where: { $0.name == other && $0.accessoryOf == nil }) {
+            copy.accessoryOf = match.id
+        }
         drawing.parts.insert(copy, at: i + 1)
+        let symmetry = symmetry
+        copyAccessories(of: id, to: copy.id) { part in
+            for s in part.shapes.indices { part.shapes[s].apply(symmetry.transform) }
+            part.pivot = symmetry.mirror(part.pivot)
+            part.name = SideName.flipped(part.name) ?? part.name
+            for g in part.groups.indices { part.groups[g].name = SideName.flipped(part.groups[g].name) ?? part.groups[g].name }
+        }
         return copy.id
     }
 
@@ -454,7 +467,7 @@ extension DrawingEditor {
     }
 
     /// The drawing as the wiggle preview shows it at `time`: the wiggling part turned
-    /// about its pivot, along with the parts on bones below its bone. The drawing itself
+    /// about its pivot, along with its accessories and the parts on bones below its bone. The drawing itself
     /// when nothing wiggles.
     public func displayDrawing(at time: Double) -> Drawing {
         guard let id = wigglePart, let part = drawing.part(id) else { return drawing }
@@ -463,7 +476,8 @@ extension DrawingEditor {
         let turn = Affine2D.translation(pivot) * Affine2D.rotation(wiggleAngle(at: time) * .pi / 180) *
             Affine2D.translation(-pivot)
         let below = part.bone.map { drawing.descendantBones(of: $0) } ?? []
-        for p in out.parts.indices where out.parts[p].id == id || out.parts[p].bone.map({ below.contains($0) }) == true {
+        for p in out.parts.indices where out.parts[p].id == id || out.parts[p].accessoryOf == id ||
+            out.parts[p].bone.map({ below.contains($0) }) == true {
             for s in out.parts[p].shapes.indices { out.parts[p].shapes[s].apply(turn) }
             out.parts[p].pivot = turn.apply(out.parts[p].pivot)
         }

@@ -3,8 +3,8 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The layer tree: the character's name, its parts under the bones they belong to,
-/// and the reference image layers.
+/// The layer tree: the character's name, its parts under the bones they belong to
+/// with their accessories under them, the draw order, and the reference image layers.
 struct LayersPanel: View {
     let store: CanvasStore
     let ui: EditorUIState
@@ -42,7 +42,7 @@ struct LayersPanel: View {
             } header: {
                 Text("Skeleton")
             } footer: {
-                Text("Each part sits under the bone it moves with. Tap a bone to select it with the Bones tool; long-press a bone or part to rename, re-parent or move it.")
+                Text("Each part sits under the bone it moves with, and its accessories under it. Tap a bone to select it with the Bones tool; long-press a bone or part to rename, re-parent or move it.")
             }
 
             Section {
@@ -63,7 +63,7 @@ struct LayersPanel: View {
             } header: {
                 Text("Draw Order")
             } footer: {
-                Text("Parts are listed front to back, whatever bone they are on; drag one to reorder. The eye hides a part and the lock stops taps reaching it.")
+                Text("Parts are listed front to back, whatever bone they are on; drag one to reorder, and its accessories move along with it. The eye hides a part and the lock stops taps reaching it. Long-press a part to add an accessory, such as hair or a hat.")
             }
 
             Section {
@@ -145,8 +145,21 @@ struct LayersPanel: View {
                 store.selectPart(part.id)
             } label: {
                 HStack {
-                    Text(part.name).lineLimit(1)
-                        .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+                    if part.accessoryOf != nil {
+                        Image(systemName: "arrow.turn.down.right")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Accessory")
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(part.name).lineLimit(1)
+                            .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+                        if let owner = part.ownerName {
+                            Text("on \(owner)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     if ui.isolatedPart == part.id {
                         Image(systemName: "scope").foregroundStyle(Color.accentColor)
                     }
@@ -181,6 +194,7 @@ struct LayersPanel: View {
             if store.canMergePartDown(part.id) {
                 Button("Merge Down", systemImage: "arrow.down.to.line") { store.mergePartDown(part.id) }
             }
+            accessoryMenu(part)
             Button("Delete", systemImage: "trash", role: .destructive) { store.deletePart(part.id) }
         }
         .swipeActions {
@@ -236,7 +250,7 @@ struct LayersPanel: View {
             store.selectPart(part.id)
         } label: {
             HStack {
-                Label(part.name, systemImage: "square.on.circle")
+                Label(part.name, systemImage: part.accessoryOf == nil ? "square.on.circle" : "hat.widebrim")
                     .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
                 Spacer()
                 if ui.selectedPart == part.id {
@@ -248,13 +262,44 @@ struct LayersPanel: View {
         .buttonStyle(.plain)
         .disabled(part.isHidden || part.isLocked)
         .contextMenu {
-            Menu("Move to Bone", systemImage: "arrow.right.square") {
-                Button(CharacterFormat.rootBone) { store.setPartBone(part.id, bone: nil) }
-                ForEach(ui.bones) { bone in
-                    Button(bone.name) { store.setPartBone(part.id, bone: bone.id) }
+            // An accessory stays on its owner's bone.
+            if part.accessoryOf == nil {
+                Menu("Move to Bone", systemImage: "arrow.right.square") {
+                    Button(CharacterFormat.rootBone) { store.setPartBone(part.id, bone: nil) }
+                    ForEach(ui.bones) { bone in
+                        Button(bone.name) { store.setPartBone(part.id, bone: bone.id) }
+                    }
                 }
             }
             Button("Rename", systemImage: "pencil") { startRenaming(part) }
+            accessoryMenu(part)
+        }
+    }
+
+    /// Adding accessories to a part, or making it an accessory of another part (or a
+    /// plain part again).
+    @ViewBuilder
+    private func accessoryMenu(_ part: LayerTree.PartLayer) -> some View {
+        if store.canAddAccessory(to: part.id) {
+            Button("Add Accessory", systemImage: "hat.widebrim") {
+                store.addAccessory(to: part.id)
+                dismiss()
+            }
+            Button("Add Accessory Behind", systemImage: "square.2.layers.3d.bottom.filled") {
+                store.addAccessory(to: part.id, behind: true)
+                dismiss()
+            }
+        }
+        let owners = store.possibleOwners(of: part.id)
+        if !owners.isEmpty {
+            Menu(part.accessoryOf == nil ? "Make Accessory Of" : "Change Owner", systemImage: "arrow.turn.down.right") {
+                ForEach(owners) { owner in
+                    Button(owner.name) { store.setAccessory(part.id, of: owner.id) }
+                }
+            }
+        }
+        if let owner = part.ownerName {
+            Button("Detach from \(owner)", systemImage: "arrow.uturn.left") { store.setAccessory(part.id, of: nil) }
         }
     }
 
@@ -279,11 +324,14 @@ struct LayersPanel: View {
         }
     }
 
-    /// The tree flattened into indented rows: each bone, then its parts, then its children.
+    /// The tree flattened into indented rows: each bone, then its parts (each followed
+    /// by its accessories), then its children.
     private static func rows(_ bones: [LayerTree.BoneLayer], depth: Int = 0) -> [Row] {
         bones.flatMap { bone in
             [Row.bone(bone, depth: depth)] +
-                bone.parts.map { Row.part($0, depth: depth + 1) } +
+                bone.parts.flatMap { part in
+                    [Row.part(part, depth: depth + 1)] + part.accessories.map { Row.part($0, depth: depth + 2) }
+                } +
                 rows(bone.children, depth: depth + 1)
         }
     }
