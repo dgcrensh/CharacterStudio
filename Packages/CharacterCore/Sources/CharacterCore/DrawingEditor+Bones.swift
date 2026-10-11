@@ -265,8 +265,8 @@ extension DrawingEditor {
             copy.apply(mirror)
             drawing.bones.append(copy)
         }
-        // Parts on the mirrored bones come along, mirrored too.
-        for part in drawing.parts where part.bone.map({ map[$0] != nil }) == true {
+        // Parts on the mirrored bones come along, mirrored too (accessories with their parts).
+        for part in drawing.parts where part.bone.map({ map[$0] != nil }) == true && part.accessoryOf == nil {
             if let copy = mirroredCopy(ofPart: part.id, side: side), let p = drawing.partIndex(copy) {
                 drawing.parts[p].bone = part.bone.flatMap { map[$0] }
             }

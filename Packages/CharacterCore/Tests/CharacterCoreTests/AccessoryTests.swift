@@ -320,4 +320,50 @@ final class AccessoryTests: XCTestCase {
         let a = id(d, "A")
         XCTAssertEqual(d.parts.map(\.accessoryOf), [nil, a, a, nil, nil])
     }
+
+    func testDraggingAnotherPartPastAnOwnerLeavesItsAccessories() {
+        var e = character()
+        let ids = { (list: [String]) in list.map { id(e.drawing, $0) } }
+        // The hat is dragged to the very back, past the head: nothing else moves.
+        e.setPartOrder(frontToBack: ids(["Fringe", "Head", "Torso", "Back Hair", "Hat"]))
+        XCTAssertEqual(names(e.drawing), ["Hat", "Back Hair", "Torso", "Head", "Fringe"])
+    }
+
+    func testMirroringABoneCopiesEachAccessoryOnce() {
+        var e = character()
+        e.selectedBone = e.drawing.bones[0].id
+        e.mirrorSelectedBone()
+        XCTAssertEqual(e.drawing.parts.count, 8, "\(names(e.drawing))")
+        let copy = try! XCTUnwrap(e.drawing.parts.first { $0.name == "Head.R" })
+        XCTAssertEqual(e.drawing.accessories(of: copy.id).count, 2, "\(names(e.drawing))")
+    }
+
+    func testCutAndPasteKeepsAccessories() throws {
+        var e = character()
+        e.selection = .part(id(e.drawing, "Head"))
+        let text = try XCTUnwrap(e.cutSelection())
+        XCTAssertEqual(names(e.drawing), ["Torso", "Hat"])
+        XCTAssertTrue(e.paste(text))
+        XCTAssertEqual(names(e.drawing), ["Torso", "Hat", "Back Hair", "Head", "Fringe"])
+        let head = id(e.drawing, "Head")
+        XCTAssertEqual(e.drawing.accessories(of: head).map(\.name), ["Back Hair", "Fringe"])
+        XCTAssertEqual(e.selection, .part(head))
+    }
+
+    func testMovingShapesKeepsEmptyAccessoriesAndHandsOnOwnersAccessories() {
+        var e = character()
+        let head = id(e.drawing, "Head")
+        let empty = try! XCTUnwrap(e.addAccessory(to: head))
+        e.exitIsolation()
+        let hat = e.drawing.part(id(e.drawing, "Hat"))!
+        e.selection = .shape(part: hat.id, shape: hat.shapes[0].id)
+        e.moveSelectionToNewPart()
+        XCTAssertNotNil(e.drawing.part(empty), "the empty accessory stays")
+        // Moving the whole head into the torso hands its accessories to the torso.
+        let torso = id(e.drawing, "Torso")
+        e.selection = .part(head)
+        e.moveSelection(toPart: torso)
+        XCTAssertNil(e.drawing.part(head))
+        XCTAssertEqual(e.drawing.accessories(of: torso).map(\.name), ["Back Hair", "Fringe", "Head Accessory"])
+    }
 }

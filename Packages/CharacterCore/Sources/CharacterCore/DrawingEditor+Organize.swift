@@ -254,10 +254,7 @@ extension DrawingEditor {
         let target = drawing.parts[i - 1].id
         drawing.parts[i - 1].shapes += drawing.parts[i].shapes
         drawing.parts[i - 1].groups += drawing.parts[i].groups
-        // The merged part's accessories go to the part it merged into (or its owner).
-        if drawing.parts[i - 1].accessoryOf == id { drawing.parts[i - 1].accessoryOf = nil }
-        let owner = drawing.parts[i - 1].accessoryOf ?? target
-        for p in drawing.parts.indices where drawing.parts[p].accessoryOf == id { drawing.parts[p].accessoryOf = owner }
+        drawing.handOverAccessories(of: id, to: target)
         drawing.parts.remove(at: i)
         if wasIsolated { isolatedPart = target }
         selection = .part(target)
@@ -289,7 +286,8 @@ extension DrawingEditor {
             let taken = Self.takeGroups(from: part, moving: part.shapes.filter { refs.contains(ShapeRef(part: part.id, shape: $0.id)) })
             moved += taken.shapes
             movedGroups += taken.groups
-            if !remaining.shapes.isEmpty { kept.append(remaining) }
+            // Only parts emptied by the move go; empty parts that lost nothing stay.
+            if !remaining.shapes.isEmpty || remaining.shapes.count == part.shapes.count { kept.append(remaining) }
             if i == topIndex { insertAt = kept.count }
         }
         drawing.parts = kept
@@ -313,15 +311,22 @@ extension DrawingEditor {
         let wasIsolated = isolatedPart != nil
         var moved: [VectorShape] = []
         var movedGroups: [ShapeGroup] = []
+        var emptied: Set<Int> = []
         for p in drawing.parts.indices where drawing.parts[p].id != id {
             let partID = drawing.parts[p].id
+            if drawing.parts[p].shapes.allSatisfy({ refs.contains(ShapeRef(part: partID, shape: $0.id)) }),
+               !drawing.parts[p].shapes.isEmpty {
+                emptied.insert(partID)
+            }
             let taken = Self.takeGroups(from: drawing.parts[p],
                                         moving: drawing.parts[p].shapes.filter { refs.contains(ShapeRef(part: partID, shape: $0.id)) })
             moved += taken.shapes
             movedGroups += taken.groups
             drawing.parts[p].shapes.removeAll { refs.contains(ShapeRef(part: partID, shape: $0.id)) }
         }
-        drawing.parts.removeAll { $0.shapes.isEmpty && $0.id != id }
+        // A part moved in whole hands its accessories to the target, as Merge Down does.
+        for gone in emptied { drawing.handOverAccessories(of: gone, to: id) }
+        drawing.parts.removeAll { emptied.contains($0.id) }
         guard let target = drawing.partIndex(id) else { return }
         drawing.parts[target].shapes += moved
         drawing.parts[target].groups += movedGroups
@@ -434,8 +439,9 @@ extension DrawingEditor {
         clip.name = drawing.name
         let kind: String
         if case .part(let id) = selection, isolatedPart == nil {
-            guard let i = drawing.partIndex(id) else { return nil }
-            clip.parts = [drawing.parts[i]]
+            guard drawing.partIndex(id) != nil else { return nil }
+            // A part's accessories are copied (and cut) with it.
+            clip.parts = drawing.family(of: id).map { drawing.parts[$0] }
             kind = "parts"
         } else {
             let refs = Set(drawing.shapeRefs(in: selection))
@@ -499,8 +505,12 @@ extension DrawingEditor {
             selection = .covering(refs)
         } else {
             var added: [Int] = []
+            // Copied accessories stay with their copied owners, which may come later.
+            var newIDs: [Int: Int] = [:]
+            for part in parts { newIDs[part.id] = drawing.makeID() }
             for part in parts {
-                var copy = Part(id: drawing.makeID(), name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
+                var copy = Part(id: newIDs[part.id]!, name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
+                copy.accessoryOf = part.accessoryOf.flatMap { newIDs[$0] }
                 for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift, globals: globals)) }
                 copy.groups = part.groups
                 drawing.renewGroups(of: &copy)
@@ -508,7 +518,9 @@ extension DrawingEditor {
                 added.append(copy.id)
                 for shape in copy.shapes { refs.insert(ShapeRef(part: copy.id, shape: shape.id)) }
             }
-            selection = added.count == 1 ? .part(added[0]) : .covering(refs)
+            // One part pasted with its accessories is selected as that part.
+            let owners = added.filter { drawing.part($0)?.accessoryOf == nil }
+            selection = owners.count == 1 ? .part(owners[0]) : .covering(refs)
         }
         commit(from: before)
         return true

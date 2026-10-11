@@ -69,21 +69,29 @@ extension Drawing {
         return out
     }
 
-    /// `requested` (a new order of the parts) with the accessories of every part that
-    /// moved among the parts outside its family carried along by as many places.
+    /// `requested` (a new order of the parts, with one part dragged to a new place) with
+    /// the accessories carried along when the dragged part is a part with accessories:
+    /// they move by as many places as it moved among the parts outside its family. When
+    /// the dragged part can't be told (two neighbours swapped), nothing is carried.
     func carryingAccessories(to requested: [Part]) -> [Part] {
-        var out = requested
-        for owner in parts where owner.accessoryOf == nil && !accessories(of: owner.id).isEmpty {
-            let family = Set(family(of: owner.id).map { parts[$0].id })
-            let others = out.filter { !family.contains($0.id) }
-            func slot(_ list: [Part]) -> Int {
-                list.prefix { $0.id != owner.id }.filter { !family.contains($0.id) }.count
-            }
-            let moved = slot(out)
-            guard moved != slot(parts) else { continue }
-            out = Self.placing(owner.id, at: moved, among: others, from: parts)
-        }
-        return out
+        let old = parts.map(\.id), new = requested.map(\.id)
+        let dragged = old.filter { id in old.filter { $0 != id } == new.filter { $0 != id } }
+        guard old != new, dragged.count == 1, let owner = part(dragged[0]), owner.accessoryOf == nil,
+              !accessories(of: owner.id).isEmpty else { return requested }
+        let family = Set(family(of: owner.id).map { parts[$0].id })
+        let others = requested.filter { !family.contains($0.id) }
+        let slot = requested.prefix { $0.id != owner.id }.filter { !family.contains($0.id) }.count
+        return Self.placing(owner.id, at: slot, among: others, from: parts)
+    }
+
+    /// Gives part `id`'s accessories to part `target` as `id` goes away (merged into
+    /// `target`): to `target`'s owner when it is an accessory, and to `target` itself
+    /// when it was one of `id`'s.
+    mutating func handOverAccessories(of id: Int, to target: Int) {
+        guard let t = partIndex(target) else { return }
+        if parts[t].accessoryOf == id { parts[t].accessoryOf = nil }
+        let owner = parts[t].accessoryOf ?? target
+        for p in parts.indices where parts[p].accessoryOf == id { parts[p].accessoryOf = owner }
     }
 }
 
