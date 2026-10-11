@@ -124,8 +124,9 @@ public enum SVGWriter {
             var openGroup: Int?
             var clipGroup: (base: Int, mask: String)?
             var masks: [Int: String] = [:]
+            let clips = part.clipPlan()
             for index in part.shapes.indices where part.isShown(index) {
-                let base = part.clipBase(of: index)
+                let base = clips.base(of: index)
                 if let base, !part.isShown(base) { continue }
                 let group = part.shapes[index].group.flatMap { part.group($0) }
                 if group?.id != openGroup {

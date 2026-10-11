@@ -254,6 +254,18 @@ final class UndoStackTests: XCTestCase {
         stack.record(3, coalescingKey: "outline")
         XCTAssertEqual(stack.undoStates, [0, 3])
     }
+
+    func testLimitDropsOldestSteps() {
+        var stack = UndoStack<Int>(limit: 3)
+        for i in 0..<5 { stack.record(i) }
+        XCTAssertEqual(stack.undoStates, [2, 3, 4])
+        XCTAssertEqual(stack.undo(current: 5), 4)
+        XCTAssertEqual(stack.redo(current: 4), 5)
+        XCTAssertEqual(stack.undoStates, [2, 3, 4])
+        stack.record(5)
+        XCTAssertEqual(stack.undoStates, [3, 4, 5])
+        XCTAssertEqual(UndoStack<Int>().limit, UndoStack<Int>.defaultLimit)
+    }
 }
 
 final class DrawingEditorTests: XCTestCase {

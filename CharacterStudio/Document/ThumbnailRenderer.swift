@@ -50,9 +50,10 @@ enum ThumbnailRenderer {
     /// Draws every part back to front. Hidden art is left out when `skipHidden` is set.
     private static func drawArt(_ drawing: Drawing, in context: CGContext, tolerance: Double, skipHidden: Bool) {
         for part in drawing.parts {
+            let clips = part.clipPlan()
             for (index, shape) in part.shapes.enumerated() {
                 if skipHidden, !part.isShown(index) { continue }
-                if let base = part.clipBase(of: index) {
+                if let base = clips.base(of: index) {
                     if skipHidden, !part.isShown(base) { continue }
                     // Clipped shapes draw only where their base draws.
                     context.saveGState()

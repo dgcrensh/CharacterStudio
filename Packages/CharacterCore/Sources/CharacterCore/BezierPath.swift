@@ -254,6 +254,19 @@ public struct BezierPath: Hashable, Sendable, Codable {
         Rect(points: flattened(tolerance: tolerance))
     }
 
+    /// The bounds of the anchors and their handles' control points. A cubic stays inside
+    /// its control points' hull, so this contains the curve without flattening it; it can
+    /// be larger than `bounds()`, so use it for rejecting, not for showing.
+    public var controlBounds: Rect {
+        var r = Rect.null
+        for point in points {
+            r.include(point.position)
+            r.include(point.inControl)
+            r.include(point.outControl)
+        }
+        return r
+    }
+
     public mutating func apply(_ t: Affine2D) {
         for i in points.indices {
             points[i].position = t.apply(points[i].position)
