@@ -698,6 +698,25 @@ What the split says:
   over every shape. Step 5's segment skip (its third bullet) matters more for the scissors than
   the grid; the grid still matters for `hitTest` and the eraser, which do scale.
 
+#### Step 3: open and import
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Open: parse and decode | before | 48.1 | 96.2 | 193.5 | 386.5 | 769.7 |
+| | after | 17.3 | 34.6 | 69.6 | 140.0 | 280.7 |
+| Open: parse only | before | 32.2 | 65.1 | 131.3 | 263.5 | 532.5 |
+| | after | 7.9 | 15.9 | 31.9 | 64.1 | 128.6 |
+| Open: decode only | before | 15.1 | 29.9 | 59.6 | 119.0 | 236.6 |
+| | after | 9.3 | 18.8 | 37.9 | 75.7 | 151.4 |
+| SVG import | before | 49.3 | 99.6 | 202.8 | 404.1 | 820.8 |
+| | after | 2.77 | 5.55 | 11.1 | 22.2 | 45.4 |
+
+Open is 2.8x faster (parsing 4.1x, decoding 1.6x) and misses the plan's 100 ms target at 2,400 shapes:
+decoding is now the larger half, at 76 ms. SVG import is 18x faster, most of it from `XMLReader` no
+longer building arrays per tag, and it now runs off the main thread as well.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and
