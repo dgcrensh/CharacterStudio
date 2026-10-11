@@ -42,6 +42,30 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The rebuild after one edit as the renderer does it (plan step 2.3): no concatenated
+    /// vertex array, and only the segments that changed copied out, as `uploadArt` copies
+    /// them into new GPU buffers (here into a buffer allocated once).
+    static let artRebuildAfterOneEditAndUpload = Workload(name: "Art rebuild after one edit, with upload") { drawing in
+        var edited = drawing
+        edited.parts[0].shapes[0].fill = RGBAColor(r: 1, g: 0, b: 0)
+        var builder = ArtBuilder()
+        builder.concatenatesVertices = false
+        let first = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        var resident = first.residentIDs
+        var gpu = [Float](repeating: 0, count: first.segments.reduce(0) { $0 + $1.floats.count })
+        var flip = false
+        return {
+            flip.toggle()
+            let batch = builder.build(flip ? edited : drawing, isolatedPart: nil, tolerance: 0.5)
+            gpu.withUnsafeMutableBytes { target in
+                for segment in batch.segmentsToUpload(resident: resident) {
+                    segment.floats.withUnsafeBytes { target.baseAddress!.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+                }
+            }
+            resident = batch.residentIDs
+        }
+    }
+
     /// A zoom that crosses a power-of-two bucket changes the flattening tolerance, which
     /// re-tessellates every shape. Since plan step 1 the renderer no longer does this in
     /// a frame (it refines in the background, `zoomInRefineVisible`); the row stays as
@@ -305,8 +329,8 @@ struct Workload: @unchecked Sendable {
 
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
-        [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAtNewZoomBucket, zoomInRefineVisible, hoverFrame,
-         selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
+        [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAfterOneEditAndUpload, artRebuildAtNewZoomBucket,
+         zoomInRefineVisible, hoverFrame, selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
          scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
          undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
          svgImport]

@@ -29,17 +29,26 @@ final class ScalingTests: XCTestCase {
         XCTAssertEqual(rows.count, Workload.all.count)
     }
 
-    /// What the art pass hands the GPU at each size: vertices, and the bytes the renderer
-    /// uploads after every rebuild (`CanvasRenderer.updateArt`), which no workload times.
+    /// What the art pass hands the GPU at each size: vertices, the bytes of a full upload
+    /// (the first build, or a new zoom bucket), and what `CanvasRenderer.uploadArt` uploads
+    /// after one edit (only the edited part's segment).
     func testArtUploadSize() {
-        var lines = ["Art batch per size", "", "| Shapes | Vertices | Upload | Steps |", "| ---: | ---: | ---: | ---: |"]
+        var lines = ["Art batch per size", "", "| Shapes | Vertices | Full upload | Upload after one edit | Steps |",
+                     "| ---: | ---: | ---: | ---: | ---: |"]
+        func megabytes(_ floats: Int) -> String {
+            String(format: "%.2f", Double(floats * MemoryLayout<Float>.size) / 1_048_576) + " MB"
+        }
         for parts in Self.partCounts {
             let drawing = StressDrawing.make(parts: parts, shapesPerPart: Self.shapesPerPart)
             var builder = ArtBuilder()
             let batch = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
-            let bytes = batch.vertices.count * MemoryLayout<Float>.size
-            lines.append("| \(drawing.shapeCount) | \(batch.vertexCount) | \(String(format: "%.1f", Double(bytes) / 1_048_576)) MB | \(batch.steps.count) |")
+            var edited = drawing
+            edited.parts[0].shapes[0].fill = RGBAColor(r: 1, g: 0, b: 0)
+            let after = builder.build(edited, isolatedPart: nil, tolerance: 0.5)
+            let uploaded = after.segmentsToUpload(resident: batch.residentIDs).reduce(0) { $0 + $1.floats.count }
+            lines.append("| \(drawing.shapeCount) | \(batch.vertexCount) | \(megabytes(batch.vertices.count)) | \(megabytes(uploaded)) | \(batch.steps.count) |")
             XCTAssertGreaterThan(batch.vertexCount, 0)
+            XCTAssertEqual(uploaded, after.segments[0].floats.count)
         }
         print(lines.joined(separator: "\n"))
     }

@@ -102,6 +102,13 @@ public struct TessellationCache: Sendable {
         secondTierVertexCount = 0
     }
 
+    /// Forgets shape `id`.
+    mutating func remove(_ id: Int) {
+        guard let old = entries.removeValue(forKey: id) else { return }
+        vertexCount -= old.current.vertexCount
+        secondTierVertexCount -= old.other?.vertexCount ?? 0
+    }
+
     /// Forgets the shapes not in `live`.
     mutating func removeAll(except live: Set<Int>) {
         for id in entries.keys where !live.contains(id) {

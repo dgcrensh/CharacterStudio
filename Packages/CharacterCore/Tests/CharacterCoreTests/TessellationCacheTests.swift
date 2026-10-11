@@ -35,6 +35,12 @@ final class TessellationCacheTests: XCTestCase {
 
     private static func ids(_ d: Drawing) -> [Int] { d.parts.flatMap { $0.shapes.map(\.id) } }
 
+    /// The same vertices and steps; segment ids are per builder, so they aren't compared.
+    private func assertSameArt(_ a: ArtBatch, _ b: ArtBatch, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(a.vertices, b.vertices, file: file, line: line)
+        XCTAssertEqual(a.steps, b.steps, file: file, line: line)
+    }
+
     // MARK: Merge
 
     func testMergeKeepsUnchangedShapesAndTheWarmBuildTessellatesNothing() {
@@ -50,7 +56,7 @@ final class TessellationCacheTests: XCTestCase {
         let warm = builder.build(drawing, isolatedPart: nil, tolerance: 0.1)
         XCTAssertEqual(builder.tessellationCount, 0)
         var cold = ArtBuilder()
-        XCTAssertEqual(warm, cold.build(drawing, isolatedPart: nil, tolerance: 0.1))
+        assertSameArt(warm, cold.build(drawing, isolatedPart: nil, tolerance: 0.1))
     }
 
     func testMergeDropsAShapeEditedWhileTheJobRan() {
@@ -80,7 +86,7 @@ final class TessellationCacheTests: XCTestCase {
         let warm = builder.build(edited, isolatedPart: nil, tolerance: 0.1)
         XCTAssertEqual(builder.tessellationCount, 1)
         var cold = ArtBuilder()
-        XCTAssertEqual(warm, cold.build(edited, isolatedPart: nil, tolerance: 0.1))
+        assertSameArt(warm, cold.build(edited, isolatedPart: nil, tolerance: 0.1))
     }
 
     func testACancelledJobReturnsNothing() {
@@ -195,7 +201,7 @@ final class TessellationCacheTests: XCTestCase {
         _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.1)
         XCTAssertEqual(builder.tessellationCount, 2 * n)
         var cold = ArtBuilder()
-        XCTAssertEqual(back, cold.build(drawing, isolatedPart: nil, tolerance: 0.2))
+        assertSameArt(back, cold.build(drawing, isolatedPart: nil, tolerance: 0.2))
 
         // A third tolerance pushes out the least recently used one.
         _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.05)

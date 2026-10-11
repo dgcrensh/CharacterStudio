@@ -115,16 +115,68 @@ public enum ArtStep: Hashable, Sendable {
 
 /// The art ready for the GPU: world-space triangles and the steps that draw them.
 public struct ArtBatch: Hashable, Sendable {
-    /// Two floats (x, y) per vertex.
+    /// Two floats (x, y) per vertex. Empty when the builder doesn't concatenate them
+    /// (`ArtBuilder.concatenatesVertices`); the segments still hold every part's floats.
     public var vertices: [Float] = []
     public var steps: [ArtStep] = []
+    /// One per part in the draw stack, in order: which steps and vertices it drew.
+    public var segments: [ArtSegment] = []
 
     public var vertexCount: Int { vertices.count / 2 }
 }
 
+/// One part's share of an `ArtBatch`, so the renderer can keep each part's vertices in
+/// its own GPU buffer and upload only the parts an edit changed.
+public struct ArtSegment: Hashable, Sendable {
+    /// Names these vertices: a segment in a later batch from the same `ArtBuilder` with
+    /// the same id has the same `floats`. Never reused by that builder.
+    public var id: Int
+    /// The part's vertices, in the batch's vertex numbering.
+    public var vertices: Range<Int>
+    /// The part's steps, as indices into `ArtBatch.steps`.
+    public var steps: Range<Int>
+    /// The part's vertices, two floats each (shared with the builder's cache, not copied).
+    public var floats: [Float]
+
+    /// `range` (from one of this segment's steps) counted from the segment's first vertex,
+    /// for drawing from a buffer that holds only `floats`.
+    public func local(_ range: Range<Int>) -> Range<Int> {
+        (range.lowerBound - vertices.lowerBound)..<(range.upperBound - vertices.lowerBound)
+    }
+}
+
+extension ArtBatch {
+    /// The segments whose vertices aren't in a GPU buffer yet: those with vertices whose
+    /// id isn't in `resident`. After one edit that is the edited part's segment only.
+    public func segmentsToUpload(resident: Set<Int>) -> [ArtSegment] {
+        segments.filter { !$0.floats.isEmpty && !resident.contains($0.id) }
+    }
+
+    /// The ids whose buffers this batch draws from; buffers for any other id can go.
+    public var residentIDs: Set<Int> {
+        Set(segments.lazy.filter { !$0.floats.isEmpty }.map(\.id))
+    }
+}
+
+extension ArtStep {
+    /// The same step with its vertex range moved by `offset`.
+    func offset(by offset: Int) -> ArtStep {
+        switch self {
+        case .stencil(let range, let state, let reference):
+            .stencil(vertices: (range.lowerBound + offset)..<(range.upperBound + offset), state: state, reference: reference)
+        case .cover(let range, let paint, let state, let reference):
+            .cover(vertices: (range.lowerBound + offset)..<(range.upperBound + offset), paint: paint, state: state,
+                   reference: reference)
+        case .stencilView, .veil, .moving:
+            self
+        }
+    }
+}
+
 /// Builds the art pass for a drawing and keeps each shape's triangles until that
 /// shape (or the flattening tolerance) changes, so an edit re-tessellates only the
-/// shapes it touches.
+/// shapes it touches. It also keeps each part's finished steps and vertices, so an edit
+/// rebuilds only the parts it touches and the rest are copied as they are.
 ///
 /// Each fill is drawn with stencil-then-cover: its fan marks winding numbers, then a
 /// rectangle over it paints where the winding is non-zero, which fills any outline
@@ -139,17 +191,59 @@ public struct ArtBuilder: Sendable {
     struct Tessellation: Sendable {
         var shape: VectorShape
         var tolerance: Double
-        /// Fan over the flattened path (closed paths only), and its bounds.
-        var fan: [Vec2]
+        /// Fan over the flattened path (closed paths only), two floats per vertex, and its bounds.
+        var fan: [Float]
         var fanBounds: Rect
-        /// Outline triangles, and their bounds.
-        var outline: [Vec2]
+        /// Outline triangles, two floats per vertex, and their bounds.
+        var outline: [Float]
         var outlineBounds: Rect
 
         /// What the cache counts against its second-tier limit.
-        var vertexCount: Int { fan.count + outline.count }
+        var vertexCount: Int { (fan.count + outline.count) / 2 }
     }
 
+    /// What one part's steps and vertices depend on besides its shapes' tessellations:
+    /// a part whose key is unchanged reuses its `PartBatch`. Comparing the shapes is a
+    /// pointer compare for an untouched part, whose array shares storage with the last one.
+    struct PartKey: Equatable, Sendable {
+        var shapes: [VectorShape]
+        var groups: [ShapeGroup]
+        var isHidden: Bool
+        var tolerance: Double
+        var isIsolated: Bool
+        /// The isolated group, when this is the isolated part and has that group.
+        var isolatedGroup: Int?
+        /// The ghost focus and the moving set, restricted to this part's shapes.
+        var ghostFocus: Set<Int>?
+        var moving: Set<Int>
+    }
+
+    /// One part's steps, with vertex ranges counted from the start of its own `vertices`.
+    /// Each starts and ends with `moving` off.
+    struct PartBatch: Sendable {
+        var key: PartKey
+        var id: Int
+        /// Every shape was drawn at `key.tolerance`. A part built while a refine was under
+        /// way may hold shapes at an older tolerance; it is rebuilt rather than reused, so
+        /// it picks up the refined shapes once they are merged.
+        var isExact: Bool
+        var vertices: [Float]
+        var steps: [ArtStep]
+    }
+
+    /// A place in the draw stack: an accessory drawn partly behind its owner appears twice
+    /// with the same id, so the cache tells the two apart by their order.
+    struct PartSlot: Hashable, Sendable {
+        var id: Int
+        var occurrence: Int
+    }
+
+    private var partCache: [PartSlot: PartBatch] = [:]
+    private var nextPartBatchID = 1
+    /// How many part batches have been built rather than reused, for tests.
+    private(set) var partBuilds = 0
+    /// How many shapes have a cached tessellation, for tests.
+    var cachedShapeCount: Int { tessellations.count }
     /// Each shape's tessellation. Public so the renderer can refine a copy in the
     /// background and merge the result (see `TessellationCache`).
     public var tessellations = TessellationCache()
@@ -158,10 +252,15 @@ public struct ArtBuilder: Sendable {
     private var reusesOtherTolerances = false
     /// How many shapes builds have tessellated, for tests.
     var tessellationCount = 0
+    /// Set while building a part when a shape used a tessellation at another tolerance.
+    private var usedOtherTolerance = false
     /// Builds the steps without writing any vertices (their ranges are empty), so
     /// `ScalingTests` can time the cache walk apart from the vertex appends.
     var skipsVertices = false
-    /// While building: the shapes to mark as moving, and whether the last mark was on.
+    /// Concatenates every part's floats into `ArtBatch.vertices`. A renderer that uploads
+    /// the segments one by one turns it off and skips the copy.
+    public var concatenatesVertices = true
+    /// While building a part: the shapes to mark as moving, and whether the last mark was on.
     private var moving: Set<Int> = []
     private var isMoving = false
 
@@ -182,33 +281,79 @@ public struct ArtBuilder: Sendable {
                                ghostFocus: Set<Int>? = nil, moving: Set<Int> = [],
                                reusingOtherTolerances: Bool = false) -> ArtBatch {
         var batch = ArtBatch()
-        self.moving = moving
         reusesOtherTolerances = reusingOtherTolerances
-        isMoving = false
-        var live: Set<Int> = []
+        defer { reusesOtherTolerances = false }
         var parts = drawing.drawStack
         if let isolatedPart {
             parts = parts.filter { $0.id != isolatedPart } + parts.filter { $0.id == isolatedPart }
         }
+        var occurrences: [Int: Int] = [:]
+        var seen: Set<PartSlot> = []
+        // The shapes of parts rebuilt or gone, and of the rebuilt parts as they are now:
+        // the difference has left the drawing, so its tessellations can go.
+        var retired: Set<Int> = [], fresh: Set<Int> = []
         for part in parts {
-            for shape in part.shapes { live.insert(shape.id) }
-            let all = Array(part.shapes.indices)
-            if part.id == isolatedPart, let group = isolatedGroup, part.group(group) != nil {
-                let inGroup = all.filter { part.shapes[$0].group == group }
-                appendShapes(all.filter { part.shapes[$0].group != group }, of: part, skippingBases: Set(inGroup),
-                             tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
-                batch.steps.append(.veil)
-                appendShapes(inGroup, of: part, skippingBases: [], tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
-            } else {
-                if part.id == isolatedPart { batch.steps.append(.veil) }
-                appendShapes(all, of: part, skippingBases: [], tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
+            let occurrence = occurrences[part.id, default: 0]
+            occurrences[part.id] = occurrence + 1
+            let slot = PartSlot(id: part.id, occurrence: occurrence)
+            seen.insert(slot)
+            let isolated = part.id == isolatedPart
+            let key = PartKey(shapes: part.shapes, groups: part.groups, isHidden: part.isHidden, tolerance: tolerance,
+                              isIsolated: isolated,
+                              isolatedGroup: isolated ? isolatedGroup.flatMap { part.group($0) == nil ? nil : $0 } : nil,
+                              ghostFocus: ghostFocus.map { Self.restrict($0, to: part) },
+                              moving: Self.restrict(moving, to: part))
+            if let cached = partCache[slot], cached.isExact, cached.key == key {
+                batch.append(cached, concatenating: concatenatesVertices)
+                continue
             }
+            if let old = partCache[slot] { retired.formUnion(old.key.shapes.lazy.map(\.id)) }
+            fresh.formUnion(part.shapes.lazy.map(\.id))
+            let built = buildPart(part, key: key)
+            partCache[slot] = built
+            batch.append(built, concatenating: concatenatesVertices)
+        }
+        for slot in Array(partCache.keys) where !seen.contains(slot) {
+            if let old = partCache.removeValue(forKey: slot) { retired.formUnion(old.key.shapes.lazy.map(\.id)) }
+        }
+        for id in retired where !fresh.contains(id) { tessellations.remove(id) }
+        return batch
+    }
+
+    /// The ids in `set` that are shapes of `part`.
+    private static func restrict(_ set: Set<Int>, to part: Part) -> Set<Int> {
+        guard !set.isEmpty else { return [] }
+        var result: Set<Int> = []
+        for shape in part.shapes where set.contains(shape.id) { result.insert(shape.id) }
+        return result
+    }
+
+    /// Draws one part from scratch (its shapes' tessellations still come from the cache).
+    private mutating func buildPart(_ part: Part, key: PartKey) -> PartBatch {
+        partBuilds += 1
+        var batch = ArtBatch()
+        moving = key.moving
+        isMoving = false
+        usedOtherTolerance = false
+        let all = Array(part.shapes.indices)
+        if let group = key.isolatedGroup {
+            let inGroup = all.filter { part.shapes[$0].group == group }
+            appendShapes(all.filter { part.shapes[$0].group != group }, of: part, skippingBases: Set(inGroup),
+                         tolerance: key.tolerance, ghostFocus: key.ghostFocus, to: &batch)
+            batch.steps.append(.veil)
+            appendShapes(inGroup, of: part, skippingBases: [], tolerance: key.tolerance, ghostFocus: key.ghostFocus,
+                         to: &batch)
+        } else {
+            if key.isIsolated { batch.steps.append(.veil) }
+            appendShapes(all, of: part, skippingBases: [], tolerance: key.tolerance, ghostFocus: key.ghostFocus,
+                         to: &batch)
         }
         if isMoving { batch.steps.append(.moving(false)) }
-        self.moving = []
-        reusesOtherTolerances = false
-        tessellations.removeAll(except: live)
-        return batch
+        moving = []
+        isMoving = false
+        defer { nextPartBatchID += 1 }
+        return PartBatch(key: key, id: nextPartBatchID, isExact: !usedOtherTolerance, vertices: batch.vertices,
+                         steps: batch.steps)
     }
 
     /// Adds the shapes at `indices` of `part`, leaving out clipped shapes and clipped
@@ -281,7 +426,10 @@ public struct ArtBuilder: Sendable {
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {
         if let cached = tessellations.use(shape, tolerance: tolerance) { return cached }
-        if reusesOtherTolerances, let cached = tessellations.anyTessellation(of: shape) { return cached }
+        if reusesOtherTolerances, let cached = tessellations.anyTessellation(of: shape) {
+            usedOtherTolerance = true
+            return cached
+        }
         let result = Self.tessellate(shape, tolerance: tolerance)
         tessellationCount += 1
         tessellations.store(result)
@@ -291,17 +439,31 @@ public struct ArtBuilder: Sendable {
     /// Flattens and strokes one shape. Pure, so a background refine can call it.
     static func tessellate(_ shape: VectorShape, tolerance: Double) -> Tessellation {
         let poly = shape.path.flattened(tolerance: tolerance)
-        var fan: [Vec2] = []
+        var fan: [Float] = []
         if shape.path.closed, poly.count >= 3 {
-            for i in 1..<(poly.count - 1) { fan += [poly[0], poly[i], poly[i + 1]] }
+            fan.reserveCapacity((poly.count - 2) * 6)
+            for i in 1..<(poly.count - 1) {
+                for p in [poly[0], poly[i], poly[i + 1]] {
+                    fan.append(Float(p.x))
+                    fan.append(Float(p.y))
+                }
+            }
         }
         var outline: [Vec2] = []
         if let stroke = shape.stroke, stroke.width > 0 {
             let aligned = shape.path.closed && stroke.alignment != .center
             outline = Stroker.triangles(for: shape.path, style: stroke, widthScale: aligned ? 2 : 1, tolerance: tolerance)
         }
-        return Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: Rect(points: poly),
-                            outline: outline, outlineBounds: Rect(points: outline))
+        // Stored as floats, ready to copy: a part's rebuild then converts nothing.
+        var outlineFloats: [Float] = []
+        outlineFloats.reserveCapacity(outline.count * 2)
+        for p in outline {
+            outlineFloats.append(Float(p.x))
+            outlineFloats.append(Float(p.y))
+        }
+        let result = Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: Rect(points: poly),
+                                  outline: outlineFloats, outlineBounds: Rect(points: outline))
+        return result
     }
 
     /// `clipArea` bounds the clip clear before a base (see `clipArea(of:in:clips:drawn:tolerance:)`).
@@ -350,7 +512,7 @@ public struct ArtBuilder: Sendable {
         }
     }
 
-    private func add(to batch: inout ArtBatch, _ points: [Vec2]) -> Range<Int> {
+    private func add(to batch: inout ArtBatch, _ points: [Float]) -> Range<Int> {
         skipsVertices ? batch.vertexCount..<batch.vertexCount : batch.add(points)
     }
 
@@ -432,6 +594,35 @@ public struct ArtBuilder: Sendable {
 }
 
 extension ArtBatch {
+    /// Appends a part's batch as the next segment, moving its vertex ranges past the
+    /// vertices so far. A `moving(false)` ending the last part and a `moving(true)`
+    /// starting this one cancel out, as they would in one walk across both parts.
+    mutating func append(_ part: ArtBuilder.PartBatch, concatenating: Bool) {
+        let base = segments.last?.vertices.upperBound ?? 0
+        var partSteps = part.steps[...]
+        if case .moving(true)? = partSteps.first, case .moving(false)? = steps.last, let last = segments.indices.last {
+            steps.removeLast()
+            segments[last].steps = segments[last].steps.lowerBound..<(segments[last].steps.upperBound - 1)
+            partSteps = partSteps.dropFirst()
+        }
+        let firstStep = steps.count
+        if base == 0 {
+            steps.append(contentsOf: partSteps)
+        } else {
+            steps.reserveAdditional(partSteps.count)
+            for step in partSteps { steps.append(step.offset(by: base)) }
+        }
+        if concatenating { vertices.append(contentsOf: part.vertices) }
+        segments.append(ArtSegment(id: part.id, vertices: base..<(base + part.vertices.count / 2),
+                                   steps: firstStep..<steps.count, floats: part.vertices))
+    }
+
+    mutating func add(_ points: [Float]) -> Range<Int> {
+        let start = vertexCount
+        vertices.append(contentsOf: points)
+        return start..<vertexCount
+    }
+
     mutating func add(_ points: [Vec2]) -> Range<Int> {
         let start = vertexCount
         vertices.reserveAdditional(points.count * 2)
