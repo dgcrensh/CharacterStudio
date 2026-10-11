@@ -244,7 +244,7 @@ final class PerformanceTests: XCTestCase {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
         editor.outlineView = true
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measure {
             var cache = OverlayCache()
             _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
@@ -276,7 +276,7 @@ final class PerformanceTests: XCTestCase {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
         editor.outlineView = true
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measureHoverFrames(editor)
     }
 
@@ -292,7 +292,7 @@ final class PerformanceTests: XCTestCase {
     func testOverlayHoverScissors() {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .scissors
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measureHoverFrames(editor)
     }
 
@@ -300,7 +300,7 @@ final class PerformanceTests: XCTestCase {
     func testOverlayHoverSelect() {
         var editor = DrawingEditor(drawing: drawing)
         editor.tool = .select
-        editor.selection = .part(drawing.parts[0].id)
+        editor.selection = .layer(drawing.parts[0].id)
         measureHoverFrames(editor)
     }
 

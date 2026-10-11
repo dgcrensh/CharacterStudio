@@ -532,7 +532,7 @@ final class AppearanceEditingTests: XCTestCase {
         e.renameGlobalColor(ink, to: "  ")
         XCTAssertEqual(e.drawing.globalColor(ink)?.name, "Ink")
 
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         e.applyGlobalFill(skin)
         e.undo()
         XCTAssertEqual(e.drawing.parts[0].shapes.map(\.fill), [red, blue], "applying a global color is one undo step")
@@ -843,5 +843,213 @@ extension ArtBatchTests {
             }
         })
         XCTAssertTrue(StencilSimulator.run(batch, at: Vec2(5, 5)).isColor(red))
+    }
+}
+
+/// Clipped groups (a whole group drawn inside the shape below it) and accessory shapes
+/// drawn behind their owner.
+final class GroupClipAndBehindTests: XCTestCase {
+    private let green = RGBAColor(r: 0, g: 1, b: 0)
+    private let yellow = RGBAColor(r: 1, g: 1, b: 0)
+
+    /// One part: a red base square (0...10), then a clipped group of a blue square and a
+    /// green square clipped to the blue one inside the group, then `above`.
+    private func clippedGroup(above: [VectorShape] = [], groupClipped: Bool = true) -> Drawing {
+        var d = Drawing()
+        let group = d.makeID()
+        var shapes = [VectorShape(id: d.makeID(), path: square(0, 0, 10), fill: red),
+                      VectorShape(id: d.makeID(), path: square(5, 5, 10), fill: blue),
+                      VectorShape(id: d.makeID(), path: square(7, 7, 10), fill: green)]
+        shapes[1].group = group
+        shapes[2].group = group
+        shapes[2].isClipped = true
+        for var shape in above {
+            shape.id = d.makeID()
+            shapes.append(shape)
+        }
+        var part = Part(id: d.makeID(), name: "Eye", shapes: shapes)
+        part.groups = [ShapeGroup(id: group, name: "Iris", isClipped: groupClipped)]
+        d.parts.append(part)
+        return d
+    }
+
+    private func render(_ d: Drawing, at p: Vec2, isolating part: Int? = nil, group: Int? = nil) -> StencilSimulator {
+        var builder = ArtBuilder()
+        return StencilSimulator.run(builder.build(d, isolatedPart: part, isolatedGroup: group, tolerance: 0.05), at: p)
+    }
+
+    func testAClippedGroupDrawsOnlyInsideTheShapeBelowIt() {
+        let d = clippedGroup()
+        XCTAssertTrue(render(d, at: Vec2(2, 2)).isColor(red))
+        XCTAssertTrue(render(d, at: Vec2(6, 6)).isColor(blue))
+        // Clipping inside the group still works, within the group's base.
+        XCTAssertTrue(render(d, at: Vec2(8, 8)).isColor(green))
+        for p in [Vec2(12, 12), Vec2(16, 16), Vec2(6, 12)] {
+            XCTAssertTrue(render(d, at: p).isWhite, "\(p)")
+        }
+        for p in [Vec2(2, 2), Vec2(6, 6), Vec2(8, 8), Vec2(12, 12), Vec2(30, 30)] {
+            XCTAssertEqual(render(d, at: p).stencil & 0x7F, 0, "\(p)")
+        }
+        // Not clipped, the group draws whole.
+        let whole = clippedGroup(groupClipped: false)
+        XCTAssertTrue(render(whole, at: Vec2(12, 12)).isColor(green))
+        XCTAssertTrue(render(whole, at: Vec2(6, 12)).isColor(blue))
+    }
+
+    func testClippedShapesAboveAClippedGroupShareItsBase() {
+        var shadow = VectorShape(id: 0, path: square(-5, -5, 40), fill: yellow)
+        shadow.isClipped = true
+        let d = clippedGroup(above: [shadow])
+        XCTAssertEqual(d.parts[0].clipBase(of: 3), 0)
+        // The shadow draws over the base, including where the group's inner clip was.
+        XCTAssertTrue(render(d, at: Vec2(2, 2)).isColor(yellow))
+        XCTAssertTrue(render(d, at: Vec2(8, 8)).isColor(yellow))
+        XCTAssertTrue(render(d, at: Vec2(12, 12)).isWhite)
+        XCTAssertTrue(render(d, at: Vec2(-2, -2)).isWhite)
+    }
+
+    func testAClippedGroupWithAlignedOutlines() {
+        for alignment in [StrokeAlignment.center, .inside, .outside] {
+            var d = clippedGroup()
+            for s in d.parts[0].shapes.indices {
+                d.parts[0].shapes[s].stroke = StrokeStyle(color: .ink, width: 2, alignment: alignment)
+            }
+            for p in [Vec2(1.5, 2), Vec2(-1.5, 2), Vec2(6, 6), Vec2(8, 8), Vec2(9.5, 9.5), Vec2(10.5, 10.5),
+                      Vec2(12, 12), Vec2(20, 20)] {
+                XCTAssertEqual(render(d, at: p).stencil & 0x7F, 0, "\(alignment) \(p)")
+            }
+            XCTAssertTrue(render(d, at: Vec2(9.5, 9.5)).isColor(green), "\(alignment)")
+            XCTAssertTrue(render(d, at: Vec2(14, 14)).isWhite, "\(alignment)")
+        }
+    }
+
+    func testAHiddenBaseHidesTheGroupAndNothingBelowDrawsItWhole() {
+        var d = clippedGroup()
+        d.parts[0].shapes[0].isHidden = true
+        XCTAssertTrue(render(d, at: Vec2(6, 6)).isWhite)
+        XCTAssertNil(d.hitTest(Vec2(6, 6), tolerance: 0))
+        d.parts[0].shapes.removeFirst()
+        XCTAssertNil(d.parts[0].clipBase(ofGroup: d.parts[0].groups[0].id))
+        XCTAssertTrue(render(d, at: Vec2(12, 12)).isColor(green))
+    }
+
+    func testHitTestingFollowsTheGroupClip() {
+        let d = clippedGroup()
+        let part = d.parts[0]
+        XCTAssertEqual(d.hitTest(Vec2(6, 6), tolerance: 0)?.shape, part.shapes[1].id)
+        XCTAssertNil(d.hitTest(Vec2(12, 12), tolerance: 0))
+    }
+
+    /// The bounded clip clear before a group's base covers the whole group, so a clip
+    /// left over from an earlier part doesn't show through the group mask.
+    func testAClippedGroupIgnoresAClipLeftByAnEarlierPart() {
+        var d = clippedGroup()
+        var big = VectorShape(id: d.makeID(), path: square(0, 0, 40), fill: red)
+        big.stroke = nil
+        var cover = VectorShape(id: d.makeID(), path: square(0, 0, 40), fill: yellow)
+        cover.isClipped = true
+        d.parts.insert(Part(id: d.makeID(), name: "Back", shapes: [big, cover]), at: 0)
+        XCTAssertTrue(render(d, at: Vec2(12, 12)).isColor(yellow))
+        XCTAssertTrue(render(d, at: Vec2(6, 6)).isColor(blue))
+        XCTAssertTrue(render(d, at: Vec2(8, 8)).isColor(green))
+    }
+
+    func testAnIsolatedClippedGroupDrawsWhole() {
+        let d = clippedGroup()
+        let render = render(d, at: Vec2(12, 12), isolating: d.parts[0].id, group: d.parts[0].groups[0].id)
+        XCTAssertTrue(render.isColor(green))
+    }
+
+    func testGroupClippingIsOneUndoStepAndNeedsAShapeBelow() {
+        var d = clippedGroup(groupClipped: false)
+        let part = d.parts[0].id, group = d.parts[0].groups[0].id
+        var e = DrawingEditor(drawing: d)
+        XCTAssertTrue(e.canClipGroup(group, inPart: part))
+        e.setGroupClipped(group, inPart: part, true)
+        XCTAssertTrue(e.drawing.parts[0].groups[0].isClipped)
+        e.undo()
+        XCTAssertFalse(e.drawing.parts[0].groups[0].isClipped)
+        d.parts[0].shapes.removeFirst()
+        e = DrawingEditor(drawing: d)
+        XCTAssertFalse(e.canClipGroup(group, inPart: part))
+        e.setGroupClipped(group, inPart: part, true)
+        XCTAssertFalse(e.drawing.parts[0].groups[0].isClipped)
+    }
+
+    /// Body, Head, and a Hat accessory of the head in front of it, whose brim (blue,
+    /// 5...15) draws behind the head (red, 0...10) and whose band (green) doesn't.
+    private func hat() -> Drawing {
+        var d = Drawing()
+        d.parts.append(Part(id: d.makeID(), name: "Body", shapes: [VectorShape(id: d.makeID(), path: square(0, 20, 10), fill: yellow)]))
+        let head = d.makeID()
+        d.parts.append(Part(id: head, name: "Head", shapes: [VectorShape(id: d.makeID(), path: square(0, 0, 10), fill: red)]))
+        var brim = VectorShape(id: d.makeID(), path: square(5, 5, 10), fill: blue)
+        brim.isBehindOwner = true
+        let band = VectorShape(id: d.makeID(), path: square(-5, -5, 7), fill: green)
+        var hat = Part(id: d.makeID(), name: "Hat", shapes: [band, brim])
+        hat.accessoryOf = head
+        d.parts.append(hat)
+        return d
+    }
+
+    func testBehindShapesDrawJustBehindTheOwner() {
+        let d = hat()
+        XCTAssertEqual(d.drawStack.map(\.name), ["Body", "Hat", "Head", "Hat"])
+        XCTAssertEqual(d.drawStack.map(\.shapes.count), [1, 1, 1, 1])
+        XCTAssertTrue(d.drawStack[1].shapes[0].isBehindOwner)
+        // The head covers the brim; the band stays in front of the head.
+        XCTAssertTrue(render(d, at: Vec2(7, 7)).isColor(red))
+        XCTAssertTrue(render(d, at: Vec2(12, 12)).isColor(blue))
+        XCTAssertTrue(render(d, at: Vec2(1, 1)).isColor(green))
+        // Taps go to what's on top.
+        XCTAssertEqual(d.hitTest(Vec2(7, 7), tolerance: 0)?.part, d.parts[1].id)
+        XCTAssertEqual(d.hitTest(Vec2(12, 12), tolerance: 0)?.part, d.parts[2].id)
+        // In a part's own art the flag does nothing.
+        var plain = d
+        plain.parts[2].accessoryOf = nil
+        XCTAssertEqual(plain.drawStack, plain.parts)
+        XCTAssertTrue(render(plain, at: Vec2(7, 7)).isColor(blue))
+    }
+
+    func testBehindOwnerAppliesToAccessoryShapesInOneUndoStep() {
+        var d = hat()
+        d.parts[2].shapes[1].isBehindOwner = false
+        var e = DrawingEditor(drawing: d)
+        e.selection = .shapes([ShapeRef(part: d.parts[1].id, shape: d.parts[1].shapes[0].id),
+                               ShapeRef(part: d.parts[2].id, shape: d.parts[2].shapes[1].id)])
+        XCTAssertEqual(e.selectionAppearance?.isInAccessory, false)
+        e.setBehindOwner(true)
+        XCTAssertFalse(e.drawing.parts[1].shapes[0].isBehindOwner)
+        XCTAssertTrue(e.drawing.parts[2].shapes[1].isBehindOwner)
+        e.undo()
+        XCTAssertFalse(e.drawing.parts[2].shapes[1].isBehindOwner)
+    }
+
+    func testTheFileKeepsClippedGroupsAndBehindShapes() throws {
+        var d = hat()
+        let group = d.makeID()
+        d.parts[2].shapes[0].group = group
+        d.parts[2].groups = [ShapeGroup(id: group, name: "Band", isClipped: true)]
+        let text = CharacterFormat.encode(d).formatted()
+        XCTAssertTrue(text.contains("\"behindOwner\""))
+        let back = try CharacterFormat.decode(JSONValue(parsing: text)).drawing
+        XCTAssertEqual(back.parts[2].groups.first?.isClipped, true)
+        XCTAssertEqual(back.parts[2].shapes.map(\.isBehindOwner), [false, true])
+        XCTAssertEqual(CharacterFormat.encode(back).formatted(), text)
+        // Off, neither key is written.
+        let plain = CharacterFormat.encode(clippedGroup(groupClipped: false)).formatted()
+        XCTAssertFalse(plain.contains("behindOwner"))
+        XCTAssertEqual(plain.components(separatedBy: "\"clipped\"").count, 2)
+    }
+
+    func testSVGMasksClippedGroupsAndSplitsBehindShapes() throws {
+        let clipped = try XCTUnwrap(SVGWriter.document(for: clippedGroup()))
+        XCTAssertTrue(clipped.contains("<g data-name=\"Iris\" mask=\"url(#"))
+        let svg = try XCTUnwrap(SVGWriter.document(for: hat()))
+        let behind = try XCTUnwrap(svg.range(of: "data-name=\"Hat (behind)\""))
+        let head = try XCTUnwrap(svg.range(of: "id=\"Head\""))
+        let front = try XCTUnwrap(svg.range(of: "id=\"Hat\""))
+        XCTAssertLessThan(behind.lowerBound, head.lowerBound)
+        XCTAssertLessThan(head.lowerBound, front.lowerBound)
     }
 }

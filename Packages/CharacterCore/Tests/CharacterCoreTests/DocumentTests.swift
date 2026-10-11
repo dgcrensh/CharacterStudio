@@ -35,7 +35,7 @@ private func editorDrawing() -> Drawing {
     e.style.outlineWidth = 5.5
     e.addStroke((0...20).map { Vec2(Double($0) * 7.3, sin(Double($0) / 3) * 20 + 140) }, zoom: 1)
     e.addToPalette(RGBAColor(hex: "#12345680")!)
-    e.selection = .part(e.drawing.parts[0].id)
+    e.selection = .layer(e.drawing.parts[0].id)
     e.renamePart(e.drawing.parts[0].id, to: "Head \"big\" ✨")
     e.renameCharacter("Tést")
     var d = e.drawing
@@ -103,8 +103,8 @@ final class CharacterFormatTests: XCTestCase {
         let package = try CharacterPackage(files: exampleFiles("robo.charstudio"))
         let d = package.drawing
         XCTAssertEqual(d.name, "Robo")
-        XCTAssertEqual(d.parts.map(\.name), ["Torso", "Antenna", "Head"])
-        XCTAssertEqual(d.parts.map(\.shapes.count), [4, 2, 2])
+        XCTAssertEqual(d.parts.map(\.name), ["Torso", "Head", "Antenna"])
+        XCTAssertEqual(d.parts.map(\.shapes.count), [4, 4, 2])
         XCTAssertEqual(d.parts[0].pivot, Vec2(0, -40))
         XCTAssertEqual(d.palette, [RGBAColor(hex: "#FFFFFF80")!])
         XCTAssertEqual(d.globalColors.map(\.name), ["Skin", "Body", "Ink"])
@@ -126,14 +126,19 @@ final class CharacterFormatTests: XCTestCase {
         // The body and its shadow are a group.
         XCTAssertEqual(d.parts[0].groups.map(\.name), ["Shell"])
         XCTAssertEqual(d.parts[0].members(ofGroup: d.parts[0].groups[0].id), [0, 1])
-        XCTAssertTrue(d.parts[2].groups.isEmpty)
+        // The visor is a group clipped to the head, with a glint clipped to the visor inside it.
+        let head = d.parts[1]
+        XCTAssertEqual(head.groups.map(\.name), ["Visor"])
+        XCTAssertTrue(head.groups[0].isClipped)
+        XCTAssertEqual(head.clipBase(ofGroup: head.groups[0].id), 0)
+        XCTAssertEqual(head.clipBase(of: 2), 1)
         XCTAssertNil(d.parts[0].shapes[2].stroke)
         XCTAssertEqual(d.parts[0].shapes[2].opacity, 0.8)
         let seam = d.parts[0].shapes[3].stroke
         XCTAssertEqual(seam?.cap, .butt)
         XCTAssertEqual(seam?.dash, [4, 3])
-        XCTAssertEqual(d.parts[2].shapes[0].stroke?.alignment, .inside)
-        let mouth = d.parts[2].shapes[1]
+        XCTAssertEqual(d.parts[1].shapes[0].stroke?.alignment, .inside)
+        let mouth = d.parts[1].shapes[3]
         XCTAssertFalse(mouth.path.closed)
         XCTAssertNil(mouth.fill)
         XCTAssertEqual(mouth.path.points.map(\.width), [0.3, 1.4, 0.3])
@@ -144,15 +149,18 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertTrue(d.bones[1].head.isApproximately(Vec2(0, -90), tolerance: 1e-9))
         XCTAssertTrue(d.bones[3].tail.isApproximately(Vec2(-76, -80), tolerance: 1e-9))
         XCTAssertNil(d.parts[0].bone)
-        XCTAssertEqual(d.parts[2].bone, d.bones[1].id)
-        // The antenna is the head's accessory, on the head's bone but drawn behind it.
-        XCTAssertEqual(d.parts[1].accessoryOf, d.parts[2].id)
         XCTAssertEqual(d.parts[1].bone, d.bones[1].id)
+        // The antenna is the head's accessory, on the head's bone, in front of it with its
+        // stalk drawn behind it.
+        XCTAssertEqual(d.parts[2].accessoryOf, d.parts[1].id)
+        XCTAssertEqual(d.parts[2].bone, d.bones[1].id)
         XCTAssertNil(d.parts[0].accessoryOf)
-        XCTAssertTrue(d.parts[1].shapes[1].path.points[0].position.isApproximately(Vec2(0, -180), tolerance: 1e-9))
+        XCTAssertEqual(d.parts[2].shapes.map(\.isBehindOwner), [true, false])
+        XCTAssertEqual(d.drawStack.map(\.name), ["Torso", "Antenna", "Head", "Antenna"])
+        XCTAssertTrue(d.parts[2].shapes[1].path.points[0].position.isApproximately(Vec2(0, -180), tolerance: 1e-9))
         // Its art is stored in the neck's space and read back into world space.
-        XCTAssertTrue(d.parts[2].pivot.isApproximately(Vec2(0, -110), tolerance: 1e-9))
-        XCTAssertTrue(d.parts[2].shapes[0].path.points[0].position.isApproximately(Vec2(0, -150), tolerance: 1e-9))
+        XCTAssertTrue(d.parts[1].pivot.isApproximately(Vec2(0, -110), tolerance: 1e-9))
+        XCTAssertTrue(d.parts[1].shapes[0].path.points[0].position.isApproximately(Vec2(0, -150), tolerance: 1e-9))
         XCTAssertEqual(d.references.count, 1)
         XCTAssertEqual(d.references[0].rotation, .pi / 2, accuracy: 1e-12)
         XCTAssertEqual(d.references[0].opacity, 0.35)
@@ -343,7 +351,7 @@ final class LayerTests: XCTestCase {
         e.addStroke(ring(center: Vec2(0, 0), radius: 30), zoom: 1)
         let id = e.drawing.parts[0].id
         e.selectPart(id)
-        XCTAssertEqual(e.selection, .part(id))
+        XCTAssertEqual(e.selection, .layer(id))
         e.renameCharacter("Robo")
         XCTAssertEqual(e.drawing.name, "Robo")
         e.deletePart(id)
@@ -367,7 +375,7 @@ final class LayerTests: XCTestCase {
         var e = DrawingEditor(drawing: editorDrawing())
         XCTAssertFalse(e.canUndo)
         let original = e.drawing
-        e.selection = .part(original.parts[0].id)
+        e.selection = .layer(original.parts[0].id)
         e.replaceDrawing(Drawing())
         XCTAssertEqual(e.selection, .none)
         e.undo()

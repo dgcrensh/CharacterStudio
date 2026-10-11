@@ -305,7 +305,7 @@ final class DrawingEditorTests: XCTestCase {
     func testStrokesJoinTheSelectedPartWhenTheyOverlap() {
         var e = editorWithSquare()
         let partID = e.drawing.parts[0].id
-        e.selection = .part(partID)
+        e.selection = .layer(partID)
         // Off by default: the stroke starts its own part.
         e.addStroke([Vec2(20, 50), Vec2(80, 50)], zoom: 1)
         XCTAssertEqual(e.drawing.parts.count, 2)
@@ -328,7 +328,7 @@ final class DrawingEditorTests: XCTestCase {
         e.tool = .select
         let part = e.drawing.parts[0]
         tap(&e, Vec2(50, 50))
-        XCTAssertEqual(e.selection, .part(part.id))
+        XCTAssertEqual(e.selection, .layer(part.id))
         tap(&e, Vec2(50, 50))
         XCTAssertEqual(e.selection, .shape(part: part.id, shape: part.shapes[0].id))
         tap(&e, Vec2(400, 400))
@@ -408,7 +408,7 @@ final class DrawingEditorTests: XCTestCase {
 
     func testStyleChangesApplyToSelectionAndCoalesce() {
         var e = editorWithSquare()
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         let undoCount = e.undoStack.undoStates.count
         e.setFill(.black)
         e.setFill(.white)
@@ -426,7 +426,7 @@ final class DrawingEditorTests: XCTestCase {
 
     func testDeleteAndUndoRestoresSelectionTarget() {
         var e = editorWithSquare()
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         e.deleteSelection()
         XCTAssertTrue(e.drawing.parts.isEmpty)
         XCTAssertEqual(e.selection, Selection.none)

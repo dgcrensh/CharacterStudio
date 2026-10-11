@@ -24,7 +24,7 @@ final class LiveTransformTests: XCTestCase {
     func testAMoveDragReportsItsTransformUntilItEnds() throws {
         var e = editor()
         let body = e.drawing.parts[0], hat = e.drawing.parts[1]
-        e.selection = .part(body.id)
+        e.selection = .layer(body.id)
         let before = e.drawing
         // Off the pivot, which sits in the middle.
         e.pencilBegan(at: Vec2(30, 60), zoom: 1)
@@ -37,7 +37,7 @@ final class LiveTransformTests: XCTestCase {
         XCTAssertEqual(first.transform, .translation(Vec2(10, 5)))
         XCTAssertTrue(first.movesTessellation)
         // The drawing still moves on every sample, for everything but the art.
-        XCTAssertEqual(e.drawing, before.applying(first.transform, to: .part(body.id)))
+        XCTAssertEqual(e.drawing, before.applying(first.transform, to: .layer(body.id)))
 
         e.pencilMoved(to: Vec2(60, 60))
         let second = try XCTUnwrap(e.liveTransform)
@@ -49,7 +49,7 @@ final class LiveTransformTests: XCTestCase {
         e.pencilBegan(at: Vec2(60, 60), zoom: 1)
         e.pencilMoved(to: Vec2(70, 60))
         XCTAssertNotEqual(e.liveTransform?.id, first.id, "the next drag starts over")
-        XCTAssertEqual(e.liveTransform?.base, e.drawing.applying(.translation(Vec2(-10, 0)), to: .part(body.id)))
+        XCTAssertEqual(e.liveTransform?.base, e.drawing.applying(.translation(Vec2(-10, 0)), to: .layer(body.id)))
         e.pencilCancelled()
         XCTAssertNil(e.liveTransform)
     }
