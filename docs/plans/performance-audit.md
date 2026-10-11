@@ -702,7 +702,19 @@ What the split says:
 
 #### Step 1: pinch refine
 
-Numbers to follow.
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild, new zoom bucket (before, on the main thread inside the frame) | 11.3 | 22.5 | 44.6 | 90.9 | 179.7 |
+| Art rebuild, new zoom bucket (after, same work, now the background job) | 11.2 | 22.6 | 43.8 | 87.8 | 175.0 |
+| Zoom-in refine, visible shapes (after, the job's first result) | 7.7 | 9.8 | 15.6 | 20.7 | 16.5 |
+
+The full re-tessellation costs what it did, but it no longer runs in a frame: a pinch that crosses a
+bucket keeps drawing the current art while the job runs, and the visible shapes come back in 8 to 21 ms
+instead of the whole drawing in 90 to 180 ms. The main-thread merge and the warm build after it are app
+code and aren't timed here; a device trace of a pinch is the real check (no `zoom` reason on `Art
+rebuild`, `Art merge` about the cost of a warm build). Other rows are unchanged within noise.
 
 ## Smaller notes
 
