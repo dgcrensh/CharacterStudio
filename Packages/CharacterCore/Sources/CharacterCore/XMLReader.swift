@@ -49,7 +49,7 @@ enum XMLReader {
                 } else {
                     let start = i
                     while i < bytes.count, bytes[i] != UInt8(ascii: "<") { i += 1 }
-                    if !stack.isEmpty { stack[stack.count - 1].text += decode(string(start, i)) }
+                    if !stack.isEmpty { stack[stack.count - 1].text += decodedString(start, i) }
                 }
             }
             while root == nil, !stack.isEmpty { close() }
@@ -61,23 +61,39 @@ enum XMLReader {
             String(decoding: bytes[a..<min(b, bytes.count)], as: UTF8.self)
         }
 
-        private func starts(with text: String) -> Bool {
-            let t = Array(text.utf8)
-            return i + t.count <= bytes.count && Array(bytes[i..<(i + t.count)]) == t
+        /// Whether `text` is at `j`, compared byte by byte (no arrays, since this runs for
+        /// every tag).
+        private func matches(_ text: String, at j: Int) -> Bool {
+            var k = j
+            for b in text.utf8 {
+                guard k < bytes.count, bytes[k] == b else { return false }
+                k += 1
+            }
+            return true
         }
+
+        private func starts(with text: String) -> Bool { matches(text, at: i) }
 
         /// Moves past the next `terminator`, returning the index where it starts.
         private mutating func skip(past terminator: String) throws -> Int {
-            let t = Array(terminator.utf8)
+            let first = terminator.utf8.first!
+            let count = terminator.utf8.count
             var j = i
-            while j + t.count <= bytes.count {
-                if bytes[j] == t[0], Array(bytes[j..<(j + t.count)]) == t {
-                    i = j + t.count
+            while j + count <= bytes.count {
+                if bytes[j] == first, matches(terminator, at: j) {
+                    i = j + count
                     return j
                 }
                 j += 1
             }
             throw Failure(message: "ends inside markup (missing \(terminator))")
+        }
+
+        /// An attribute value or text run, with references expanded. Most have none, so
+        /// look for `&` in the bytes before building the string twice.
+        private func decodedString(_ a: Int, _ b: Int) -> String {
+            let text = string(a, b)
+            return bytes[a..<min(b, bytes.count)].contains(UInt8(ascii: "&")) ? decode(text) : text
         }
 
         private mutating func markup() throws {
@@ -209,7 +225,7 @@ enum XMLReader {
                 let start = i
                 while i < bytes.count, bytes[i] != quote { i += 1 }
                 guard i < bytes.count else { throw Failure(message: "ends inside an attribute of <\(qualified)>") }
-                element.attributes[key] = decode(string(start, i))
+                element.attributes[key] = decodedString(start, i)
                 i += 1
             }
         }
