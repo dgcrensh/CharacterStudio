@@ -16,6 +16,38 @@ public enum Tool: String, Hashable, Sendable, CaseIterable {
     case eraser
     /// Tap an outline to cut the path there.
     case scissors
+    /// Draw, chain and adjust the skeleton's bones (the rest pose).
+    case bone
+}
+
+/// What a Pencil drag does with the bone tool.
+public enum BoneToolMode: String, Hashable, Sendable, CaseIterable {
+    /// Drag from empty canvas for a new bone on the root, from a bone's tip to chain a
+    /// child, or from its head to branch a sibling. Dragging a bone's middle moves it.
+    case draw
+    /// Drag a bone's tip to turn and resize it (its children follow), its head to move
+    /// just that end, or its middle to move it with its children.
+    case adjust
+}
+
+/// Live symmetry: new strokes, shapes, pen paths and bones get a mirrored copy across a
+/// vertical axis.
+public struct SymmetrySettings: Hashable, Sendable {
+    public var isEnabled: Bool
+    /// The mirror line's x in world points.
+    public var axis: Double
+
+    public init(isEnabled: Bool = false, axis: Double = 0) {
+        self.isEnabled = isEnabled
+        self.axis = axis
+    }
+
+    /// Mirrors world space across the axis.
+    public var transform: Affine2D {
+        Affine2D.translation(Vec2(axis, 0)) * Affine2D.scale(x: -1, y: 1) * Affine2D.translation(Vec2(-axis, 0))
+    }
+
+    public func mirror(_ p: Vec2) -> Vec2 { Vec2(2 * axis - p.x, p.y) }
 }
 
 /// Modifier keys, from a hardware keyboard or the on-screen modifier strip.
@@ -99,6 +131,8 @@ public struct DrawingEditor: Sendable {
             revision &+= 1
             // Isolation ends when its part goes (deleted, erased, merged or undone away).
             if let id = isolatedPart, drawing.partIndex(id) == nil { isolatedPart = nil }
+            if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
+            if let id = wigglePart, drawing.partIndex(id) == nil { wigglePart = nil }
         }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
@@ -132,6 +166,18 @@ public struct DrawingEditor: Sendable {
     }
     /// The tool before the current one, for the Pencil's double tap.
     public private(set) var previousTool: Tool?
+    /// The bone the bone tool has selected. Bones are selected apart from the art, so a
+    /// part and a bone can be selected together (to attach one to the other).
+    public var selectedBone: Int? {
+        didSet { if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil } }
+    }
+    public var boneMode: BoneToolMode = .draw
+    /// Draws the bones in every tool, not just the bone tool.
+    public var showsBones = false
+    public var symmetry = SymmetrySettings()
+    /// The part rocking about its pivot for the wiggle preview, and when it started.
+    public internal(set) var wigglePart: Int?
+    var wiggleStart = 0.0
     /// What the shape tool draws, and its settings.
     public var shapeKind: ShapeKind = .rectangle
     public var shapeOptions = ShapeToolOptions()
@@ -171,7 +217,7 @@ public struct DrawingEditor: Sendable {
     public private(set) var hoverZoom = 1.0
 
     private var gesture: Gesture?
-    private var gestureZoom = 1.0
+    var gestureZoom = 1.0
     /// The last tap with a time, for spotting a double tap.
     private var lastTap: (point: Vec2, time: Double)?
     /// The state to undo back to when the gesture's own `before` is not it: an
@@ -189,6 +235,12 @@ public struct DrawingEditor: Sendable {
     public var canRedo: Bool { undoStack.canRedo }
     public var isInGesture: Bool { gesture != nil }
     public var isPenActive: Bool { penPath != nil }
+
+    /// The shape the shape tool's drag is making, if any.
+    var shapeBeingDrawn: ShapeRef? {
+        if case .shapeDraw(_, let ref, _) = gesture { return ref }
+        return nil
+    }
 
     /// The one shape the selection covers, when it covers exactly one.
     public var activeShape: ShapeRef? {
@@ -217,7 +269,7 @@ public struct DrawingEditor: Sendable {
     }
 
     /// Screen-space snap radius in world points at the current gesture's zoom.
-    private var snapRadius: Double { EditorMetrics.snapRadius / gestureZoom }
+    var snapRadius: Double { EditorMetrics.snapRadius / gestureZoom }
 
     // MARK: Gestures
 
@@ -235,6 +287,8 @@ public struct DrawingEditor: Sendable {
         case penJoin(ShapeRef, PathEnd)
         /// A scissors press on an outline.
         case cut(ShapeRef, segment: Int, t: Double)
+        /// A bone-tool press on a bone. `newBone` is where a drag starts a new bone, when it does.
+        case bone(Int, BoneHandle, newBone: (head: Vec2, parent: Int?)?)
         case empty
     }
 
@@ -259,6 +313,10 @@ public struct DrawingEditor: Sendable {
         /// The shape tool's drag; `ref` is the shape once the drag has made one.
         case shapeDraw(start: Vec2, ref: ShapeRef?, before: Drawing)
         case erase(before: Drawing, last: Vec2)
+        /// Drawing a new bone (and its mirror image with symmetry on), made on the first move.
+        case boneDraw(head: Vec2, parent: Int?, bone: Int?, mirror: Int?, before: Drawing)
+        /// Adjusting bone `id`; `grab` keeps the grabbed point from jumping to the Pencil tip.
+        case boneEdit(BoneHandle, id: Int, before: Drawing, start: Vec2, grab: Vec2)
         /// A drag that does nothing (for example, from a pen shortcut target).
         case idle
     }
@@ -287,6 +345,23 @@ public struct DrawingEditor: Sendable {
             } else {
                 gesture = .pending(.empty, start: p)
             }
+        case .bone:
+            if let hit = drawing.hitTestBone(p, zoom: gestureZoom) {
+                gesture = .pending(.bone(hit.bone, hit.handle, newBone: newBoneStart(on: hit.bone, hit.handle)), start: p)
+            } else {
+                gesture = .pending(.empty, start: p)
+            }
+        }
+    }
+
+    /// Where a draw-mode drag from a bone's joint starts a new bone: from its tip a child
+    /// (chaining), from its head a sibling (branching). Nil from the middle, or in adjust mode.
+    private func newBoneStart(on id: Int, _ handle: BoneHandle) -> (head: Vec2, parent: Int?)? {
+        guard boneMode == .draw, let bone = drawing.bone(id) else { return nil }
+        switch handle {
+        case .tail: return (bone.tail, bone.id)
+        case .head: return (bone.head, bone.parent)
+        case .body: return nil
         }
     }
 
@@ -307,9 +382,15 @@ public struct DrawingEditor: Sendable {
             return drawing.hitTest(p, tolerance: reach, within: isolatedPart).map { ShapeRef(part: $0.part, shape: $0.shape) }
         case .scissors:
             return cutTarget(at: p, zoom: hoverZoom)?.ref
-        case .pencil, .pen, .shape:
+        case .pencil, .pen, .shape, .bone:
             return nil
         }
+    }
+
+    /// The bone, and which part of it, a bone-tool touch at the hover point would grab.
+    public var hoverBone: (bone: Int, handle: BoneHandle)? {
+        guard tool == .bone, gesture == nil, let p = hoverPoint else { return nil }
+        return drawing.hitTestBone(p, zoom: hoverZoom)
     }
 
     /// Where the scissors would cut if the Pencil touched down at the hover point.
@@ -346,7 +427,9 @@ public struct DrawingEditor: Sendable {
             drawing.nextID = max(drawing.nextID, nextID)
 
         case .pivot(let target, _, let grab, _):
-            let q = snapped(p + grab)
+            var part: Int?
+            if case .part(let id) = target { part = id }
+            let q = pivotSnapped(p + grab, part: part)
             if case .part(let id) = target, let i = drawing.partIndex(id) {
                 drawing.parts[i].pivot = q
             } else {
@@ -401,6 +484,13 @@ public struct DrawingEditor: Sendable {
             eraseAlong(last, p)
             self.gesture = .erase(before: before, last: p)
 
+        case .boneDraw(let head, let parent, let bone, let mirror, let before):
+            let made = drawBone(head: head, parent: parent, bone: bone, mirror: mirror, to: p)
+            self.gesture = .boneDraw(head: head, parent: parent, bone: made.bone, mirror: made.mirror, before: before)
+
+        case .boneEdit(let handle, let id, let before, let start, let grab):
+            drawing = editedBones(before, handle, id: id, start: start, to: p, grab: grab)
+
         case .idle:
             break
         }
@@ -424,9 +514,15 @@ public struct DrawingEditor: Sendable {
                 lastTap = time.map { (point: start, time: $0) }
             }
             return
+        case .shapeDraw(_, let ref, let before):
+            if let ref { addMirrorImage(of: ref) }
+            commit(from: before)
+        case .boneDraw(_, _, let bone, let mirror, let before):
+            if let bone { finishDrawnBone(bone, mirror: mirror) }
+            commit(from: before)
         case .transform(_, _, let before, _), .pivot(_, let before, _, _), .anchors(_, _, let before, _),
              .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _),
-             .shapeDraw(_, _, let before), .erase(let before, _):
+             .erase(let before, _), .boneEdit(_, _, let before, _, _):
             commit(from: undoBase ?? before)
             undoBase = nil
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
@@ -449,7 +545,8 @@ public struct DrawingEditor: Sendable {
         defer { drawing.nextID = max(drawing.nextID, nextID) }
         switch gesture {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
-             .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _):
+             .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _),
+             .boneDraw(_, _, _, _, let before), .boneEdit(_, _, let before, _, _):
             drawing = undoBase ?? before
             undoBase = nil
             validateSelection()
@@ -740,7 +837,14 @@ public struct DrawingEditor: Sendable {
         guard let pen = penPath else { return }
         penPath = nil
         let ref = ShapeRef(part: pen.part, shape: pen.shape)
-        guard let shape = drawing.shape(ref), shape.path.points.count < 2 else { return }
+        guard let shape = drawing.shape(ref) else { return }
+        if shape.path.points.count >= 2 {
+            // A finished open path gets its mirror image now that it is whole.
+            let before = drawing
+            addMirrorImage(of: ref)
+            commit(from: before)
+            return
+        }
         let before = drawing
         removeShape(ref)
         selection = .none
@@ -756,6 +860,7 @@ public struct DrawingEditor: Sendable {
             drawing.parts[idx.0].shapes[idx.1].stroke = nil
         }
         penPath = nil
+        addMirrorImage(of: ShapeRef(part: pen.part, shape: pen.shape))
         commit(from: before)
     }
 
@@ -821,7 +926,21 @@ public struct DrawingEditor: Sendable {
             return .segment(ref, index: segment, t: t, before: drawing, start: start)
         case .cut:
             return .idle
+        case .bone(let id, let handle, let newBone):
+            if let newBone {
+                return .boneDraw(head: newBone.head, parent: newBone.parent, bone: nil, mirror: nil, before: drawing)
+            }
+            guard let bone = drawing.bone(id) else { return .idle }
+            selectedBone = id
+            // In draw mode only the middle is pressed here (joints start new bones): it moves the bone.
+            let edit: BoneHandle = boneMode == .draw ? .body : handle
+            let grabbed = edit == .tail ? bone.tail : bone.head
+            return .boneEdit(edit, id: id, before: drawing, start: start, grab: grabbed - start)
         case .empty:
+            if tool == .bone {
+                guard boneMode == .draw else { return .idle }
+                return .boneDraw(head: boneSnapped(start, excluding: []), parent: nil, bone: nil, mirror: nil, before: drawing)
+            }
             guard tool == .select || tool == .directSelect else { return .idle }
             marquee = Rect(from: start, to: start)
             return .marquee(start: start, additive: addToSelection,
@@ -886,7 +1005,7 @@ public struct DrawingEditor: Sendable {
                 }
             case .handle:
                 break
-            case .empty, .selectionBody, .pivot, .penFinish, .penClose, .penJoin, .cut:
+            case .empty, .selectionBody, .pivot, .penFinish, .penClose, .penJoin, .cut, .bone:
                 if !selectedAnchors.isEmpty {
                     selectedAnchors = []
                 } else if !addToSelection {
@@ -895,6 +1014,12 @@ public struct DrawingEditor: Sendable {
             }
         case .scissors:
             if case .cut(let ref, let segment, let t) = pending { cut(ref, segment: segment, t: t) }
+        case .bone:
+            if case .bone(let id, _, _) = pending {
+                selectedBone = id
+            } else {
+                selectedBone = nil
+            }
         case .shape, .eraser:
             break
         }
@@ -1001,7 +1126,8 @@ public struct DrawingEditor: Sendable {
     public mutating func addPath(_ path: BezierPath) {
         guard !path.points.isEmpty else { return }
         let before = drawing
-        insertNewShape(styledShape(path), joinNeedsOverlap: true)
+        let ref = insertNewShape(styledShape(path), joinNeedsOverlap: true)
+        addMirrorImage(of: ref)
         commit(from: before)
     }
 
@@ -1107,6 +1233,10 @@ public struct DrawingEditor: Sendable {
 
     public mutating func deleteSelection() {
         cancelGesture()
+        if tool == .bone, let id = selectedBone {
+            deleteBone(id)
+            return
+        }
         let before = drawing
         switch selection {
         case .none:
@@ -1356,6 +1486,7 @@ public struct DrawingEditor: Sendable {
         drawing = state
         drawing.nextID = max(state.nextID, nextID)
         validateSelection()
+        if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
         if let pen = penPath, drawing.indices(part: pen.part, shape: pen.shape) == nil { penPath = nil }
     }
 

@@ -56,10 +56,11 @@ public struct DecodedCharacter: Sendable {
 
 /// Reads and writes the Character Studio JSON format (see `Schema/` in the repository).
 ///
-/// Every part becomes a slot on the root bone with one vector attachment in the
-/// default skin, and the slot list order is the draw order. Bones, weights, skins and
-/// poses arrive with later milestones; the keys are already present so the shape of
-/// the file does not change. 0.2 adds appearance: outline caps, joins, dashes and
+/// Every part becomes a slot on its bone (the root when it has none) with one vector
+/// attachment in the default skin, in the bone's space, and the slot list order is the
+/// draw order. Bones are written relative to their parents. Weights, skins and poses
+/// arrive with later milestones; the keys are already present so the shape of the file
+/// does not change. 0.2 adds appearance: outline caps, joins, dashes and
 /// alignment, per-point outline width, gradients, opacity, clipping and global colors.
 public enum CharacterFormat {
     public static let version = FormatVersion(0, 2, 0)
@@ -73,17 +74,31 @@ public enum CharacterFormat {
     /// `referenceFiles` names the package file holding each reference image's pixels.
     public static func encode(_ drawing: Drawing, referenceFiles: [Int: String] = [:]) -> JSONValue {
         let names = slotNames(for: drawing.parts)
+        let bones = boneNames(for: drawing.bones)
         let globals = Dictionary(drawing.globalColors.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         var slots: [JSONValue] = []
         var skin: [(key: String, value: JSONValue)] = []
         for (part, name) in zip(drawing.parts, names) {
-            slots.append(obj(["id": .string(name), "bone": .string(rootBone), "attachment": .string(name)]))
-            skin.append((key: name, value: obj([name: attachment(part, globals: globals)])))
+            // A part on a bone the drawing doesn't have (a copied part) goes on the root.
+            let bone = part.bone.flatMap { id in drawing.bone(id).map { (id: id, transform: $0.transform) } }
+            let boneName = bone.flatMap { bones[$0.id] } ?? rootBone
+            slots.append(obj(["id": .string(name), "bone": .string(boneName), "attachment": .string(name)]))
+            // Attachments are stored in their bone's space.
+            var local = part
+            if let inverse = bone?.transform.inverted {
+                for s in local.shapes.indices { local.shapes[s].apply(inverse) }
+                local.pivot = inverse.apply(local.pivot)
+            }
+            skin.append((key: name, value: obj([name: attachment(local, globals: globals)])))
         }
         let rootBoneValue = obj([
             "id": .string(rootBone), "parent": .null, "length": 0,
             "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1,
         ])
+        var boneValues = [rootBoneValue]
+        for bone in drawing.bones {
+            boneValues.append(self.bone(bone, in: drawing, names: bones))
+        }
         var references: [JSONValue] = []
         for ref in drawing.references {
             if let file = referenceFiles[ref.id] { references.append(reference(ref, file: file)) }
@@ -96,7 +111,7 @@ public enum CharacterFormat {
         return obj([
             "formatVersion": .string(version.description),
             "name": .string(drawing.name),
-            "bones": .array([rootBoneValue]),
+            "bones": .array(boneValues),
             "slots": .array(slots),
             "drawOrder": .array(drawOrder),
             "skins": obj([defaultSkin: .object(skin)]),
@@ -105,6 +120,40 @@ public enum CharacterFormat {
             "palette": .array(palette),
             "references": .array(references),
         ])
+    }
+
+    /// A bone relative to its parent: the head's position in the parent's space, and
+    /// the turn from the parent's direction in degrees (-180 to 180).
+    private static func bone(_ bone: Bone, in drawing: Drawing, names: [Int: String]) -> JSONValue {
+        let parent = bone.parent.flatMap { drawing.bone($0) }
+        let local = parent?.transform.inverted?.apply(bone.head) ?? bone.head
+        var rotation = (bone.angle - (parent?.angle ?? 0)) * 180 / .pi
+        while rotation > 180 { rotation -= 360 }
+        while rotation <= -180 { rotation += 360 }
+        let parentName = parent.flatMap { names[$0.id] } ?? rootBone
+        return obj([
+            "id": .string(names[bone.id] ?? rootBone), "parent": .string(parentName), "length": num(bone.length),
+            "x": num(local.x), "y": num(local.y), "rotation": num(rotation), "scaleX": 1, "scaleY": 1,
+        ])
+    }
+
+    /// Bone ids in the file, from bone names made unique, non-empty and never `root`.
+    static func boneNames(for bones: [Bone]) -> [Int: String] {
+        var used: Set<String> = [rootBone]
+        var out: [Int: String] = [:]
+        for bone in bones {
+            let trimmed = bone.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = trimmed.isEmpty ? "Bone" : trimmed
+            var name = base
+            var n = 2
+            while used.contains(name) {
+                name = "\(base) \(n)"
+                n += 1
+            }
+            used.insert(name)
+            out[bone.id] = name
+        }
+        return out
     }
 
     /// An object with members in the order written.
@@ -243,18 +292,20 @@ public enum CharacterFormat {
         var drawing = Drawing()
         if let name = try root.field("name")?.string() { drawing.name = name }
 
+        let skeleton = try bones(root.field("bones")?.array() ?? [])
+
         // Slots, in draw order.
         let slotNodes = try root.field("slots")?.array() ?? []
-        var slots: [(id: String, attachment: String?)] = []
+        var slots: [(id: String, attachment: String?, bone: String?)] = []
         for node in slotNodes {
             let id = try node.require("id").string()
             guard !slots.contains(where: { $0.id == id }) else {
                 throw CharacterFileError.invalid(path: node.path + ".id", problem: "repeats slot \"\(id)\"")
             }
             let attachment = try node.field("attachment")?.string()
-            slots.append((id: id, attachment: attachment))
+            slots.append((id: id, attachment: attachment, bone: try node.field("bone")?.string()))
         }
-        var ordered: [(id: String, attachment: String?)] = []
+        var ordered: [(id: String, attachment: String?, bone: String?)] = []
         for node in try root.field("drawOrder")?.array() ?? [] {
             let id = try node.string()
             if let slot = slots.first(where: { $0.id == id }), !ordered.contains(where: { $0.id == id }) {
@@ -280,6 +331,7 @@ public enum CharacterFormat {
         }
 
         let skin = try root.field("skins")?.field(defaultSkin)
+        var partBones: [Int: String] = [:]
         for slot in ordered {
             guard let attachmentName = slot.attachment,
                   let node = try skin?.field(slot.id)?.field(attachmentName) else { continue }
@@ -292,7 +344,27 @@ public enum CharacterFormat {
             for shapeNode in try node.field("shapes")?.array() ?? [] {
                 part.shapes.append(try shape(shapeNode, id: drawing.makeID(), globals: globals))
             }
+            // Attachments are in their bone's space; the editor works in world space.
+            let boneName = slot.bone ?? rootBone
+            let world = skeleton.world[boneName] ?? skeleton.world[rootBone] ?? .identity
+            if !world.isApproximately(.identity, tolerance: 0) {
+                for s in part.shapes.indices { part.shapes[s].apply(world) }
+                part.pivot = world.apply(part.pivot)
+            }
+            if boneName != rootBone, skeleton.world[boneName] != nil { partBones[part.id] = boneName }
             drawing.parts.append(part)
+        }
+
+        // Bones get their ids after the parts, then the parts find their bones.
+        var boneIDs: [String: Int] = [:]
+        for raw in skeleton.bones {
+            let id = drawing.makeID()
+            boneIDs[raw.name] = id
+            drawing.bones.append(Bone(id: id, name: raw.name, parent: raw.parent.flatMap { boneIDs[$0] },
+                                      head: raw.head, tail: raw.tail))
+        }
+        for p in drawing.parts.indices {
+            drawing.parts[p].bone = partBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
         }
 
         var files: [Int: String] = [:]
@@ -313,6 +385,63 @@ public enum CharacterFormat {
             files[id] = try node.require("file").string()
         }
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
+    }
+
+    /// A bone from the file, resolved to world space.
+    private struct DecodedBone {
+        var name: String
+        var parent: String?
+        var head: Vec2
+        var tail: Vec2
+    }
+
+    /// Reads the bone list: every bone's world transform by name (the root's included),
+    /// and the bones other than the root, parents first. A bone whose parent is missing
+    /// goes on the root.
+    private static func bones(_ nodes: [Node]) throws -> (world: [String: Affine2D], bones: [DecodedBone]) {
+        struct Raw {
+            var name: String
+            var parent: String?
+            var length: Double
+            var local: Affine2D
+        }
+        var raws: [Raw] = []
+        for node in nodes {
+            let name = try node.require("id").string()
+            guard !raws.contains(where: { $0.name == name }) else {
+                throw CharacterFileError.invalid(path: node.path + ".id", problem: "repeats bone \"\(name)\"")
+            }
+            let length = try node.field("length")?.number() ?? 0
+            guard length >= 0 else { throw CharacterFileError.invalid(path: node.path + ".length", problem: "is negative") }
+            let x = try node.field("x")?.number() ?? 0, y = try node.field("y")?.number() ?? 0
+            let rotation = (try node.field("rotation")?.number() ?? 0) * .pi / 180
+            let sx = try node.field("scaleX")?.number() ?? 1, sy = try node.field("scaleY")?.number() ?? 1
+            let local = Affine2D.translation(Vec2(x, y)) * Affine2D.rotation(rotation) * Affine2D.scale(x: sx, y: sy)
+            raws.append(Raw(name: name, parent: try node.field("parent")?.string(), length: length, local: local))
+        }
+        let names = Set(raws.map(\.name))
+        var world: [String: Affine2D] = [:]
+        var out: [DecodedBone] = []
+        var remaining = raws
+        while !remaining.isEmpty {
+            let count = remaining.count
+            remaining.removeAll { raw in
+                // The root and bones without a known parent hang from the world (or the root).
+                var parent = raw.parent.flatMap { names.contains($0) && $0 != raw.name ? $0 : nil }
+                if parent == nil, raw.name != rootBone, names.contains(rootBone) { parent = rootBone }
+                guard parent.map({ world[$0] != nil }) ?? true else { return false }
+                let w = parent.flatMap { world[$0] }.map { $0 * raw.local } ?? raw.local
+                world[raw.name] = w
+                if raw.name != rootBone {
+                    out.append(DecodedBone(name: raw.name, parent: parent == rootBone ? nil : parent,
+                                           head: w.apply(.zero), tail: w.apply(Vec2(raw.length, 0))))
+                }
+                return true
+            }
+            // A loop: hang its first bone from the root.
+            if remaining.count == count { remaining[0].parent = nil }
+        }
+        return (world, out)
     }
 
     private static func shape(_ node: Node, id: Int, globals: [String: Int]) throws -> VectorShape {

@@ -136,6 +136,10 @@ private struct EditMenu: View {
                 .disabled(!ui.canArrange)
             Button("Copy", systemImage: "doc.on.doc") { store.copy() }
                 .disabled(!ui.canArrange)
+            Button("Duplicate Mirrored", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                store.duplicateMirrored()
+            }
+            .disabled(!ui.canDuplicateMirrored)
             Button("Paste", systemImage: "doc.on.clipboard") { store.paste() }
             Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSelection() }
                 .disabled(ui.selection == .none)
@@ -151,7 +155,7 @@ private struct EditMenu: View {
             if ui.canMoveShapes {
                 Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
                 Menu("Move to Part", systemImage: "arrow.right.square") {
-                    ForEach(ui.layers.bones.flatMap(\.parts)) { part in
+                    ForEach(ui.layers.drawOrder) { part in
                         Button(part.name) { store.moveSelection(toPart: part.id) }
                     }
                 }
@@ -199,6 +203,7 @@ private struct ToolButton: View {
         (.directSelect, "Direct Select", "point.topleft.down.to.point.bottomright.curvepath"),
         (.eraser, "Eraser", "eraser"),
         (.scissors, "Scissors", "scissors"),
+        (.bone, "Bones", "figure.arms.open"),
     ]
 
     var body: some View {
@@ -277,9 +282,13 @@ private struct ContextBar: View {
                 Text("Tap an outline to cut it there")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            case .bone:
+                boneControls
             }
 
-            if [Tool.pen, .shape, .select, .directSelect].contains(ui.tool) { snapMenu }
+            if [Tool.pen, .shape, .select, .directSelect, .bone].contains(ui.tool) { snapMenu }
+            if [Tool.pencil, .pen, .shape, .bone].contains(ui.tool) { symmetryMenu }
+            if ui.tool == .select, ui.selectedPart != nil { partJointControls }
 
             if ui.tool == .directSelect, ui.anchorCount > 0 { pointControls }
             if ui.canJoin, ui.tool == .select || ui.tool == .directSelect {
@@ -289,6 +298,79 @@ private struct ContextBar: View {
             if (ui.tool == .directSelect && ui.anchorCount > 0) || (ui.tool == .select && ui.canTransform) {
                 nudgeControls
             }
+        }
+    }
+
+    /// Draw or adjust bones, and the selected bone's name, parent and commands.
+    @ViewBuilder
+    private var boneControls: some View {
+        Picker("Bone mode", selection: Binding(get: { ui.boneMode }, set: { store.setBoneMode($0) })) {
+            Text("Draw").tag(BoneToolMode.draw)
+            Text("Adjust").tag(BoneToolMode.adjust)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 140)
+        if let id = ui.selectedBone {
+            Divider().frame(height: 24)
+            BoneNameField(name: ui.selectedBoneName) { store.renameBone(id, to: $0) }
+            Menu {
+                Button(CharacterFormat.rootBone) { store.setBoneParent(id, parent: nil) }
+                ForEach(ui.possibleParents) { parent in
+                    Button(parent.name) { store.setBoneParent(id, parent: parent.id) }
+                }
+            } label: {
+                let parent = ui.selectedBoneParent.flatMap { p in ui.bones.first { $0.id == p }?.name }
+                Label("Parent: \(parent ?? CharacterFormat.rootBone)", systemImage: "arrow.turn.left.up")
+                    .labelStyle(.titleAndIcon)
+            }
+            Button("Mirror Bone", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                store.mirrorSelectedBone()
+            }
+            Button("Delete Bone", systemImage: "trash", role: .destructive) { store.deleteBone(id) }
+            if ui.canAttachPart {
+                Button {
+                    store.attachSelectedPart()
+                } label: {
+                    Label("Attach \(ui.selectedPartName) to \(ui.selectedBoneName)", systemImage: "link")
+                        .labelStyle(.titleAndIcon)
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Text(ui.boneMode == .draw
+                 ? "Drag to draw a bone; drag from a bone's tip to chain the next"
+                 : "Drag a joint or bone to move it")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Mirror drawing about a vertical axis.
+    private var symmetryMenu: some View {
+        Menu {
+            Toggle("Mirror Drawing", isOn: Binding(get: { ui.symmetry.isEnabled }, set: { store.setSymmetryEnabled($0) }))
+            Button("Center Axis on Selection") { store.centerSymmetryAxis() }
+            Button("Reset Axis") { store.resetSymmetryAxis() }
+        } label: {
+            Label("Symmetry", systemImage: ui.symmetry.isEnabled
+                  ? "arrow.left.and.right.square.fill" : "arrow.left.and.right.square")
+        }
+    }
+
+    /// Checking a part against its joint: wiggle it about its pivot, cap the joint,
+    /// and put the pivot on its bone's head.
+    @ViewBuilder
+    private var partJointControls: some View {
+        Divider().frame(height: 24)
+        Toggle(isOn: Binding(get: { ui.wigglePart != nil }, set: { _ in store.toggleWiggle() })) {
+            Label("Wiggle", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .toggleStyle(.button)
+        .disabled(!ui.canWiggle)
+        Button("Joint Cap", systemImage: "circle.dashed") { store.addJointCap() }
+            .disabled(!ui.canAddJointCap)
+        if ui.canSnapPivotToBone {
+            Button("Pivot to Bone", systemImage: "scope") { store.snapPivotToBone() }
         }
     }
 
@@ -399,6 +481,24 @@ private struct ContextBar: View {
             Button("Nudge Right", systemImage: "arrow.right") { store.nudge(1, 0) }
         }
         .labelStyle(.iconOnly)
+    }
+}
+
+/// The selected bone's name, renamed when editing ends.
+private struct BoneNameField: View {
+    let name: String
+    let rename: (String) -> Void
+    @State private var text = ""
+
+    var body: some View {
+        TextField("Bone name", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 130)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .onAppear { text = name }
+            .onChange(of: name) { _, new in text = new }
+            .onSubmit { if text != name { rename(text) } }
     }
 }
 

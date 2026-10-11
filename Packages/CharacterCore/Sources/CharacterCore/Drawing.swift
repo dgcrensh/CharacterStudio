@@ -103,16 +103,19 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var shapes: [VectorShape]
     /// The part's own pivot, independent of any bone origin.
     public var pivot: Vec2
+    /// The bone the part's slot sits on, or nil for the root bone.
+    public var bone: Int?
     /// Editor hints, saved in the file, that apply to every shape in the part.
     public var isHidden: Bool
     public var isLocked: Bool
 
-    public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero,
+    public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
         self.id = id
         self.name = name
         self.shapes = shapes
         self.pivot = pivot
+        self.bone = bone
         self.isHidden = isHidden
         self.isLocked = isLocked
     }
@@ -275,6 +278,8 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var name = "Character"
     /// Back to front: this is the draw order.
     public var parts: [Part] = []
+    /// The skeleton in its rest pose, parents before children. The root bone is implicit.
+    public var bones: [Bone] = []
     /// Bottom to top.
     public var references: [ReferenceImage] = []
     /// Per-character colors for reuse.

@@ -5,6 +5,9 @@ import Foundation
 public struct RGBAColor: Hashable, Sendable {
     public var r: Double, g: Double, b: Double, a: Double
 
+    /// The same color with alpha `a`.
+    public func withAlpha(_ a: Double) -> RGBAColor { RGBAColor(r: r, g: g, b: b, a: a) }
+
     public init(r: Double, g: Double, b: Double, a: Double = 1) {
         self.r = r; self.g = g; self.b = b; self.a = a
     }

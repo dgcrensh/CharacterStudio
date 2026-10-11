@@ -95,6 +95,8 @@ final class CanvasRenderer {
     private var artRevision = -1
     private var artTolerance = 0.0
     private var artIsolation: Int?
+    /// True when the cached art was built from the wiggle preview's moving picture.
+    private var artWiggled = false
     private var artSteps: [ArtStep] = []
     private var artBuffer: (any MTLBuffer)?
 
@@ -194,7 +196,7 @@ final class CanvasRenderer {
         guard let msaaTexture, let stencilTexture else { return true }
 
         let editor = session.editor
-        updateArt(editor: editor, zoom: session.camera.zoom)
+        updateArt(editor: editor, zoom: session.camera.zoom, time: CACurrentMediaTime())
         loadMissingTextures(for: editor.drawing.references, commandBuffer: commandBuffer)
 
         var uniforms = makeUniforms(camera: session.camera, viewSize: viewSize, scale: scale, darkMode: darkMode)
@@ -228,7 +230,11 @@ final class CanvasRenderer {
         if let live = session.liveStroke {
             drawCapsules(CapsuleTessellator.vertices(for: live), encoder: encoder)
         }
-        drawCapsules(EditorOverlay.vertices(for: editor, zoom: session.camera.zoom), encoder: encoder)
+        if let mirrored = session.mirroredLiveStroke {
+            drawCapsules(CapsuleTessellator.vertices(for: mirrored), encoder: encoder)
+        }
+        drawCapsules(EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen)),
+                     encoder: encoder)
 
         encoder.endEncoding()
         commandBuffer.present(drawable)
@@ -263,15 +269,21 @@ final class CanvasRenderer {
 
     // MARK: Art
 
-    private func updateArt(editor: DrawingEditor, zoom: Double) {
+    /// Rebuilds the art when the drawing, zoom bucket or isolation changed, and on every
+    /// frame of the wiggle preview (only the wiggling shapes re-tessellate).
+    private func updateArt(editor: DrawingEditor, zoom: Double, time: Double) {
         // Flatten finely enough for the current zoom, in power-of-two steps.
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let tolerance = 0.2 / bucket
-        guard editor.revision != artRevision || tolerance != artTolerance || editor.isolatedPart != artIsolation else { return }
+        let wiggling = editor.wigglePart != nil
+        guard wiggling || artWiggled || editor.revision != artRevision || tolerance != artTolerance ||
+            editor.isolatedPart != artIsolation else { return }
         artRevision = editor.revision
         artTolerance = tolerance
         artIsolation = editor.isolatedPart
-        let batch = artBuilder.build(editor.drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance)
+        artWiggled = wiggling
+        let drawing = wiggling ? editor.displayDrawing(at: time) : editor.drawing
+        let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance)
         artSteps = batch.steps
         artBuffer = makeBuffer(batch.vertices)
     }

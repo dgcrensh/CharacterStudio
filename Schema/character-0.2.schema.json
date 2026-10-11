@@ -13,7 +13,7 @@
     },
     "name": { "description": "The character's display name.", "type": "string" },
     "bones": {
-      "description": "The bone tree, parents before children. Format 0.1 files written by the app contain only the root bone.",
+      "description": "The bone tree, parents before children, starting with the root bone (parent null). Bone ids are unique and are the names shown in the editor.",
       "type": "array",
       "items": { "$ref": "#/$defs/bone" }
     },
@@ -100,9 +100,9 @@
         "id": { "type": "string" },
         "parent": { "description": "Parent bone id, or null for the root.", "type": ["string", "null"] },
         "length": { "type": "number", "minimum": 0 },
-        "x": { "description": "Rest position relative to the parent bone.", "type": "number" },
+        "x": { "description": "Rest position of the bone's head in the parent bone's space.", "type": "number" },
         "y": { "type": "number" },
-        "rotation": { "description": "Rest rotation relative to the parent bone, in degrees.", "type": "number" },
+        "rotation": { "description": "Rest rotation relative to the parent bone, in degrees clockwise. The bone points along its own +x axis.", "type": "number" },
         "scaleX": { "type": "number" },
         "scaleY": { "type": "number" }
       }

@@ -2,11 +2,15 @@
   "formatVersion": "0.2.0",
   "name": "Robo",
   "bones": [
-    { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 }
+    { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 },
+    { "id": "Spine", "parent": "root", "length": 80, "x": 0, "y": -10, "rotation": -90, "scaleX": 1, "scaleY": 1 },
+    { "id": "Neck", "parent": "Spine", "length": 20, "x": 80, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 },
+    { "id": "Arm.L", "parent": "Spine", "length": 40, "x": 70, "y": 36, "rotation": 90, "scaleX": 1, "scaleY": 1 },
+    { "id": "Arm.R", "parent": "Spine", "length": 40, "x": 70, "y": -36, "rotation": -90, "scaleX": 1, "scaleY": 1 }
   ],
   "slots": [
     { "id": "Torso", "bone": "root", "attachment": "Torso" },
-    { "id": "Head", "bone": "root", "attachment": "Head" }
+    { "id": "Head", "bone": "Neck", "attachment": "Head" }
   ],
   "drawOrder": ["Torso", "Head"],
   "skins": {
@@ -74,7 +78,7 @@
       "Head": {
         "Head": {
           "type": "vector",
-          "pivot": [0, -110],
+          "pivot": [20, 0],
           "shapes": [
             {
               "closed": true,
@@ -82,19 +86,19 @@
               "fillGlobal": "Skin",
               "stroke": { "color": "#222222FF", "global": "Ink", "width": 3, "align": "inside" },
               "points": [
-                { "p": [0, -150], "in": [-22.0914, 0], "out": [22.0914, 0] },
-                { "p": [40, -110], "in": [0, -22.0914], "out": [0, 22.0914] },
-                { "p": [0, -70], "in": [22.0914, 0], "out": [-22.0914, 0] },
-                { "p": [-40, -110], "in": [0, 22.0914], "out": [0, -22.0914] }
+                { "p": [60, 0], "in": [0, -22.0914], "out": [0, 22.0914] },
+                { "p": [20, 40], "in": [22.0914, 0], "out": [-22.0914, 0] },
+                { "p": [-20, 0], "in": [0, 22.0914], "out": [0, -22.0914] },
+                { "p": [20, -40], "in": [-22.0914, 0], "out": [22.0914, 0] }
               ]
             },
             {
               "closed": false,
               "stroke": { "color": "#222222FF", "global": "Ink", "width": 2.5 },
               "points": [
-                { "p": [-14, -96], "in": [0, 0], "out": [4, 5], "w": 0.3 },
-                { "p": [0, -89], "in": [-8, 0], "out": [8, 0], "w": 1.4 },
-                { "p": [14, -96], "in": [-4, 5], "out": [0, 0], "w": 0.3 }
+                { "p": [6, -14], "in": [0, 0], "out": [-5, 4], "w": 0.3 },
+                { "p": [-1, 0], "in": [0, -8], "out": [0, 8], "w": 1.4 },
+                { "p": [6, 14], "in": [-5, -4], "out": [0, 0], "w": 0.3 }
               ]
             }
           ]
