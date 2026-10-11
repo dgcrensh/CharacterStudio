@@ -42,6 +42,10 @@ public struct LayerTree: Hashable, Sendable {
         /// True when every shape of the group is hidden, or locked.
         public var isHidden: Bool
         public var isLocked: Bool
+        /// The group draws only inside the shape below it.
+        public var isClipped = false
+        /// There is a shape below the group to clip it to.
+        public var canClip = false
     }
 
     public struct BoneLayer: Hashable, Sendable, Identifiable {
@@ -113,7 +117,8 @@ public struct LayerTree: Hashable, Sendable {
             layer.groups = part.groupRuns.reversed().map { run in
                 GroupLayer(id: run.group.id, part: part.id, name: run.group.name, shapeCount: run.indices.count,
                            isHidden: run.indices.allSatisfy { part.shapes[$0].isHidden },
-                           isLocked: run.indices.allSatisfy { part.shapes[$0].isLocked })
+                           isLocked: run.indices.allSatisfy { part.shapes[$0].isLocked },
+                           isClipped: run.group.isClipped, canClip: (run.indices.first ?? 0) > 0)
             }
             return layer
         }

@@ -21,6 +21,35 @@ extension Drawing {
         parts.filter { $0.accessoryOf == id }
     }
 
+    /// The layers as they draw, back to front: `parts`, except that an accessory's
+    /// shapes marked `isBehindOwner` are split off into a layer of their own (with the
+    /// accessory's id, name and flags) drawn just behind its owner's art, after any
+    /// accessories already behind it. Clipping and group clipping work within each side,
+    /// so a shape drawn behind clips only to shapes drawn behind with it.
+    public var drawStack: [Part] {
+        let owners = Set(parts.filter { $0.accessoryOf == nil }.map(\.id))
+        func splits(_ part: Part) -> Bool {
+            part.accessoryOf.map(owners.contains) == true && part.shapes.contains(where: \.isBehindOwner)
+        }
+        guard parts.contains(where: splits) else { return parts }
+        var behind: [Int: [Part]] = [:]
+        var stack: [Part] = []
+        for part in parts {
+            guard splits(part), let owner = part.accessoryOf else {
+                stack.append(part)
+                continue
+            }
+            var back = part, front = part
+            back.shapes = part.shapes.filter(\.isBehindOwner)
+            front.shapes = part.shapes.filter { !$0.isBehindOwner }
+            behind[owner, default: []].append(back)
+            stack.append(front)
+        }
+        return stack.flatMap { part in
+            part.accessoryOf == nil ? (behind[part.id] ?? []) + [part] : [part]
+        }
+    }
+
     /// True when every accessory's owner exists and isn't an accessory itself, and every
     /// accessory is on its owner's bone.
     public var accessoriesAreValid: Bool {

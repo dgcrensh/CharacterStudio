@@ -76,6 +76,9 @@ final class EditorUIState {
     var selectedGroupID: Int?
     var selectedGroupPart: Int?
     var selectedGroupName = ""
+    /// The selected group draws inside the shape below it, or could.
+    var selectedGroupClipped = false
+    var canClipSelectedGroup = false
     /// The other groups of the selected shapes' part, for Add to Group.
     var groupsToAddTo: [ShapeGroup] = []
     /// The levels around the selection (layer, group, shapes), outermost first, and what
@@ -267,6 +270,8 @@ final class CanvasStore {
         update(\.selectedGroupID, group?.group.id)
         update(\.selectedGroupPart, group?.part)
         update(\.selectedGroupName, group?.group.name ?? "")
+        update(\.selectedGroupClipped, group?.group.isClipped ?? false)
+        update(\.canClipSelectedGroup, group.map { editor.canClipGroup($0.group.id, inPart: $0.part) } ?? false)
         update(\.groupsToAddTo, editor.groupsToAddSelectionTo)
         update(\.selectionCrumbs, editor.selectionCrumbs)
         update(\.canSelectParent, editor.canSelectParent)
@@ -618,6 +623,7 @@ final class CanvasStore {
     func setOutlineAlignment(_ alignment: StrokeAlignment) { edit { $0.editor.setOutlineAlignment(alignment) } }
     func setOpacity(_ opacity: Double) { edit { $0.editor.setOpacity(opacity) } }
     func setClipped(_ clipped: Bool) { edit { $0.editor.setClipped(clipped) } }
+    func setBehindOwner(_ behind: Bool) { edit { $0.editor.setBehindOwner(behind) } }
     func setGradient(_ kind: ShapeGradient.Kind?) { edit { $0.editor.setGradient(kind) } }
     func setGradientStop(_ index: Int, _ color: Color) { edit { $0.editor.setGradientStop(index, color: RGBAColor(color)) } }
     func setGradientAngle(_ degrees: Double) { edit { $0.editor.setGradientAngle(degrees) } }
@@ -669,6 +675,9 @@ final class CanvasStore {
     }
     func setGroupLocked(_ id: Int, inPart part: Int, _ locked: Bool) {
         edit { $0.editor.setGroupLocked(id, inPart: part, locked) }
+    }
+    func setGroupClipped(_ id: Int, inPart part: Int, _ clipped: Bool) {
+        edit { $0.editor.setGroupClipped(id, inPart: part, clipped) }
     }
     func renamePart(_ id: Int, to name: String) { edit { $0.editor.renamePart(id, to: name) } }
     func deletePart(_ id: Int) { edit { $0.editor.deletePart(id) } }

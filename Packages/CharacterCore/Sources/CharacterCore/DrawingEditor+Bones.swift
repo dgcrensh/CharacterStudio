@@ -371,7 +371,8 @@ extension DrawingEditor {
                 for group in whole {
                     let id = drawing.makeID()
                     fresh[group.id] = id
-                    drawing.parts[p].groups.append(ShapeGroup(id: id, name: SideName.flipped(group.name) ?? group.name))
+                    drawing.parts[p].groups.append(ShapeGroup(id: id, name: SideName.flipped(group.name) ?? group.name,
+                                                                isClipped: group.isClipped))
                 }
                 var shapes: [VectorShape] = []
                 var pending: [VectorShape] = []

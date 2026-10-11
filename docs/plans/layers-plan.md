@@ -229,6 +229,19 @@ The design keeps outfits a pure addition, following Spine's skins, which the for
   an accessory to its part (blush or a tattoo clipped to the head) would be a Spine-style clipping attachment, a
   separate decision.
 
+## Shipped after the phases: clipped groups and behind-owner shapes
+
+Not in the original plan; added on request after phase 4.
+
+- **Clipped groups.** `ShapeGroup.isClipped` makes a whole group draw inside the nearest shape below it that isn't
+  clipped, with clipping inside the group still working. Saved as `"clipped": true` on the group. This is clipping
+  *a group to a shape*; using a group as the mask for shapes above it, and clipping an accessory to its part, are
+  still open.
+- **Behind-owner shapes.** `VectorShape.isBehindOwner` on an accessory's shape draws it just behind the owner's art
+  while the rest of the accessory keeps its place (`Drawing.drawStack`). Saved as `"behindOwner": true` on the
+  shape. For outfits this keeps a hat one accessory slot even when part of it goes behind the head; a Spine export
+  would have to split such an accessory into two slots.
+
 ## Phases
 
 1. **Groups (M).** `ShapeGroup`, `VectorShape.group`, Group/Ungroup/Rename, tap-selects-group, double-tap into a

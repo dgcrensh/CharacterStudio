@@ -63,7 +63,7 @@ extension Drawing {
                 for (k, run) in runs.enumerated() {
                     let id = k == 0 && !seen.contains(group.id) ? group.id : makeID()
                     seen.insert(id)
-                    repaired.append(ShapeGroup(id: id, name: group.name))
+                    repaired.append(ShapeGroup(id: id, name: group.name, isClipped: group.isClipped))
                     for i in run { part.shapes[i].group = id }
                 }
             }
@@ -190,6 +190,22 @@ extension DrawingEditor {
               let g = drawing.parts[p].groups.firstIndex(where: { $0.id == id }) else { return }
         let before = drawing
         drawing.parts[p].groups[g].name = trimmed
+        commit(from: before)
+    }
+
+    /// True when group `id` of part `part` has a shape below it to clip to.
+    public func canClipGroup(_ id: Int, inPart part: Int) -> Bool {
+        guard let part = drawing.part(part), let first = part.members(ofGroup: id).first else { return false }
+        return first > 0
+    }
+
+    /// Makes group `id` of part `part` draw only inside the shape below it, or draws it
+    /// whole again. One undo step.
+    public mutating func setGroupClipped(_ id: Int, inPart part: Int, _ clipped: Bool) {
+        guard let p = drawing.partIndex(part), let g = drawing.parts[p].groups.firstIndex(where: { $0.id == id }),
+              !clipped || canClipGroup(id, inPart: part) else { return }
+        let before = drawing
+        drawing.parts[p].groups[g].isClipped = clipped
         commit(from: before)
     }
 

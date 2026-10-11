@@ -232,7 +232,7 @@ Phase 2 of the layers plan: accessories, parts owned by another part, such as ha
 **How it works**
 
 - **Model** (CharacterCore): `Part.accessoryOf` holds the owner's id. `Drawing.accessoriesAreValid` checks that every owner exists, isn't an accessory, and that each accessory is on its owner's bone; `Drawing.repairAccessories` restores that (an accessory of an accessory goes to that one's owner, an accessory of a missing part becomes a plain part), and `DrawingEditor.commit` runs it after any edit that broke it, as the decoder does on open. So commands that change a part's bone only touch the owner. `Drawing.placing` moves a part's accessories by as many places as the part moved among the other parts, for both `arrange` and `setPartOrder`. Commands are in `DrawingEditor+Accessories`, tests in `AccessoryTests`.
-- **Format:** an accessory is its own slot, with its own attachment, and `accessoryOf` names its owner's slot. It is written only for accessories, so files without them are unchanged. The example robot now has an antenna, the head's accessory, drawn behind the head. Outfits will later be skins that refill accessory slots. See [Schema/README.md](Schema/README.md#accessories).
+- **Format:** an accessory is its own slot, with its own attachment, and `accessoryOf` names its owner's slot. It is written only for accessories, so files without them are unchanged. The example robot now has an antenna, the head's accessory (since drawn in front of the head with its stalk behind it). Outfits will later be skins that refill accessory slots. See [Schema/README.md](Schema/README.md#accessories).
 
 ## Layers panel notes
 
@@ -267,3 +267,19 @@ Phase 4 of the layers plan: commands for picking what you mean among layers, gro
 **How it works**
 
 - **Model** (CharacterCore): `DrawingEditor.selectionCrumbs` lists the levels around the selection as `SelectionCrumb`s (`.layer`, `.group` or `.shapes`, one flagged current), `selectCrumb` selects one, and `selectParent` selects the one outside the current level. `selectionScopeLayer` is the layer Select All in Layer and Invert work in. Commands are in `DrawingEditor+Select`, tests in `SelectMenuTests`.
+
+## Clipped groups and behind-owner shapes notes
+
+Two additions to clipping and accessories. The file format stays 0.2 with two new optional keys, `clipped` on a group and `behindOwner` on a shape.
+
+**Using it**
+
+- **Clip Group to Shape Below:** select a whole group (tap it with Select, or tap its row in the Layers panel) and turn on **Clip Group to Shape Below** in the Appearance panel, or long-press the group's row and choose **Clip to Shape Below**. The whole group then draws only inside the shape under it, so an iris, pupil and highlight grouped together stay inside the eye white. Clipping inside the group still works (the highlight can clip to the iris), and taps only reach a clipped group where it shows. A clipped shape placed above a clipped group clips to the same shape the group does. The group's row shows a small clip arrow. While you're inside the group (double tap), it draws whole so you can see what you're editing.
+- **Draw Behind Owner:** select shapes in an accessory and turn on **Draw Behind Owner** in the Appearance panel. Those shapes draw just behind the accessory's part, while the rest of the accessory stays where it is in the draw order, so one Hat accessory can have its back brim behind the head and its front in front of it. The toggle only shows for shapes in accessories. Behind shapes clip only to other behind shapes of the same accessory.
+- **Exports:** PNG and the thumbnail draw both as the canvas does. SVG export masks a clipped group as a whole, and writes an accessory's behind shapes as a group of their own named "Hat (behind)" just behind the part.
+
+**How it works**
+
+- **Model** (CharacterCore): `ShapeGroup.isClipped` and `VectorShape.isBehindOwner`. `Part.clipBase(ofGroup:)` finds a clipped group's base (the nearest shape below the group that isn't clipped or in a clipped group), `groupClipBase(of:)` gives it for any member, and `clipBase(of:)` now skips clipped groups' shapes outside a group. `Drawing.drawStack` is the order things draw in: `parts`, with each accessory's behind shapes split off into a copy of the accessory placed just before its owner. The canvas, hit testing, PNG and SVG all draw from it. Commands are `setGroupClipped` (in `DrawingEditor+Layers`) and `setBehindOwner` (in `DrawingEditor+Appearance`), each one undo step. Tests are in `GroupClipAndBehindTests`.
+- **Rendering:** the stencil gives up one winding bit (fills wrap at 32 overlaps instead of 64) for a group mask bit. A clipped group copies its base's clip into the mask bit as it starts, its shapes paint only where that bit is set, and clip bases inside the group mark the clip only where they painted. When the group ends the clip goes back to the group's base for any clipped shapes above it, and the mask is cleared.
+- **Format:** the example robot's head has a Visor group clipped to it, with a glint clipped to the visor, and its antenna now draws in front of the head with the stalk behind it. See [Schema/README.md](Schema/README.md#groups).
