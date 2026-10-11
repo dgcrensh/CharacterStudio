@@ -42,6 +42,7 @@ Notes:
 
 - `swift test` on a Mac uses Xcode's toolchain and Apple's Foundation; CI uses Linux's swift-corelibs-foundation. They rarely differ, but formatting, `Decimal` and some string APIs can. To reproduce the Linux job exactly: `docker run --rm -v "$PWD":/src -w /src swift:6.1 swift test --package-path Packages/CharacterCore`.
 - The CharacterStudio scheme also lists `CharacterCoreTests` as its test target, so Cmd-U in Xcode runs the same tests. From the command line that needs a concrete simulator: `xcrun simctl list devices available | grep iPad` to pick one, then `xcodebuild test -project CharacterStudio.xcodeproj -scheme CharacterStudio -destination 'platform=iOS Simulator,name=<iPad name>'`.
+- `PerformanceTests` time the hot paths on a generated stress drawing and never fail on speed; see "Measuring performance" in `docs/plans/performance-audit.md` for the full-size, optimized run and the app's Instruments signposts.
 - The schema check uses a `.venv` in the repo (git-ignored) because Homebrew's Python refuses a global `pip install`.
 - Running on a real iPad needs your personal team under Signing & Capabilities; CI builds with signing off and never runs the app.
 - In the Simulator there is no Pencil: a single finger (the mouse) draws, and Option-drag gives two fingers for pan, zoom and rotate.

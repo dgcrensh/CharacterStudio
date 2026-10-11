@@ -219,6 +219,8 @@ final class CanvasStore {
 
     /// Copies editor state into `ui` and redraws.
     func refresh() {
+        let interval = Signposts.canvas.beginInterval("Refresh")
+        defer { Signposts.canvas.endInterval("Refresh", interval) }
         let editor = session.editor
         update(\.tool, editor.tool)
         update(\.canUndo, editor.canUndo)
