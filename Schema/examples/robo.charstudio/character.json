@@ -10,9 +10,10 @@
   ],
   "slots": [
     { "id": "Torso", "bone": "root", "attachment": "Torso" },
+    { "id": "Antenna", "bone": "Neck", "attachment": "Antenna", "accessoryOf": "Head" },
     { "id": "Head", "bone": "Neck", "attachment": "Head" }
   ],
-  "drawOrder": ["Torso", "Head"],
+  "drawOrder": ["Torso", "Antenna", "Head"],
   "skins": {
     "default": {
       "Torso": {
@@ -75,6 +76,34 @@
               "points": [
                 { "p": [-30, -30], "in": [0, 0], "out": [0, 0], "smooth": false },
                 { "p": [30, -30], "in": [0, 0], "out": [0, 0], "smooth": false }
+              ]
+            }
+          ]
+        }
+      },
+      "Antenna": {
+        "Antenna": {
+          "type": "vector",
+          "pivot": [20, 0],
+          "shapes": [
+            {
+              "closed": false,
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 3 },
+              "points": [
+                { "p": [50, 0], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [78, 0], "in": [0, 0], "out": [0, 0], "smooth": false }
+              ]
+            },
+            {
+              "closed": true,
+              "fill": "#5A8DEEFF",
+              "fillGlobal": "Body",
+              "stroke": { "color": "#222222FF", "global": "Ink", "width": 3 },
+              "points": [
+                { "p": [90, 0], "in": [0, -3.3137], "out": [0, 3.3137] },
+                { "p": [84, 6], "in": [3.3137, 0], "out": [-3.3137, 0] },
+                { "p": [78, 0], "in": [0, 3.3137], "out": [0, -3.3137] },
+                { "p": [84, -6], "in": [-3.3137, 0], "out": [3.3137, 0] }
               ]
             }
           ]

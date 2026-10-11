@@ -20,7 +20,7 @@ A character is a `.charstudio` package (a folder that Files shows as one documen
 ## Structure
 
 - `bones`: the bone tree, parents before children, starting with `root`. See [Skeleton](#skeleton).
-- `slots`: one per part, on the bone the part moves with (`root` for a part on no bone). A slot's id is the part's name, kept unique by the editor.
+- `slots`: one per part, on the bone the part moves with (`root` for a part on no bone). A slot's id is the part's name, kept unique by the editor. An accessory is a slot too, with `accessoryOf` (see [Accessories](#accessories)).
 - `drawOrder`: slot ids from back to front.
 - `skins.default[slot][attachment]`: a `vector` attachment with the part's `pivot` and its `shapes`, back to front. Attachment coordinates (points, handles, `pivot`, gradient points) are in the space of the slot's bone; on `root` that is world space.
 - Attachments and shapes may carry `hidden: true` and `locked: true`, editor hints written only when set: the editor doesn't draw hidden art and doesn't let taps reach locked art. Animation tools should draw both as usual.
@@ -60,3 +60,13 @@ Added after 0.2 shipped, as optional keys, so the version stays 0.2. Both are wr
 - `group` on a shape names the group it belongs to. A group's shapes are next to each other in `shapes`, and groups don't nest.
 - Groups only say which shapes belong together for editing; they don't change how anything draws, except that a clipped shape looks for its base only within its group (see Clipping above). Readers that ignore them draw the same picture.
 - Readers should treat a shape naming an unknown group as ungrouped, and drop groups no shape uses. The app reads a group whose shapes are not next to each other as one group per run of shapes, each with the group's name. Two groups with the same id in one attachment are an error.
+
+## Accessories
+
+Added after 0.2 shipped, as an optional key, so the version stays 0.2.
+
+- An accessory is a part owned by another part, such as hair or a hat on the head or a sleeve on an arm. It is a slot of its own, with its own attachment, and `accessoryOf` on the slot names its owner's slot id. The key is written only for accessories.
+- The layers are a tree of ownership (the character, its parts, their accessories), but stacking is still the one flat `drawOrder`, so an accessory can draw anywhere: long back hair can sit behind the torso while the head is in front of it.
+- An accessory's slot is on its owner's bone, so it moves with the owner when the skeleton is posed. Accessories don't own accessories.
+- Readers that ignore `accessoryOf` draw the same picture. Readers should treat an accessory of an unknown slot (or of itself) as a plain slot, and an accessory of an accessory as belonging to that one's owner. The app moves an accessory to its owner's bone when it reads the file.
+- Later, outfits will be skins that fill the accessory slots with other attachments.

@@ -125,6 +125,10 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var isLocked: Bool
     /// The part's groups of shapes, in no particular order (the shapes keep the order).
     public var groups: [ShapeGroup] = []
+    /// The part this one is an accessory of (hair, a hat, a sleeve), if any. An accessory
+    /// sits on its owner's bone and moves, hides and reorders with it, but has its own
+    /// place in the draw order. Accessories don't own accessories.
+    public var accessoryOf: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -431,8 +435,9 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             return nil
         case .part(let id):
-            guard let i = partIndex(id), !parts[i].shapes.isEmpty else { return nil }
-            return SelectionFrame(rect: parts[i].bounds)
+            // A part carries its accessories, so the frame takes them in.
+            let bounds = family(of: id).reduce(Rect.null) { $0.union(parts[$1].bounds) }
+            return bounds.isNull ? nil : SelectionFrame(rect: bounds)
         case .shape(let p, let s):
             return shape(part: p, shape: s).map { SelectionFrame(rect: $0.bounds) }
         case .shapes:
@@ -484,9 +489,11 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             break
         case .part(let id):
-            guard let p = partIndex(id) else { return }
-            for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
-            parts[p].pivot = t.apply(parts[p].pivot)
+            // Accessories move with their part.
+            for p in family(of: id) {
+                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            }
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
             parts[idx.0].shapes[idx.1].apply(t)

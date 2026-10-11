@@ -126,7 +126,8 @@
       "properties": {
         "id": { "type": "string" },
         "bone": { "type": "string" },
-        "attachment": { "description": "The attachment shown by default, or absent for an empty slot.", "type": "string" }
+        "attachment": { "description": "The attachment shown by default, or absent for an empty slot.", "type": "string" },
+        "accessoryOf": { "description": "The id of the slot this one is an accessory of (hair or a hat on the head). Written only for accessories. An accessory is on its owner's bone and has its own place in drawOrder.", "type": "string" }
       }
     },
     "attachment": {

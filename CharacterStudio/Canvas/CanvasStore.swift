@@ -70,6 +70,9 @@ final class EditorUIState {
     var selectedGroupName = ""
     /// The other groups of the selected shapes' part, for Add to Group.
     var groupsToAddTo: [ShapeGroup] = []
+    /// The part a new accessory would go on (the selected part, or its owner), and its name.
+    var accessoryOwner: Int?
+    var accessoryOwnerName = ""
     var canArrange = false
     var canHideOrLock = false
     var canMoveShapes = false
@@ -253,6 +256,8 @@ final class CanvasStore {
         update(\.canArrange, editor.canArrange)
         update(\.canHideOrLock, editor.canHideOrLockSelection)
         update(\.canMoveShapes, editor.canMoveSelectedShapes)
+        update(\.accessoryOwner, editor.accessoryOwnerForSelection)
+        update(\.accessoryOwnerName, editor.accessoryOwnerForSelection.flatMap { editor.drawing.part($0)?.name } ?? "")
         update(\.hasHiddenArt, editor.hasHiddenArt)
         update(\.hasLockedArt, editor.hasLockedArt)
         update(\.recentColors, editor.recentColors)
@@ -390,6 +395,15 @@ final class CanvasStore {
     func moveSelection(toPart id: Int) { edit { $0.editor.moveSelection(toPart: id) } }
     func setPartOrder(frontToBack ids: [Int]) { edit { $0.editor.setPartOrder(frontToBack: ids) } }
     func canMergePartDown(_ id: Int) -> Bool { session.editor.canMergePartDown(id) }
+
+    /// Adds an empty accessory to part `id` and isolates it, so drawing goes into it.
+    func addAccessory(to id: Int, behind: Bool = false) {
+        edit { $0.editor.addAccessory(to: id, behind: behind) }
+        showToast("Draw the accessory, then exit isolation")
+    }
+    func setAccessory(_ id: Int, of owner: Int?) { edit { $0.editor.setAccessory(id, of: owner) } }
+    func canAddAccessory(to id: Int) -> Bool { session.editor.canAddAccessory(to: id) }
+    func possibleOwners(of id: Int) -> [Part] { session.editor.possibleOwners(of: id) }
 
     /// Isolates the selected part (or the part of the selected shapes).
     func isolateSelection() {

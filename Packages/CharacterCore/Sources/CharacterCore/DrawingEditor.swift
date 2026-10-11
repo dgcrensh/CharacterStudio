@@ -1290,7 +1290,8 @@ public struct DrawingEditor: Sendable {
         case .none:
             return
         case .part(let id):
-            drawing.parts.removeAll { $0.id == id }
+            // A part's accessories go with it.
+            drawing.parts.removeAll { $0.id == id || $0.accessoryOf == id }
         case .shape(let pid, let sid):
             guard drawing.indices(part: pid, shape: sid) != nil else { return }
             removeShape(ShapeRef(part: pid, shape: sid))
@@ -1526,6 +1527,8 @@ public struct DrawingEditor: Sendable {
         if key == nil { recentColorSource = nil }
         // Groups stay whole: no empty groups, and each one's shapes together.
         if !drawing.groupsAreValid { drawing.repairGroups() }
+        // Accessories stay on their owners' bones, and owners exist.
+        if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }
