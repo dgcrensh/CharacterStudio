@@ -165,18 +165,26 @@ private struct StencilSimulator {
     /// Premultiplied red, green, blue and alpha.
     var color = (r: 1.0, g: 1.0, b: 1.0, a: 1.0)
 
-    static func run(_ batch: ArtBatch, at p: Vec2) -> StencilSimulator {
+    /// `moving` is the live transform for the steps between `.moving` marks: the GPU
+    /// draws their vertices through it, and gradients see the untransformed point.
+    static func run(_ batch: ArtBatch, at point: Vec2, moving: Affine2D = .identity) -> StencilSimulator {
         var sim = StencilSimulator()
         let v = stride(from: 0, to: batch.vertices.count, by: 2).map {
             Vec2(Double(batch.vertices[$0]), Double(batch.vertices[$0 + 1]))
         }
+        let back = moving.inverted ?? .identity
+        var transformed = false
         for step in batch.steps {
+            // Testing the untransformed point against untransformed triangles is the same
+            // as testing the point against the transformed ones.
+            let p = transformed ? back.apply(point) : point
             switch step {
             case .stencil(let range, let state, let reference):
                 for i in stride(from: range.lowerBound, to: range.upperBound, by: 3) {
                     let a = v[i], b = v[i + 1], c = v[i + 2]
                     guard inside(p, a, b, c) else { continue }
-                    let front = (b - a).cross(c - a) > 0
+                    var front = (b - a).cross(c - a) > 0
+                    if transformed, moving.determinant < 0 { front.toggle() }
                     sim.apply(state, reference: reference, front: front)
                 }
             case .cover(let range, let paint, let state, let reference):
@@ -191,6 +199,8 @@ private struct StencilSimulator {
                 sim.apply(state, reference: reference, front: true)
             case .veil:
                 break
+            case .moving(let on):
+                transformed = on
             }
         }
         return sim
@@ -738,6 +748,50 @@ private extension BezierPath {
         var copy = self
         for i in copy.points.indices { copy.points[i].mode = .corner }
         return copy
+    }
+}
+
+extension ArtBatchTests {
+    /// Drawing the drawing as a drag began, with the moved shapes' steps put through the
+    /// live transform, paints what drawing the transformed drawing does.
+    func testMovingStepsMatchTheTransformedDrawing() {
+        var gradient = VectorShape(id: 0, path: square(20, 0, 10), fill: red)
+        gradient.gradient = ShapeGradient(kind: .linear, start: Vec2(20, 0), end: Vec2(30, 0),
+                                          stops: [GradientStop(offset: 0, color: red), GradientStop(offset: 1, color: blue)])
+        var clipped = VectorShape(id: 0, path: square(4, 4, 10), fill: RGBAColor(r: 0, g: 1, b: 0))
+        clipped.isClipped = true
+        let outlined = VectorShape(id: 0, path: square(0, 20, 10),
+                                   stroke: StrokeStyle(color: blue, width: 2, alignment: .inside))
+        let still = VectorShape(id: 0, path: square(8, 8, 14), fill: RGBAColor(r: 1, g: 1, b: 0, a: 0.5))
+        let d = drawing([VectorShape(id: 0, path: square(0, 0, 10), fill: red), clipped, gradient, outlined, still])
+        let part = d.parts[0]
+        // Move the clip base but not its clipped shape, and the two shapes after it.
+        let moved = [0, 2, 3].map { part.shapes[$0].id }
+        let selection = Selection.covering(Set(moved.map { ShapeRef(part: part.id, shape: $0) }))
+        let t = Affine2D.translation(Vec2(3, -2)) * Affine2D.rotation(0.4) * Affine2D.scale(1.5)
+        let after = d.applying(t, to: selection)
+
+        var live = ArtBuilder()
+        let batch = live.build(d, isolatedPart: nil, tolerance: 0.05, moving: Set(moved))
+        XCTAssertEqual(batch.steps.filter { if case .moving = $0 { true } else { false } }.count, 4,
+                       "on at the base, off at the clipped shape, on again, off at the last shape")
+        var plain = ArtBuilder()
+        let expected = plain.build(after, isolatedPart: nil, tolerance: 0.05)
+
+        var samples = 0, differences = 0
+        for x in stride(from: -10.0, through: 40, by: 0.73) {
+            for y in stride(from: -15.0, through: 45, by: 0.71) {
+                let p = Vec2(x, y)
+                let a = StencilSimulator.run(batch, at: p, moving: t), b = StencilSimulator.run(expected, at: p)
+                samples += 1
+                let same = abs(a.color.r - b.color.r) < 0.02 && abs(a.color.g - b.color.g) < 0.02 &&
+                    abs(a.color.b - b.color.b) < 0.02
+                if !same { differences += 1 }
+                XCTAssertEqual(a.stencil & 0x7F, 0)
+            }
+        }
+        // Only samples within the flattening tolerance of an edge may differ.
+        XCTAssertLessThan(Double(differences) / Double(samples), 0.005, "\(differences) of \(samples)")
     }
 }
 

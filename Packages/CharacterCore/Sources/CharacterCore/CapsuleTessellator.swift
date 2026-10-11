@@ -34,7 +34,7 @@ public enum CapsuleTessellator {
         let alpha = Float(color.a)
         let rgba = (Float(color.r) * alpha, Float(color.g) * alpha, Float(color.b) * alpha, alpha)
 
-        out.reserveCapacity(out.count + segmentCount(pointCount: points.count) * verticesPerSegment * floatsPerVertex)
+        out.reserveAdditional(segmentCount(pointCount: points.count) * verticesPerSegment * floatsPerVertex)
 
         func emit(_ a: Vec2, _ b: Vec2) {
             for (end, side) in corners {

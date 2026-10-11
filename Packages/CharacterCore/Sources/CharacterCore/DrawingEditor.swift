@@ -229,7 +229,14 @@ public struct DrawingEditor: Sendable {
     public private(set) var hoverPoint: Vec2?
     public private(set) var hoverZoom = 1.0
 
-    private var gesture: Gesture?
+    private var gesture: Gesture? {
+        didSet {
+            if case .transform = gesture {} else if liveTransform != nil { liveTransform = nil }
+        }
+    }
+    /// The transform drag in progress, if it moves shapes. See `LiveTransform`.
+    public private(set) var liveTransform: LiveTransform?
+    private var liveTransformCount = 0
     var gestureZoom = 1.0
     /// The last tap with a time, for spotting a double tap.
     private var lastTap: (point: Vec2, time: Double)?
@@ -438,7 +445,15 @@ public struct DrawingEditor: Sendable {
 
         case .transform(let kind, let target, let before, let start):
             let nextID = drawing.nextID
-            drawing = before.applying(transform(kind, from: start, to: p, target: target, before: before), to: target)
+            let t = transform(kind, from: start, to: p, target: target, before: before)
+            drawing = before.applying(t, to: target)
+            if var live = liveTransform {
+                live.transform = t
+                liveTransform = live
+            } else if let shapes = LiveTransform.shapes(of: target, in: before) {
+                liveTransformCount &+= 1
+                liveTransform = LiveTransform(id: liveTransformCount, base: before, shapes: shapes, transform: t)
+            }
             // A duplicating drag made ids `before` does not know about.
             drawing.nextID = max(drawing.nextID, nextID)
 

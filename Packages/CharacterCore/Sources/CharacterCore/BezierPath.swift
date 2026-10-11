@@ -13,6 +13,30 @@ public struct CubicBezier: Hashable, Sendable {
         return p0 * (mt * mt * mt) + p1 * (3 * mt * mt * t) + p2 * (3 * mt * t * t) + p3 * (t * t * t)
     }
 
+    /// Grows `r`, which must already hold both ends, to hold the whole segment.
+    func include(in r: inout Rect) {
+        // The curve stays inside its control points' hull.
+        guard !(r.contains(p1) && r.contains(p2)) else { return }
+        // Where a coordinate's derivative is zero: (a - 2b + c)t² + 2(b - a)t + a = 0,
+        // with a, b, c the control polygon's edges.
+        func turningPoints(_ v0: Double, _ v1: Double, _ v2: Double, _ v3: Double) {
+            let a = v1 - v0, b = v2 - v1, c = v3 - v2
+            let qa = a - 2 * b + c, qb = 2 * (b - a)
+            func visit(_ t: Double) { if t > 0, t < 1 { r.include(point(at: t)) } }
+            if abs(qa) < 1e-12 {
+                if abs(qb) > 1e-12 { visit(-a / qb) }
+                return
+            }
+            let disc = qb * qb - 4 * qa * a
+            guard disc >= 0 else { return }
+            let root = disc.squareRoot()
+            visit((-qb + root) / (2 * qa))
+            visit((-qb - root) / (2 * qa))
+        }
+        turningPoints(p0.x, p1.x, p2.x, p3.x)
+        turningPoints(p0.y, p1.y, p2.y, p3.y)
+    }
+
     public func derivative(at t: Double) -> Vec2 {
         let mt = 1 - t
         return (p1 - p0) * (3 * mt * mt) + (p2 - p1) * (6 * mt * t) + (p3 - p2) * (3 * t * t)
@@ -250,7 +274,17 @@ public struct BezierPath: Hashable, Sendable, Codable {
     /// The largest anchor width multiple (1 for an empty path).
     public var maxWidth: Double { points.map(\.width).max() ?? 1 }
 
-    public func bounds(tolerance: Double = 0.25) -> Rect {
+    /// The exact bounds of the curve, from each segment's ends and turning points, so it
+    /// needs no flattening.
+    public func bounds() -> Rect {
+        var r = Rect.null
+        for point in points { r.include(point.position) }
+        for i in 0..<segmentCount { segment(i).include(in: &r) }
+        return r
+    }
+
+    /// The bounds of the path flattened at `tolerance`, which sit inside `bounds()`.
+    public func bounds(tolerance: Double) -> Rect {
         Rect(points: flattened(tolerance: tolerance))
     }
 

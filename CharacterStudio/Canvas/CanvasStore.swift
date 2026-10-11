@@ -156,6 +156,9 @@ final class CanvasStore {
     /// shake), not an edit made elsewhere.
     private var sentDocuments: [CharacterPackage] = []
     private var seenTapCommands = 0
+    /// The drawing revision `ui`'s drawing-wide values (layers, bones, hidden and
+    /// locked art, export area) were last read at.
+    private var refreshedRevision: Int?
     private var toastCount = 0
 
     init(package: CharacterPackage = CharacterPackage()) {
@@ -217,11 +220,24 @@ final class CanvasStore {
         edit { $0.editor.replaceDrawing(drawing) }
     }
 
-    /// Copies editor state into `ui` and redraws.
+    /// Copies editor state into `ui` and redraws. The values read from the whole
+    /// drawing are read again only when the drawing changed.
     func refresh() {
         let interval = Signposts.canvas.beginInterval("Refresh")
         defer { Signposts.canvas.endInterval("Refresh", interval) }
         let editor = session.editor
+        if editor.revision != refreshedRevision {
+            refreshedRevision = editor.revision
+            update(\.palette, editor.drawing.palette)
+            update(\.globalColors, editor.drawing.globalColors)
+            update(\.characterName, editor.drawing.name)
+            update(\.hasHiddenArt, editor.hasHiddenArt)
+            update(\.hasLockedArt, editor.hasLockedArt)
+            update(\.bones, editor.drawing.bones)
+            update(\.frame, editor.drawing.frame)
+            update(\.canExport, editor.drawing.exportArea() != nil)
+            update(\.layers, LayerTree(drawing: editor.drawing))
+        }
         update(\.tool, editor.tool)
         update(\.canUndo, editor.canUndo)
         update(\.canRedo, editor.canRedo)
@@ -253,13 +269,10 @@ final class CanvasStore {
         update(\.anchorPosition, editingPoints ? editor.selectedAnchorsCentroid : nil)
         update(\.style, editor.style)
         update(\.smoothing, editor.smoothing)
-        update(\.palette, editor.drawing.palette)
-        update(\.globalColors, editor.drawing.globalColors)
         update(\.appearance, editor.selectionAppearance)
         update(\.canClip, editor.canClipSelection)
         update(\.anchorWidth, editingPoints ? editor.selectedAnchorsWidth : nil)
         update(\.pressureWidth, editor.pressureWidth)
-        update(\.characterName, editor.drawing.name)
         update(\.shapeKind, editor.shapeKind)
         update(\.shapeOptions, editor.shapeOptions)
         update(\.isolatedPart, editor.isolatedPart)
@@ -285,15 +298,12 @@ final class CanvasStore {
         update(\.canMoveShapes, editor.canMoveSelectedShapes)
         update(\.accessoryOwner, editor.accessoryOwnerForSelection)
         update(\.accessoryOwnerName, editor.accessoryOwnerForSelection.flatMap { editor.drawing.part($0)?.name } ?? "")
-        update(\.hasHiddenArt, editor.hasHiddenArt)
-        update(\.hasLockedArt, editor.hasLockedArt)
         update(\.recentColors, editor.recentColors)
         update(\.selectedBone, editor.selectedBone)
         let bone = editor.selectedBone.flatMap { editor.drawing.bone($0) }
         update(\.selectedBoneName, bone?.name ?? "")
         update(\.selectedBoneParent, bone?.parent)
         update(\.possibleParents, bone.map { editor.possibleParents(of: $0.id) } ?? [])
-        update(\.bones, editor.drawing.bones)
         update(\.boneMode, editor.boneMode)
         update(\.showsBones, editor.showsBones)
         update(\.canAttachPart, editor.canAttachSelectedPart)
@@ -306,9 +316,6 @@ final class CanvasStore {
         update(\.canWiggle, editor.wiggleCandidate != nil || editor.wigglePart != nil)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
-        update(\.frame, editor.drawing.frame)
-        update(\.canExport, editor.drawing.exportArea() != nil)
-        update(\.layers, LayerTree(drawing: editor.drawing))
         update(\.selectedLayers, editor.selectedLayers)
         update(\.activeLayer, editor.activeLayer)
         update(\.activeLayerName, editor.activeLayer.flatMap { editor.drawing.part($0)?.name } ?? "")
@@ -332,6 +339,26 @@ final class CanvasStore {
         onChange?()
     }
 
+    /// After a change to colors, opacity or outline width only, which a color picker or
+    /// slider sends many of a second: copies just what such a change can alter. The
+    /// drawing-wide values stay as they are (none of them depends on style), so they
+    /// are not read again until something else changes the drawing.
+    private func refreshStyle() {
+        let interval = Signposts.canvas.beginInterval("Refresh style")
+        defer { Signposts.canvas.endInterval("Refresh style", interval) }
+        let editor = session.editor
+        update(\.canUndo, editor.canUndo)
+        update(\.canRedo, editor.canRedo)
+        update(\.style, editor.style)
+        update(\.appearance, editor.selectionAppearance)
+        update(\.recentColors, editor.recentColors)
+        update(\.palette, editor.drawing.palette)
+        update(\.globalColors, editor.drawing.globalColors)
+        if refreshedRevision != nil { refreshedRevision = editor.revision }
+        updateDocument()
+        onChange?()
+    }
+
     /// Shows a short message over the canvas.
     func showToast(_ text: String) {
         toastCount += 1
@@ -345,6 +372,12 @@ final class CanvasStore {
     private func edit(_ change: (inout CanvasSession) -> Void) {
         change(&session)
         refresh()
+    }
+
+    /// `edit` for a change that only restyles the selection or a global color.
+    private func restyle(_ change: (inout CanvasSession) -> Void) {
+        change(&session)
+        refreshStyle()
     }
 
     // MARK: Tools and commands
@@ -601,10 +634,10 @@ final class CanvasStore {
 
     // MARK: Style
 
-    func setFill(_ color: Color) { edit { $0.editor.setFill(RGBAColor(color), continuous: true) } }
+    func setFill(_ color: Color) { restyle { $0.editor.setFill(RGBAColor(color), continuous: true) } }
     func setFillEnabled(_ on: Bool) { edit { $0.editor.setFillEnabled(on) } }
-    func setOutline(_ color: Color) { edit { $0.editor.setOutline(RGBAColor(color), continuous: true) } }
-    func setOutlineWidth(_ width: Double) { edit { $0.editor.setOutlineWidth(width) } }
+    func setOutline(_ color: Color) { restyle { $0.editor.setOutline(RGBAColor(color), continuous: true) } }
+    func setOutlineWidth(_ width: Double) { restyle { $0.editor.setOutlineWidth(width) } }
     func setOutlineEnabled(_ on: Bool) { edit { $0.editor.setOutlineEnabled(on) } }
     func setSmoothing(_ amount: Double) { edit { $0.editor.smoothing = amount } }
 
@@ -623,11 +656,11 @@ final class CanvasStore {
     func setMiterLimit(_ limit: Double) { edit { $0.editor.setMiterLimit(limit) } }
     func setOutlineDash(_ dash: [Double]) { edit { $0.editor.setOutlineDash(dash) } }
     func setOutlineAlignment(_ alignment: StrokeAlignment) { edit { $0.editor.setOutlineAlignment(alignment) } }
-    func setOpacity(_ opacity: Double) { edit { $0.editor.setOpacity(opacity) } }
+    func setOpacity(_ opacity: Double) { restyle { $0.editor.setOpacity(opacity) } }
     func setClipped(_ clipped: Bool) { edit { $0.editor.setClipped(clipped) } }
     func setBehindOwner(_ behind: Bool) { edit { $0.editor.setBehindOwner(behind) } }
     func setGradient(_ kind: ShapeGradient.Kind?) { edit { $0.editor.setGradient(kind) } }
-    func setGradientStop(_ index: Int, _ color: Color) { edit { $0.editor.setGradientStop(index, color: RGBAColor(color)) } }
+    func setGradientStop(_ index: Int, _ color: Color) { restyle { $0.editor.setGradientStop(index, color: RGBAColor(color)) } }
     func setGradientAngle(_ degrees: Double) { edit { $0.editor.setGradientAngle(degrees) } }
     func setGradientSpan(_ fraction: Double) { edit { $0.editor.setGradientSpan(fraction) } }
     func reverseGradient() { edit { $0.editor.reverseGradient() } }
@@ -645,7 +678,7 @@ final class CanvasStore {
     func addGlobalColorFromFill() { edit { _ = $0.editor.addGlobalColor($0.editor.style.fill) } }
     func renameGlobalColor(_ id: Int, to name: String) { edit { $0.editor.renameGlobalColor(id, to: name) } }
     func setGlobalColor(_ id: Int, _ color: Color) {
-        edit { $0.editor.setGlobalColor(id, to: RGBAColor(color), continuous: true) }
+        restyle { $0.editor.setGlobalColor(id, to: RGBAColor(color), continuous: true) }
     }
     func removeGlobalColor(_ id: Int) { edit { $0.editor.removeGlobalColor(id) } }
     func applyGlobalFill(_ id: Int) { edit { $0.editor.applyGlobalFill(id) } }
