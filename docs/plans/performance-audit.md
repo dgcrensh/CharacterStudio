@@ -474,7 +474,7 @@ Done on 2026-10-11, on top of `main` (so before #15-#17 landed):
   would have to carry it.
 - The app has `os_signpost` intervals (`CharacterStudio/Canvas/Signposts.swift`, Points of Interest
   category): `Frame` around `CanvasRenderer.render`, `Art rebuild`, `Overlay build` and `Encode`
-  inside it, and `Refresh` around `CanvasStore.refresh`.
+  inside it, and `Refresh` around `CanvasStore.refresh`. More were added later; see "Signposts" below.
 
 Still to do by hand on a device: record one Instruments trace (Metal System Trace plus Time
 Profiler, which show the signposts in their Points of Interest track) of each of: drawing a long
@@ -574,6 +574,83 @@ What they said before these fixes: a warm art rebuild costs nearly as much as a 
 per-shape cache is not what dominates; the outline view's overlay is the worst case by an order of
 magnitude and is not explained by this document yet; hit-testing and erasing are slow enough to
 drop frames on a big drawing, as finding 1 predicts.
+
+#### Signposts
+
+Everything the app marks for Instruments, all in the Points of Interest track. Intervals nest, so a
+`Touches ended` that commits a stroke shows the `Edit` and `Refresh` inside it.
+
+| Signpost | Kind | Where | What it covers |
+| --- | --- | --- | --- |
+| `Render wait` | interval | `MetalCanvasView` | From the first request for a frame (a touch, hover or store change) to the display-link tick that draws it: input-to-render latency on the CPU side |
+| `Missed frame deadline` | event | `MetalCanvasView` | A tick whose work ran past the display's next refresh (`targetTimestamp`) |
+| `Touches began` / `Touches moved` / `Touches ended` | interval | `MetalCanvasView` | Each touch event's routing through `CanvasSession`. `moved` says the phase (`draw`, `navigate`, `edit`) and the coalesced sample count; `ended` includes the curve fit and commit on lift, and the refresh |
+| `Hover` | interval | `MetalCanvasView` | One Pencil hover update, which hit-tests in the select tools |
+| `Quick shape check` | interval | `MetalCanvasView` | One QuickShape poll (every 100 ms while drawing) |
+| `Frame` | interval | `CanvasRenderer.render` | The whole CPU side of a frame |
+| `Next drawable` | interval | `CanvasRenderer.render` | Waiting for a drawable; long ones mean the GPU or display holds both |
+| `No drawable` | event | `CanvasRenderer.render` | A dropped frame, retried on the next tick |
+| `GPU frame` | event | command buffer completion | The frame's GPU time in ms (`gpuEndTime - gpuStartTime`) |
+| `Render targets` | event | `CanvasRenderer.ensureTargets` | The MSAA and stencil targets reallocated, with the size |
+| `Art rebuild` | interval | `CanvasRenderer.updateArt` | Tessellating the art; ends with why: `edit`, `zoom` (a new zoom bucket, which re-tessellates everything), `drag`, `wiggle` or `focus` |
+| `Art upload` | interval | `CanvasRenderer.updateArt` | Copying the art's vertices to the GPU, with the float count |
+| `Encode` / `Art draw` / `Live stroke` / `Overlay build` | interval | `CanvasRenderer.render` | Encoding the pass, the art's draw calls inside it, the live stroke's incremental tessellation, and the overlay |
+| `Reference texture` / `Reference decode` | interval | `CanvasRenderer`, `CanvasStore` | First use of a reference image: decoding it, then uploading it with mipmaps |
+| `Edit` | interval | `CanvasStore.edit` / `restyle` | The editor command itself (including undo and redo), before `Refresh` |
+| `Refresh` / `Refresh style` | interval | `CanvasStore` | Copying editor state into the SwiftUI panels |
+| `Hand off` / `Document changed` | interval | `CanvasStore` | Handing the drawing to the document, and taking in one changed elsewhere |
+| `Save` / `Thumbnail` / `Open` | interval | `CharacterDocument`, `ThumbnailRenderer` | Autosave (off the main thread), its thumbnail render, and reading a document |
+| `SVG import` / `SVG export` / `PNG export` | interval | `CanvasStore` | The import and export commands |
+
+SwiftUI's own work (panel bodies, layout) has no signposts of ours; record it with the SwiftUI
+template in Instruments.
+
+#### How drawings scale
+
+`ScalingTests` times each workload in `Workloads.swift` (the interactive operations: drawing,
+navigating, rendering, editing and files) on stress drawings of several sizes and prints one table.
+By default it uses 60, 120 and 240 shapes in debug, as CI runs it; with `STRESS_DRAWING=full` it
+uses 300 to 4,800. The growth column is the exponent k in time ∝ shapes^k between the smallest and
+largest size. The same workloads at the audit's size (2,400 shapes) are also `PerformanceTests`
+(`testArtRebuildAfterOneEdit`, `testPencilStroke`, `testOpenDocument` and so on).
+
+```sh
+STRESS_DRAWING=full swift test -c release --package-path Packages/CharacterCore --filter ScalingTests
+```
+
+First numbers, on top of PR #21, `-c release`, same Mac as above, milliseconds per call, median of 9:
+
+| Workload | 300 shapes | 600 | 1,200 | 2,400 | 4,800 | Growth |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild after one edit | 1.77 | 2.12 | 3.79 | 7.15 | 15.8 | 0.79 |
+| Art rebuild, new zoom bucket | 11.7 | 22.9 | 44.2 | 89.9 | 179.5 | 0.99 |
+| Hover frame (select tool) | 0.059 | 0.095 | 0.117 | 0.203 | 0.338 | 0.63 |
+| Pencil stroke, 240 samples and lift | 0.045 | 0.043 | 0.043 | 0.046 | 0.054 | 0.07 |
+| Quick shape check, 1,200 points | 0.215 | 0.214 | 0.214 | 0.214 | 0.214 | 0.00 |
+| Eraser sample | 0.044 | 0.100 | 0.224 | 0.400 | 0.914 | 1.09 |
+| Drag sample, everything selected | 0.086 | 0.173 | 0.368 | 0.843 | 1.80 | 1.10 |
+| Undo and redo | < 0.001 | < 0.001 | < 0.001 | < 0.001 | < 0.001 | |
+| Two-finger navigation, 60 samples | 0.018 | 0.018 | 0.018 | 0.018 | 0.018 | 0.00 |
+| Refresh queries, everything selected | 0.368 | 0.732 | 1.52 | 3.15 | 6.55 | 1.04 |
+| Layer tree | 0.001 | 0.002 | 0.004 | 0.008 | 0.019 | |
+| Save: encode and format | 19.2 | 38.3 | 76.9 | 153.4 | 307.1 | 1.00 |
+| Open: parse and decode | 48.2 | 96.7 | 194.9 | 389.7 | 783.9 | 1.01 |
+| SVG export | 6.72 | 13.9 | 28.1 | 57.4 | 118.5 | 1.04 |
+| SVG import | 49.8 | 101.0 | 202.8 | 406.2 | 827.3 | 1.01 |
+
+What they say (on a Mac; an iPad will be slower, so read them against a 120 Hz frame's 8.3 ms):
+
+- Nothing is worse than linear any more. Drawing a stroke, QuickShape, navigation and undo don't
+  depend on the drawing's size at all.
+- A frame after any edit still walks every shape: one changed fill costs 7 ms at 2,400 shapes and
+  16 ms at 4,800, close to or over a frame. Only one shape re-tessellates, so this is the warm
+  rebuild's per-shape cost (cache checks and vertex appends); not profiled further here.
+- A zoom that crosses a power-of-two bucket re-tessellates everything: 90 ms at 2,400 shapes, a
+  visible hitch mid-pinch. The `Art rebuild` signpost's `zoom` reason shows it on a device.
+- Per-sample editor work for erasing and select-all drags, and the refresh after an edit with
+  everything selected, are linear and reach 1-7 ms at 2,400 shapes.
+- Opening, saving and SVG import are linear and in the hundreds of milliseconds at 2,400 shapes;
+  saves run off the main thread, but SVG import runs on it, inside one `Edit`.
 
 ## Smaller notes
 

@@ -215,10 +215,19 @@ final class CanvasRenderer {
         guard let layer, viewSize.width > 0, viewSize.height > 0 else { return true }
         let frameInterval = Signposts.canvas.beginInterval("Frame")
         defer { Signposts.canvas.endInterval("Frame", frameInterval) }
-        guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return false }
+        // Waiting here means the GPU or the display still holds both drawables.
+        let next = Signposts.canvas.withIntervalSignpost("Next drawable") { layer.nextDrawable() }
+        guard let drawable = next, let commandBuffer = queue.makeCommandBuffer() else {
+            Signposts.canvas.emitEvent("No drawable")
+            return false
+        }
         let frame = clock.beginFrame()
         let clock = clock
-        commandBuffer.addCompletedHandler { _ in clock.complete(frame) }
+        commandBuffer.addCompletedHandler { buffer in
+            clock.complete(frame)
+            let ms = (buffer.gpuEndTime - buffer.gpuStartTime) * 1000
+            Signposts.canvas.emitEvent("GPU frame", "\(ms, format: .fixed(precision: 2)) ms")
+        }
 
         ensureTargets(width: drawable.texture.width, height: drawable.texture.height)
         guard let msaaTexture, let stencilTexture else { return true }
@@ -252,7 +261,11 @@ final class CanvasRenderer {
         drawReferences(editor.drawing.references, encoder: encoder, uniforms: &uniforms)
         let w = Double(viewSize.width), h = Double(viewSize.height)
         let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
-        if !editor.outlineView { drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen)) }
+        if !editor.outlineView {
+            Signposts.canvas.withIntervalSignpost("Art draw") {
+                drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen))
+            }
+        }
 
         // The live strokes keep their committed segments and add only what is new. The
         // overlay keeps its costly layers until what they show changes and builds the
@@ -260,13 +273,17 @@ final class CanvasRenderer {
         encoder.setDepthStencilState(plainState)
         encoder.setRenderPipelineState(strokePipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
-        if let live = session.liveStroke {
-            let tail = liveTessellator.update(for: live)
-            drawCapsules(liveTessellator.committed, tail, encoder: encoder)
-        }
-        if let mirrored = session.mirroredLiveStroke {
-            let tail = mirroredTessellator.update(for: mirrored)
-            drawCapsules(mirroredTessellator.committed, tail, encoder: encoder)
+        if session.liveStroke != nil {
+            let interval = Signposts.canvas.beginInterval("Live stroke")
+            if let live = session.liveStroke {
+                let tail = liveTessellator.update(for: live)
+                drawCapsules(liveTessellator.committed, tail, encoder: encoder)
+            }
+            if let mirrored = session.mirroredLiveStroke {
+                let tail = mirroredTessellator.update(for: mirrored)
+                drawCapsules(mirroredTessellator.committed, tail, encoder: encoder)
+            }
+            Signposts.canvas.endInterval("Live stroke", interval)
         }
         let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
         let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
@@ -296,6 +313,7 @@ final class CanvasRenderer {
 
     private func ensureTargets(width: Int, height: Int) {
         if let msaaTexture, msaaTexture.width == width, msaaTexture.height == height { return }
+        Signposts.canvas.emitEvent("Render targets", "\(width) x \(height)")
         #if targetEnvironment(simulator)
         let storage = MTLStorageMode.private
         #else
@@ -335,6 +353,9 @@ final class CanvasRenderer {
         guard wiggling || artWiggled || !current || tolerance != artTolerance ||
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
+        // Why, for the signpost: a zoom bucket change re-tessellates every shape.
+        let reason = wiggling || artWiggled ? "wiggle" : tolerance != artTolerance ? "zoom"
+            : live != nil ? "drag" : !current ? "edit" : "focus"
         // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
         artRevision = live == nil ? editor.revision : -1
         artLive = live?.id
@@ -344,13 +365,15 @@ final class CanvasRenderer {
         artGhost = ghost
         artWiggled = wiggling
         let interval = Signposts.canvas.beginInterval("Art rebuild")
-        defer { Signposts.canvas.endInterval("Art rebuild", interval) }
+        defer { Signposts.canvas.endInterval("Art rebuild", interval, "\(reason, privacy: .public)") }
         let drawing = live?.base ?? (wiggling ? editor.displayDrawing(at: time) : editor.drawing)
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
                                      tolerance: tolerance, ghostFocus: ghost, moving: live?.shapes ?? [])
         artSteps = batch.steps
         if let artBuffer { buffers.release(artBuffer) }
-        artBuffer = buffers.upload([batch.vertices], pin: true)
+        artBuffer = Signposts.canvas.withIntervalSignpost("Art upload", "\(batch.vertices.count) floats") {
+            buffers.upload([batch.vertices], pin: true)
+        }
     }
 
     private func drawArt(encoder: any MTLRenderCommandEncoder, uniforms: inout CanvasUniforms, viewRect: Rect) {
@@ -509,6 +532,8 @@ final class CanvasRenderer {
 
     private func loadMissingTextures(for references: [ReferenceImage], commandBuffer: any MTLCommandBuffer) {
         for ref in references where textures[ref.id] == nil {
+            let interval = Signposts.canvas.beginInterval("Reference texture")
+            defer { Signposts.canvas.endInterval("Reference texture", interval) }
             guard let image = referenceImage?(ref.id), let texture = makeTexture(image, commandBuffer: commandBuffer) else { continue }
             textures[ref.id] = texture
         }

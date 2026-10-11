@@ -163,7 +163,9 @@ final class CanvasStore {
     /// The pixels for a reference image, decoded on first use.
     func referenceImage(_ id: Int) -> CGImage? {
         if let image = decodedImages[id] { return image }
-        guard let data = referenceData[id], let image = UIImage(data: data)?.cgImage else { return nil }
+        guard let data = referenceData[id] else { return nil }
+        let decoded = Signposts.canvas.withIntervalSignpost("Reference decode") { UIImage(data: data)?.cgImage }
+        guard let image = decoded else { return nil }
         decodedImages[id] = image
         return image
     }
@@ -198,7 +200,10 @@ final class CanvasStore {
         sendDocument()
     }
 
+    /// Each hand-off leads the system to autosave, which runs "Save" and "Thumbnail".
     private func sendDocument() {
+        let interval = Signposts.canvas.beginInterval("Hand off")
+        defer { Signposts.canvas.endInterval("Hand off", interval) }
         let drawing = session.editor.drawing
         let images = referenceData.filter { id, _ in drawing.referenceIndex(id) != nil }
         document = CharacterPackage(drawing: drawing, referenceImages: images)
@@ -210,6 +215,8 @@ final class CanvasStore {
     /// Takes in a version of the document that changed outside the editor (for
     /// example, edited on another device). Undoable like any other change.
     func documentChanged(_ package: CharacterPackage) {
+        let interval = Signposts.canvas.beginInterval("Document changed")
+        defer { Signposts.canvas.endInterval("Document changed", interval) }
         guard package != document else { return }
         if sentDocuments.contains(package) {
             // The editor has its own undo; keep the canvas and put the document back in step.
@@ -366,13 +373,13 @@ final class CanvasStore {
     }
 
     private func edit(_ change: (inout CanvasSession) -> Void) {
-        change(&session)
+        Signposts.canvas.withIntervalSignpost("Edit") { change(&session) }
         refresh()
     }
 
     /// `edit` for a change that only restyles the selection or a global color.
     private func restyle(_ change: (inout CanvasSession) -> Void) {
-        change(&session)
+        Signposts.canvas.withIntervalSignpost("Edit") { change(&session) }
         refreshStyle()
     }
 
@@ -542,6 +549,8 @@ final class CanvasStore {
     /// Reads SVG art into new parts on top, selects them and fits them in the view.
     /// Returns an error message when nothing could be imported.
     func importSVG(_ data: Data, name: String) -> String? {
+        let interval = Signposts.canvas.beginInterval("SVG import")
+        defer { Signposts.canvas.endInterval("SVG import", interval) }
         let text = String(decoding: data, as: UTF8.self)
         let result: SVGImportResult
         do {
@@ -570,14 +579,16 @@ final class CanvasStore {
 
     /// The art as SVG, over the shown frame or the visible art.
     func svgData() -> Data? {
-        session.editor.svgDocument().map { Data($0.utf8) }
+        Signposts.canvas.withIntervalSignpost("SVG export") { session.editor.svgDocument().map { Data($0.utf8) } }
     }
 
     /// The art as a transparent PNG at `scale` pixels per point, over the same area as SVG.
     func pngData(scale: Double) -> Data? {
         let drawing = session.editor.drawing
         guard let area = drawing.exportArea() else { return nil }
-        return ThumbnailRenderer.exportPNG(for: drawing, area: area, scale: scale)
+        return Signposts.canvas.withIntervalSignpost("PNG export") {
+            ThumbnailRenderer.exportPNG(for: drawing, area: area, scale: scale)
+        }
     }
 
     // MARK: Clipboard

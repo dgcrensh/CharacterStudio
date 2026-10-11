@@ -127,7 +127,7 @@ final class PerformanceTests: XCTestCase {
     }
 
     /// What one refresh reads from the editor beyond plain flags.
-    private static func readRefreshQueries(_ editor: DrawingEditor) {
+    static func readRefreshQueries(_ editor: DrawingEditor) {
         var n = 0
         func read<T>(_ value: T) { withExtendedLifetime(value) { n += 1 } }
         read(editor.canJoinSelection)
@@ -322,4 +322,38 @@ final class PerformanceTests: XCTestCase {
             XCTAssertEqual(editor.undoStack.undoStates.count, min(500, UndoStack<Drawing>.defaultLimit))
         }
     }
+
+    // MARK: Workloads
+
+    /// Times `workload` on the stress drawing, `calls` calls per `measure` run. The same
+    /// workloads run at several sizes in `ScalingTests`.
+    private func measure(_ workload: Workload, calls: Int = 1) {
+        let operation = workload.prepare(drawing)
+        operation()
+        measure {
+            for _ in 0..<calls { operation() }
+        }
+    }
+
+    /// One shape's fill changed, then a frame (10 calls).
+    func testArtRebuildAfterOneEdit() { measure(.artRebuildAfterOneEdit, calls: 10) }
+
+    /// A zoom across a power-of-two bucket, then a frame.
+    func testArtRebuildAtNewZoomBucket() { measure(.artRebuildAtNewZoomBucket) }
+
+    func testPencilStroke() { measure(.pencilStroke) }
+
+    /// 10 polls of a long stroke held still.
+    func testQuickShapeCheck() { measure(.quickShapeCheck, calls: 10) }
+
+    func testTwoFingerNavigation() { measure(.twoFingerNavigation) }
+
+    /// 10 undo-redo pairs.
+    func testUndoRedo() { measure(.undoRedo, calls: 10) }
+
+    func testOpenDocument() { measure(.open) }
+
+    func testSVGExport() { measure(.svgExport) }
+
+    func testSVGImport() { measure(.svgImport) }
 }

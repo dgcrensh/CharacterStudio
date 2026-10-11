@@ -20,6 +20,9 @@ final class MetalCanvasView: UIView {
     private let renderer: CanvasRenderer?
     private var displayLink: CADisplayLink?
     private var needsRender = true
+    /// The "Render wait" signpost: from the first request for a frame to the tick that
+    /// draws it, which is the input-to-render latency on the CPU side.
+    private var renderWait: OSSignpostIntervalState?
     private var hasLaidOut = false
 
     /// Stable small integer ids for live `UITouch` objects.
@@ -95,6 +98,7 @@ final class MetalCanvasView: UIView {
     }
 
     private func setNeedsRender() {
+        if renderWait == nil { renderWait = Signposts.canvas.beginInterval("Render wait") }
         needsRender = true
         displayLink?.isPaused = false
     }
@@ -106,6 +110,10 @@ final class MetalCanvasView: UIView {
             return
         }
         needsRender = false
+        if let renderWait {
+            Signposts.canvas.endInterval("Render wait", renderWait)
+            self.renderWait = nil
+        }
         let drawn = renderer?.render(
             session: store.session,
             viewSize: bounds.size,
@@ -115,9 +123,15 @@ final class MetalCanvasView: UIView {
         // A dropped frame is retried on the next tick; otherwise the overlay could stay stale.
         // The wiggle preview animates, so it keeps the display link ticking.
         if !drawn || store.session.editor.wigglePart != nil { needsRender = true }
+        // The frame's CPU work ran past the display's next refresh.
+        if let link = displayLink, CACurrentMediaTime() > link.targetTimestamp {
+            Signposts.canvas.emitEvent("Missed frame deadline")
+        }
     }
 
     @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {
+        let interval = Signposts.canvas.beginInterval("Hover")
+        defer { Signposts.canvas.endInterval("Hover", interval) }
         switch recognizer.state {
         case .began, .changed:
             store.session.pencilHovered(at: Vec2(recognizer.location(in: self)))
@@ -169,6 +183,12 @@ final class MetalCanvasView: UIView {
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
     override var canBecomeFirstResponder: Bool { true }
 
+    /// What touches are doing, for the touch signposts.
+    private var phase: String {
+        store.session.isDrawing ? "draw" : store.session.isNavigating ? "navigate"
+            : store.session.isPencilActive ? "edit" : "other"
+    }
+
     private func kind(of touch: UITouch) -> TouchKind? {
         switch touch.type {
         case .pencil: .pencil
@@ -189,6 +209,8 @@ final class MetalCanvasView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let interval = Signposts.canvas.beginInterval("Touches began")
+        defer { Signposts.canvas.endInterval("Touches began", interval) }
         // Shift and Option on a hardware keyboard constrain and duplicate.
         if let event { store.setKeyboardModifiers(event.modifierFlags) }
         if store.ui.palettePoint != nil { store.hidePalette() }
@@ -218,7 +240,10 @@ final class MetalCanvasView: UIView {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.store.session.isDrawing else { break }
                 // Touch timestamps count from system start, like systemUptime.
-                if self.store.session.checkQuickShape(time: ProcessInfo.processInfo.systemUptime) {
+                let snapped = Signposts.canvas.withIntervalSignpost("Quick shape check") {
+                    self.store.session.checkQuickShape(time: ProcessInfo.processInfo.systemUptime)
+                }
+                if snapped {
                     self.setNeedsRender()
                 }
             }
@@ -232,11 +257,19 @@ final class MetalCanvasView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let interval = Signposts.canvas.beginInterval("Touches moved")
+        let phase = self.phase
+        var sampleCount = 0
+        defer {
+            Signposts.canvas.endInterval("Touches moved", interval,
+                                         "\(phase, privacy: .public), \(sampleCount) samples")
+        }
         for touch in touches {
             guard let id = touchIDs[ObjectIdentifier(touch)] else { continue }
             let coalesced = event?.coalescedTouches(for: touch) ?? [touch]
             let samples: [UITouch] = coalesced.isEmpty ? [touch] : coalesced
             let predicted = event?.predictedTouches(for: touch) ?? []
+            sampleCount += samples.count
             var pressures: [Double] = []
             for sample in samples {
                 if let value = pressure(of: sample) { pressures.append(value) }
@@ -253,6 +286,10 @@ final class MetalCanvasView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Lifting the Pencil fits and commits a stroke, or ends an edit, then refreshes.
+        let interval = Signposts.canvas.beginInterval("Touches ended")
+        let phase = self.phase
+        defer { Signposts.canvas.endInterval("Touches ended", interval, "\(phase, privacy: .public)") }
         for touch in touches {
             guard let id = touchIDs.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             store.session.touchEnded(id: id, location: location(of: touch), time: touch.timestamp)

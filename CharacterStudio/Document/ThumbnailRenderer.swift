@@ -18,7 +18,7 @@ enum ThumbnailRenderer {
 
     static func png(for drawing: Drawing, size: Int = 512) -> Data? {
         if let last = lastThumbnail.withLock({ $0 }), last.size == size, last.drawing == drawing { return last.png }
-        let png = renderPNG(for: drawing, size: size)
+        let png = Signposts.canvas.withIntervalSignpost("Thumbnail") { renderPNG(for: drawing, size: size) }
         lastThumbnail.withLock { $0 = (drawing, size, png) }
         return png
     }
