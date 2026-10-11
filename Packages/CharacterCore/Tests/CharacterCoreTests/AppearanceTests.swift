@@ -795,6 +795,57 @@ extension ArtBatchTests {
     }
 }
 
+extension ArtBatchTests {
+    /// The clip is cleared over the clipped shapes' covers, not the whole view, unless a
+    /// live transform moves some of the shapes involved.
+    func testTheClipClearIsBoundedToTheClippedShapes() {
+        var first = VectorShape(id: 0, path: square(4, 4, 10), fill: blue)
+        first.isClipped = true
+        var second = VectorShape(id: 0, path: square(-5, 2, 8), stroke: StrokeStyle(color: blue, width: 2))
+        second.isClipped = true
+        let d = drawing([VectorShape(id: 0, path: square(0, 0, 10), fill: red), first, second,
+                         VectorShape(id: 0, path: square(40, 40, 10), fill: red)])
+        var builder = ArtBuilder()
+        let batch = builder.build(d, isolatedPart: nil, tolerance: 0.05)
+        let clears = batch.steps.compactMap { step -> Rect? in
+            guard case .stencil(let range, let state, _) = step, state == ArtStencil.clearClip else { return nil }
+            let v = range.map { Vec2(Double(batch.vertices[$0 * 2]), Double(batch.vertices[$0 * 2 + 1])) }
+            return Rect(points: v)
+        }
+        XCTAssertFalse(batch.steps.contains { if case .stencilView = $0 { true } else { false } })
+        XCTAssertEqual(clears.count, 1)
+        let clear = try! XCTUnwrap(clears.first)
+        // The fill of the first and the outline of the second, which reaches past its path.
+        XCTAssertEqual(clear.minPoint.x, -6, accuracy: 0.01)
+        XCTAssertEqual(clear.minPoint.y, 1, accuracy: 0.01)
+        XCTAssertEqual(clear.maxPoint.x, 14, accuracy: 0.01)
+        XCTAssertEqual(clear.maxPoint.y, 14, accuracy: 0.01)
+
+        // Moving the clipped shape but not its base: the clear covers the view again.
+        var live = ArtBuilder()
+        let moving = live.build(d, isolatedPart: nil, tolerance: 0.05, moving: [d.parts[0].shapes[1].id])
+        XCTAssertTrue(moving.steps.contains { if case .stencilView = $0 { true } else { false } })
+    }
+
+    /// A clip base whose clipped shapes are all hidden still draws, and clears nothing.
+    func testABaseWithNothingClippedShownClearsNothing() {
+        var hidden = VectorShape(id: 0, path: square(4, 4, 10), fill: blue)
+        hidden.isClipped = true
+        hidden.isHidden = true
+        let d = drawing([VectorShape(id: 0, path: square(0, 0, 10), fill: red), hidden])
+        var builder = ArtBuilder()
+        let batch = builder.build(d, isolatedPart: nil, tolerance: 0.05)
+        XCTAssertFalse(batch.steps.contains {
+            switch $0 {
+            case .stencilView: true
+            case .stencil(_, let state, _): state == ArtStencil.clearClip
+            default: false
+            }
+        })
+        XCTAssertTrue(StencilSimulator.run(batch, at: Vec2(5, 5)).isColor(red))
+    }
+}
+
 /// Clipped groups (a whole group drawn inside the shape below it) and accessory shapes
 /// drawn behind their owner.
 final class GroupClipAndBehindTests: XCTestCase {
@@ -887,6 +938,20 @@ final class GroupClipAndBehindTests: XCTestCase {
         let part = d.parts[0]
         XCTAssertEqual(d.hitTest(Vec2(6, 6), tolerance: 0)?.shape, part.shapes[1].id)
         XCTAssertNil(d.hitTest(Vec2(12, 12), tolerance: 0))
+    }
+
+    /// The bounded clip clear before a group's base covers the whole group, so a clip
+    /// left over from an earlier part doesn't show through the group mask.
+    func testAClippedGroupIgnoresAClipLeftByAnEarlierPart() {
+        var d = clippedGroup()
+        var big = VectorShape(id: d.makeID(), path: square(0, 0, 40), fill: red)
+        big.stroke = nil
+        var cover = VectorShape(id: d.makeID(), path: square(0, 0, 40), fill: yellow)
+        cover.isClipped = true
+        d.parts.insert(Part(id: d.makeID(), name: "Back", shapes: [big, cover]), at: 0)
+        XCTAssertTrue(render(d, at: Vec2(12, 12)).isColor(yellow))
+        XCTAssertTrue(render(d, at: Vec2(6, 6)).isColor(blue))
+        XCTAssertTrue(render(d, at: Vec2(8, 8)).isColor(green))
     }
 
     func testAnIsolatedClippedGroupDrawsWhole() {

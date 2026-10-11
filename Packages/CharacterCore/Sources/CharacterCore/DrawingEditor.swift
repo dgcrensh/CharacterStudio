@@ -402,7 +402,7 @@ public struct DrawingEditor: Sendable {
             let reach = (tool == .eraser ? EditorMetrics.eraserRadius : EditorMetrics.shapeHit) / hoverZoom
             return drawing.hitTest(p, tolerance: reach, within: isolatedPart, group: isolatedGroup).map { ShapeRef(part: $0.part, shape: $0.shape) }
         case .scissors:
-            return cutTarget(at: p, zoom: hoverZoom)?.ref
+            return hoverCut?.ref
         case .pencil, .pen, .shape, .bone:
             return nil
         }
@@ -415,10 +415,14 @@ public struct DrawingEditor: Sendable {
     }
 
     /// Where the scissors would cut if the Pencil touched down at the hover point.
-    public var scissorsPreview: Vec2? {
+    public var scissorsPreview: Vec2? { hoverCut?.point }
+
+    /// The outline the scissors would cut at the hover point, and where, from one search
+    /// (the overlay needs both).
+    public var hoverCut: (ref: ShapeRef, point: Vec2)? {
         guard tool == .scissors, gesture == nil, let p = hoverPoint, let cut = cutTarget(at: p, zoom: hoverZoom),
               let path = drawing.shape(cut.ref)?.path else { return nil }
-        return path.segment(cut.segment).point(at: cut.t)
+        return (cut.ref, path.segment(cut.segment).point(at: cut.t))
     }
 
     /// The outline nearest `p` that the scissors can cut, within reach.

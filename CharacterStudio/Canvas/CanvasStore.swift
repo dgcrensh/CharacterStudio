@@ -148,9 +148,11 @@ final class CanvasStore {
     private var referenceData: [Int: Data]
     /// Decoded pixels, filled on first use.
     private var decodedImages: [Int: CGImage] = [:]
-    /// The drawing revision and contents last handed to the document.
-    private var documentRevision: Int
+    /// When to hand changes to the document, and the contents last handed to it.
+    private var handOff: DocumentHandOff
     private var document: CharacterPackage
+    /// Hands a held change (a color picker drag) to the document once it goes quiet.
+    private var handOffTimer: Task<Void, Never>?
     /// Versions recently handed to the document, newest last. One of them coming back
     /// is the system undoing the document behind the editor (its three-finger swipe or
     /// shake), not an edit made elsewhere.
@@ -171,7 +173,7 @@ final class CanvasStore {
         session.editor.pressureWidth = UserDefaults.standard.bool(forKey: Self.pressureWidthKey)
         referenceData = package.referenceImages
         document = package
-        documentRevision = session.editor.revision
+        handOff = DocumentHandOff(revision: session.editor.revision)
         sentDocuments = [package]
         refresh()
     }
@@ -186,12 +188,36 @@ final class CanvasStore {
 
     // MARK: Document
 
-    /// Hands the drawing to the document once a change has finished.
-    private func updateDocument() {
+    /// Hands the drawing to the document once a change has finished. A `continuous`
+    /// change (a color picker or slider tick) is held until the run goes quiet, since
+    /// every hand-off leads to an autosave that encodes the drawing and renders its
+    /// thumbnail (see `DocumentHandOff`).
+    private func updateDocument(continuous: Bool = false) {
         let editor = session.editor
-        guard editor.revision != documentRevision, !editor.isInGesture else { return }
-        documentRevision = editor.revision
-        let drawing = editor.drawing
+        guard !editor.isInGesture else { return }
+        if handOff.changed(revision: editor.revision, continuous: continuous, now: CACurrentMediaTime()) {
+            handOffTimer?.cancel()
+            sendDocument()
+        } else if let due = handOff.due {
+            handOffTimer?.cancel()
+            handOffTimer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(max(due - CACurrentMediaTime(), 0) + 0.01))
+                guard !Task.isCancelled else { return }
+                self?.flushDocument(now: CACurrentMediaTime())
+            }
+        }
+    }
+
+    /// Hands a held change to the document: when it is due at `now`, or at once with no
+    /// time, as the document closes or the app goes to the background.
+    func flushDocument(now: Double? = nil) {
+        guard !session.editor.isInGesture, handOff.flush(revision: session.editor.revision, now: now) else { return }
+        handOffTimer?.cancel()
+        sendDocument()
+    }
+
+    private func sendDocument() {
+        let drawing = session.editor.drawing
         let images = referenceData.filter { id, _ in drawing.referenceIndex(id) != nil }
         document = CharacterPackage(drawing: drawing, referenceImages: images)
         sentDocuments.append(document)
@@ -355,7 +381,7 @@ final class CanvasStore {
         update(\.palette, editor.drawing.palette)
         update(\.globalColors, editor.drawing.globalColors)
         if refreshedRevision != nil { refreshedRevision = editor.revision }
-        updateDocument()
+        updateDocument(continuous: true)
         onChange?()
     }
 
@@ -735,7 +761,7 @@ final class CanvasStore {
         referenceData[id] = encoded
         decodedImages[id] = cgImage
         // The reference was added before its pixels were stored, so save again.
-        documentRevision = -1
+        handOff = DocumentHandOff(revision: -1)
         refresh()
     }
 
