@@ -1,6 +1,7 @@
 import Foundation
 
-/// Writes a character's art as an SVG 1.1 document, one group per part, back to front.
+/// Writes a character's art as an SVG 1.1 document, one group per part, back to front,
+/// with a named group inside it for each group of shapes.
 ///
 /// Everything the canvas draws comes across: fills and gradients (in user space, so
 /// they keep their place), outlines with their caps, joins, miter limit and dashes,
@@ -118,22 +119,37 @@ public enum SVGWriter {
             var open = "<g id=\"\(SVGWriter.escaped(id))\""
             if id != name { open += " data-name=\"\(SVGWriter.escaped(name))\"" }
             body.append("  " + open + ">")
+            // Shape groups nest as named groups. A clip runs in its own masked group, which
+            // is closed and opened again where a shape group starts or ends.
+            var openGroup: Int?
             var clipGroup: (base: Int, mask: String)?
+            var masks: [Int: String] = [:]
             for index in part.shapes.indices where part.isShown(index) {
                 let base = part.clipBase(of: index)
                 if let base, !part.isShown(base) { continue }
+                let group = part.shapes[index].group.flatMap { part.group($0) }
+                if group?.id != openGroup {
+                    if clipGroup != nil { body.append((openGroup == nil ? "    " : "      ") + "</g>") }
+                    clipGroup = nil
+                    if openGroup != nil { body.append("    </g>") }
+                    openGroup = group?.id
+                    if let group { body.append("    <g data-name=\"\(SVGWriter.escaped(group.name))\">") }
+                }
+                let indent = openGroup == nil ? "    " : "      "
                 if clipGroup?.base != base {
-                    if clipGroup != nil { body.append("    </g>") }
+                    if clipGroup != nil { body.append(indent + "</g>") }
                     clipGroup = nil
                     if let base {
-                        let mask = clipMask(part.shapes[base])
+                        let mask = masks[base] ?? clipMask(part.shapes[base])
+                        masks[base] = mask
                         clipGroup = (base, mask)
-                        body.append("    <g mask=\"url(#\(mask))\">")
+                        body.append(indent + "<g mask=\"url(#\(mask))\">")
                     }
                 }
-                shape(part.shapes[index], indent: clipGroup == nil ? "    " : "      ")
+                shape(part.shapes[index], indent: clipGroup == nil ? indent : indent + "  ")
             }
-            if clipGroup != nil { body.append("    </g>") }
+            if clipGroup != nil { body.append((openGroup == nil ? "    " : "      ") + "</g>") }
+            if openGroup != nil { body.append("    </g>") }
             body.append("  </g>")
         }
 

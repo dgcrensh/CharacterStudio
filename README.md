@@ -194,3 +194,24 @@ Tier 5 of the full-editor plan: the outline view and ghosting (#23), the charact
 - **Outline view and ghosting** are editor state, not saved. In outline view the renderer skips the art pass and `EditorOverlay` draws the wires. Ghosting passes `DrawingEditor.ghostFocus` to `ArtBuilder`, which multiplies the paint opacity of shapes outside it.
 - **SVG import** lives in CharacterCore: `XMLReader` (a small XML parser, since Linux Foundation's is limited), `SVGPathParser` (every path command, with arcs and quadratics turned into cubic Béziers) and `SVGImporter` (styles, transforms, `<use>`, gradients). Compound fills become one fill shape whose rings are joined by hairline bridges, plus an outline-only shape per ring.
 - **SVG export** is `SVGWriter` in CharacterCore. The app's PNG export draws with Core Graphics, like the thumbnail.
+
+## Groups notes
+
+Phase 1 of the layers plan: groups of shapes inside a part. The file format stays 0.2 with two new optional keys, `groups` on an attachment and `group` on a shape.
+
+**Using it**
+
+- **Group** (Edit menu, Cmd-G): two or more selected shapes of one part become a group, named Group 1, Group 2 and so on. They move to sit together just below the topmost of them, keeping their order. Shapes from different parts can't be grouped; move them into one part first. Groups don't nest: grouping shapes that are in a group takes them out of it. **Ungroup** (Shift-Cmd-G) dissolves the groups of the selected shapes, leaving them where they are. **Add to Group** moves the selected shapes into another group of their part, on top of its shapes.
+- **Selecting with Select:** the first tap on a shape still selects its part. The next tap inside that part selects the shape's whole group (one frame round it), or the shape when it has no group. Add mode and marquees take whole groups too. Direct Select still reaches single shapes and anchors inside groups.
+- **Going in and out:** double-tap a grouped shape to edit inside its group: only the group's shapes can be tapped (one at a time), the rest is dimmed, and new strokes, pen paths, shapes and pastes join the group. Double-tapping an ungrouped shape isolates its part as before. **Escape**, the context bar's Exit button, or a double tap on empty canvas goes one level out: from a group to its part (with the group selected), from a part to the whole character, and with nothing isolated Escape clears the selection.
+- **Renaming:** with a group selected, the Select tool's context bar shows its name; edit it and press Return.
+- **Arrange** moves a group as one unit among its part's shapes. Shapes picked inside a group (with Direct Select, or while editing inside it) move among the group's shapes only.
+- **Duplicate, Duplicate Mirrored, copy and paste** copy a whole group as a new group (mirrored copies swap `.L` and `.R` in its name); copying part of a group keeps the copies in it. Moving shapes to another part takes a group along when all of it moves.
+- **Clipping inside a group:** a clipped shape in a group clips to the nearest unclipped shape below it within the group, never to something outside it. A clipped shape at the bottom of its group draws unclipped.
+- **SVG:** export writes each group as a named `<g>` inside its part's group. Import reads a named group inside a part's group as a group of shapes.
+
+**How it works**
+
+- **Model** (CharacterCore): `ShapeGroup` (id and name) lives in `Part.groups`, and `VectorShape.group` points a shape at one. A group's shapes are always together in the part's stack. `Drawing.groupsAreValid` checks that, and `Drawing.repairGroups` restores it (dropping empty groups, splitting a group whose shapes got separated into one group per run), which `DrawingEditor.commit` runs after any edit that broke it and the decoder runs on open. Commands are in `DrawingEditor+Layers`, tests in `GroupTests`.
+- **Isolation** is now two levels: `isolatedPart` and `isolatedGroup`. Inside a group, `ArtBuilder` draws the rest of the part under the veil and only the group on top.
+- **Format:** `groups` on an attachment lists `{ "id", "name" }`, with ids numbered from 1 within the attachment, and a shape's `group` names one. Both are written only when a part has groups, so files without groups are unchanged. The example robot's body and its shadow are now a group. See [Schema/README.md](Schema/README.md#groups).

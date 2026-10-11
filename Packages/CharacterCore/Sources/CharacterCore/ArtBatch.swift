@@ -135,8 +135,10 @@ public struct ArtBuilder: Sendable {
 
     public init() {}
 
-    /// With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
-    public mutating func build(_ drawing: Drawing, isolatedPart: Int?, tolerance: Double,
+    /// The isolated part draws on top of a veil over everything else; with an
+    /// `isolatedGroup` in it, only that group does, and the rest of the part stays under
+    /// the veil. With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
+    public mutating func build(_ drawing: Drawing, isolatedPart: Int?, isolatedGroup: Int? = nil, tolerance: Double,
                                ghostFocus: Set<Int>? = nil) -> ArtBatch {
         var batch = ArtBatch()
         var live: Set<Int> = []
@@ -145,25 +147,44 @@ public struct ArtBuilder: Sendable {
             parts = parts.filter { $0.id != isolatedPart } + parts.filter { $0.id == isolatedPart }
         }
         for part in parts {
-            if part.id == isolatedPart { batch.steps.append(.veil) }
-            for (index, shape) in part.shapes.enumerated() {
-                live.insert(shape.id)
-                guard part.isShown(index) else { continue }
-                let role: ClipRole
-                if let base = part.clipBase(of: index) {
-                    // Nothing to clip to when the base is hidden.
-                    guard part.isShown(base) else { continue }
-                    role = .clipped
-                } else {
-                    role = part.isClipBase(index) ? .base : .none
-                }
-                let geometry = tessellation(of: shape, tolerance: tolerance)
-                let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1
-                append(shape, geometry, role: role, fade: fade, to: &batch)
+            for shape in part.shapes { live.insert(shape.id) }
+            let all = Array(part.shapes.indices)
+            if part.id == isolatedPart, let group = isolatedGroup, part.group(group) != nil {
+                let inGroup = all.filter { part.shapes[$0].group == group }
+                appendShapes(all.filter { part.shapes[$0].group != group }, of: part, skippingBases: Set(inGroup),
+                             tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
+                batch.steps.append(.veil)
+                appendShapes(inGroup, of: part, skippingBases: [], tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
+            } else {
+                if part.id == isolatedPart { batch.steps.append(.veil) }
+                appendShapes(all, of: part, skippingBases: [], tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
             }
         }
         cache = cache.filter { live.contains($0.key) }
         return batch
+    }
+
+    /// Adds the shapes at `indices` of `part`, leaving out clipped shapes whose base is
+    /// in `skippingBases` (drawn in another pass, so there is nothing to clip to here).
+    private mutating func appendShapes(_ indices: [Int], of part: Part, skippingBases: Set<Int>, tolerance: Double,
+                                       ghostFocus: Set<Int>?, to batch: inout ArtBatch) {
+        let drawn = Set(indices)
+        for index in indices {
+            let shape = part.shapes[index]
+            guard part.isShown(index) else { continue }
+            let role: ClipRole
+            if let base = part.clipBase(of: index) {
+                // Nothing to clip to when the base is hidden.
+                guard part.isShown(base), !skippingBases.contains(base) else { continue }
+                role = .clipped
+            } else {
+                // A base whose clipped shapes draw in another pass needn't mark the clip.
+                role = part.isClipBase(index) && drawn.contains(index + 1) ? .base : .none
+            }
+            let geometry = tessellation(of: shape, tolerance: tolerance)
+            let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1
+            append(shape, geometry, role: role, fade: fade, to: &batch)
+        }
     }
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {

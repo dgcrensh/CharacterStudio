@@ -33,7 +33,8 @@ public enum SVGImportError: Error, Hashable, Sendable, CustomStringConvertible, 
 ///
 /// Each top-level group becomes a part named after its `data-name` (Illustrator),
 /// `inkscape:label` (Inkscape) or `id`; shapes outside any group share a part named
-/// after the file. A document wrapped in a single group is unwrapped first. Paths,
+/// after the file. A named group inside a part's group becomes a group of shapes in
+/// that part (deeper groups are flattened into it). A document wrapped in a single group is unwrapped first. Paths,
 /// rectangles, circles, ellipses, lines, polylines, polygons and `<use>` copies come in,
 /// with transforms, presentation attributes, `style` attributes and simple `<style>`
 /// rules (by tag, class and id). Fills, gradients (linear and radial), outlines (width,
@@ -402,7 +403,7 @@ public enum SVGImporter {
             }
 
             // Groups become parts; runs of shapes between them share a part.
-            var groups: [(name: String, shapes: [VectorShape])] = []
+            var groups: [(name: String, shapes: [VectorShape], groups: [ShapeGroup])] = []
             var loose: [VectorShape] = []
             for element in top where !SVGImporter.definitionElements.contains(element.name) {
                 guard SVGImporter.groupElements.contains(element.name) else {
@@ -410,21 +411,54 @@ public enum SVGImporter {
                     continue
                 }
                 var shapes: [VectorShape] = []
-                draw(element, style: topStyle, transform: topTransform, depth: 0, into: &shapes)
+                var shapeGroups: [ShapeGroup] = []
+                drawPart(element, style: topStyle, transform: topTransform, into: &shapes, groups: &shapeGroups)
                 guard !shapes.isEmpty else { continue }
-                if !loose.isEmpty { groups.append((fileName, loose)) }
+                if !loose.isEmpty { groups.append((fileName, loose, [])) }
                 loose = []
-                groups.append((SVGImporter.partName(element) ?? fileName, shapes))
+                groups.append((SVGImporter.partName(element) ?? fileName, shapes, shapeGroups))
             }
-            if !loose.isEmpty { groups.append((fileName, loose)) }
+            if !loose.isEmpty { groups.append((fileName, loose, [])) }
             var parts: [Part] = []
-            for group in groups { parts.append(makePart(name: group.name, shapes: group.shapes)) }
+            for group in groups {
+                var part = makePart(name: group.name, shapes: group.shapes)
+                part.groups = group.groups
+                parts.append(part)
+            }
             return parts
         }
 
         private mutating func makePart(name: String, shapes: [VectorShape]) -> Part {
             let bounds = shapes.reduce(Rect.null) { $0.union($1.path.bounds()) }
             return Part(id: makeID(), name: name, shapes: shapes, pivot: bounds.isNull ? .zero : bounds.center)
+        }
+
+        /// Draws a part's group: each named group inside it becomes a group of shapes
+        /// (with anything deeper flattened into it); the rest draws as usual.
+        private mutating func drawPart(_ element: MarkupElement, style parent: Style, transform: Affine2D,
+                                       into shapes: inout [VectorShape], groups: inout [ShapeGroup]) {
+            let containers: Set<String> = ["g", "a", "switch"]
+            guard containers.contains(element.name), element.attributes["clip-path"] == nil,
+                  element.attributes["mask"] == nil, let style = self.style(of: element, parent: parent) else {
+                draw(element, style: parent, transform: transform, depth: 0, into: &shapes)
+                return
+            }
+            let t = transform * SVGImporter.transform(element.attributes["transform"] ?? "")
+            for child in element.children {
+                guard containers.contains(child.name), let name = SVGImporter.partName(child) else {
+                    draw(child, style: style, transform: t, depth: 1, into: &shapes)
+                    continue
+                }
+                var inner: [VectorShape] = []
+                draw(child, style: style, transform: t, depth: 1, into: &inner)
+                guard !inner.isEmpty else { continue }
+                let group = ShapeGroup(id: makeID(), name: name)
+                groups.append(group)
+                for var shape in inner {
+                    shape.group = group.id
+                    shapes.append(shape)
+                }
+            }
         }
 
         /// Adds the shapes `element` draws, in document order.
@@ -820,6 +854,8 @@ extension DrawingEditor {
                 copy.shapes.append(fresh)
                 refs.insert(ShapeRef(part: copy.id, shape: fresh.id))
             }
+            copy.groups = part.groups
+            drawing.renewGroups(of: &copy)
             drawing.parts.append(copy)
             added.append(copy.id)
         }

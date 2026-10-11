@@ -123,6 +123,10 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertEqual(torso.path.points[2].outHandle, Vec2(-8, 14))
         XCTAssertTrue(d.parts[0].shapes[1].isClipped)
         XCTAssertEqual(d.parts[0].clipBase(of: 1), 0)
+        // The body and its shadow are a group.
+        XCTAssertEqual(d.parts[0].groups.map(\.name), ["Shell"])
+        XCTAssertEqual(d.parts[0].members(ofGroup: d.parts[0].groups[0].id), [0, 1])
+        XCTAssertTrue(d.parts[1].groups.isEmpty)
         XCTAssertNil(d.parts[0].shapes[2].stroke)
         XCTAssertEqual(d.parts[0].shapes[2].opacity, 0.8)
         let seam = d.parts[0].shapes[3].stroke
@@ -151,7 +155,7 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertEqual(package.referenceImages[d.references[0].id]?.count, try exampleFiles("robo.charstudio")["references/reference-1.png"]?.count)
         // Every id is distinct.
         let ids = d.parts.map(\.id) + d.parts.flatMap { $0.shapes.map(\.id) } + d.references.map(\.id) +
-            d.globalColors.map(\.id) + d.bones.map(\.id)
+            d.globalColors.map(\.id) + d.bones.map(\.id) + d.parts.flatMap { $0.groups.map(\.id) }
         XCTAssertEqual(Set(ids).count, ids.count)
         XCTAssertGreaterThan(d.nextID, ids.max()!)
     }

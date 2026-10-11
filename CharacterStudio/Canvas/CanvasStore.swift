@@ -58,9 +58,18 @@ final class EditorUIState {
     var shapeOptions = ShapeToolOptions()
     /// The on-screen modifier strip's latched keys.
     var stripModifiers: EditorModifiers = []
-    /// The isolated part's id and name, while isolating.
+    /// The isolated part's id, and the name of what isolation steps out of (the isolated
+    /// group's name when editing inside a group, else the part's), while isolating.
     var isolatedPart: Int?
     var isolatedPartName = ""
+    var canGroup = false
+    var canUngroup = false
+    /// The group the selection is, when it is one whole group.
+    var selectedGroupID: Int?
+    var selectedGroupPart: Int?
+    var selectedGroupName = ""
+    /// The other groups of the selected shapes' part, for Add to Group.
+    var groupsToAddTo: [ShapeGroup] = []
     var canArrange = false
     var canHideOrLock = false
     var canMoveShapes = false
@@ -231,8 +240,16 @@ final class CanvasStore {
         update(\.shapeKind, editor.shapeKind)
         update(\.shapeOptions, editor.shapeOptions)
         update(\.isolatedPart, editor.isolatedPart)
-        let isolatedName = editor.isolatedPart.flatMap { id in editor.drawing.parts.first { $0.id == id }?.name } ?? ""
+        let isolatedName = editor.isolatedGroupInfo?.name ??
+            editor.isolatedPart.flatMap { id in editor.drawing.parts.first { $0.id == id }?.name } ?? ""
         update(\.isolatedPartName, isolatedName)
+        update(\.canGroup, editor.canGroupSelection)
+        update(\.canUngroup, editor.canUngroupSelection)
+        let group = editor.selectedGroup
+        update(\.selectedGroupID, group?.group.id)
+        update(\.selectedGroupPart, group?.part)
+        update(\.selectedGroupName, group?.group.name ?? "")
+        update(\.groupsToAddTo, editor.groupsToAddSelectionTo)
         update(\.canArrange, editor.canArrange)
         update(\.canHideOrLock, editor.canHideOrLockSelection)
         update(\.canMoveShapes, editor.canMoveSelectedShapes)
@@ -360,6 +377,14 @@ final class CanvasStore {
     func setPartLocked(_ id: Int, _ locked: Bool) { edit { $0.editor.setPartLocked(id, locked) } }
     func isolate(part id: Int) { edit { $0.editor.isolate(part: id) } }
     func exitIsolation() { edit { $0.editor.exitIsolation() } }
+    /// One level out: from a group to its part, from a part to the character, else deselect.
+    func stepOutOfIsolation() { edit { $0.editor.stepOutOfIsolation() } }
+    func groupSelection() { edit { $0.editor.groupSelection() } }
+    func ungroupSelection() { edit { $0.editor.ungroupSelection() } }
+    func renameGroup(_ id: Int, inPart part: Int, to name: String) {
+        edit { $0.editor.renameGroup(id, inPart: part, to: name) }
+    }
+    func addSelection(toGroup id: Int) { edit { $0.editor.addSelection(toGroup: id) } }
     func mergePartDown(_ id: Int) { edit { $0.editor.mergePartDown(id) } }
     func moveSelectionToNewPart() { edit { $0.editor.moveSelectionToNewPart() } }
     func moveSelection(toPart id: Int) { edit { $0.editor.moveSelection(toPart: id) } }

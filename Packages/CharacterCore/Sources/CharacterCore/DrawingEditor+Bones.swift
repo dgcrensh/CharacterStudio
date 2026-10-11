@@ -357,10 +357,40 @@ extension DrawingEditor {
             selection = .part(copy)
         } else {
             var copies: Set<ShapeRef> = []
-            for (p, s) in drawing.shapeIndices(in: selection).reversed() {
-                let copy = mirrorImage(of: drawing.parts[p].shapes[s])
-                drawing.parts[p].shapes.insert(copy, at: s + 1)
-                copies.insert(ShapeRef(part: drawing.parts[p].id, shape: copy.id))
+            for p in Set(drawing.shapeIndices(in: selection).map(\.0)) {
+                let part = drawing.parts[p]
+                let selected = Set(drawing.shapeIndices(in: selection).filter { $0.0 == p }.map(\.1))
+                // A wholly selected group is copied as a new group just above it, named for
+                // the other side; other copies go just above their originals.
+                let whole = part.groups.filter { group in
+                    let members = part.members(ofGroup: group.id)
+                    return !members.isEmpty && Set(members).isSubset(of: selected)
+                }
+                var fresh: [Int: Int] = [:]
+                for group in whole {
+                    let id = drawing.makeID()
+                    fresh[group.id] = id
+                    drawing.parts[p].groups.append(ShapeGroup(id: id, name: SideName.flipped(group.name) ?? group.name))
+                }
+                var shapes: [VectorShape] = []
+                var pending: [VectorShape] = []
+                for (s, shape) in part.shapes.enumerated() {
+                    shapes.append(shape)
+                    guard selected.contains(s) else { continue }
+                    var copy = mirrorImage(of: shape)
+                    copies.insert(ShapeRef(part: part.id, shape: copy.id))
+                    guard let g = shape.group, let id = fresh[g] else {
+                        shapes.append(copy)
+                        continue
+                    }
+                    copy.group = id
+                    pending.append(copy)
+                    if s + 1 == part.shapes.count || part.shapes[s + 1].group != g {
+                        shapes += pending
+                        pending = []
+                    }
+                }
+                drawing.parts[p].shapes = shapes
             }
             let saved = style
             selection = .covering(copies)
@@ -383,6 +413,10 @@ extension DrawingEditor {
         for s in copy.shapes.indices {
             copy.shapes[s].id = drawing.makeID()
             copy.shapes[s].apply(symmetry.transform)
+        }
+        drawing.renewGroups(of: &copy)
+        for g in copy.groups.indices {
+            copy.groups[g].name = SideName.flipped(copy.groups[g].name) ?? copy.groups[g].name
         }
         copy.pivot = symmetry.mirror(copy.pivot)
         drawing.parts.insert(copy, at: i + 1)

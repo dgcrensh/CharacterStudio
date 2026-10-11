@@ -239,6 +239,18 @@ private struct EditMenu: View {
                 Button("Send to Back", systemImage: "square.3.layers.3d.bottom.filled") { store.arrange(.sendToBack) }
             }
             .disabled(!ui.canArrange)
+            Button("Group", systemImage: "square.on.square.squareshape.controlhandles") { store.groupSelection() }
+                .disabled(!ui.canGroup)
+            if ui.canUngroup {
+                Button("Ungroup", systemImage: "square.on.square.dashed") { store.ungroupSelection() }
+            }
+            if !ui.groupsToAddTo.isEmpty {
+                Menu("Add to Group", systemImage: "plus.rectangle.on.rectangle") {
+                    ForEach(ui.groupsToAddTo) { group in
+                        Button(group.name) { store.addSelection(toGroup: group.id) }
+                    }
+                }
+            }
             if ui.canMoveShapes {
                 Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
                 Menu("Move to Part", systemImage: "arrow.right.square") {
@@ -333,7 +345,7 @@ private struct ContextBar: View {
     private var controls: some View {
         HStack(spacing: 14) {
             if ui.isolatedPart != nil {
-                Button { store.exitIsolation() } label: {
+                Button { store.stepOutOfIsolation() } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "scope")
                         Text("Exit \(ui.isolatedPartName)").lineLimit(1)
@@ -376,6 +388,15 @@ private struct ContextBar: View {
             if [Tool.pen, .shape, .select, .directSelect, .bone].contains(ui.tool) { snapMenu }
             if [Tool.pencil, .pen, .shape, .bone].contains(ui.tool) { symmetryMenu }
             if ui.tool == .select, ui.selectedPart != nil { partJointControls }
+            if ui.tool == .select, let group = ui.selectedGroupID, let part = ui.selectedGroupPart {
+                Divider().frame(height: 24)
+                Label("Group", systemImage: "square.on.square.squareshape.controlhandles")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.secondary)
+                NameField(placeholder: "Group name", name: ui.selectedGroupName) {
+                    store.renameGroup(group, inPart: part, to: $0)
+                }
+            }
 
             if ui.tool == .directSelect, ui.anchorCount > 0 { pointControls }
             if ui.canJoin, ui.tool == .select || ui.tool == .directSelect {
@@ -581,10 +602,21 @@ private struct ContextBar: View {
 private struct BoneNameField: View {
     let name: String
     let rename: (String) -> Void
+
+    var body: some View {
+        NameField(placeholder: "Bone name", name: name, rename: rename)
+    }
+}
+
+/// A name that is renamed when the field is submitted.
+private struct NameField: View {
+    let placeholder: String
+    let name: String
+    let rename: (String) -> Void
     @State private var text = ""
 
     var body: some View {
-        TextField("Bone name", text: $text)
+        TextField(placeholder, text: $text)
             .textFieldStyle(.roundedBorder)
             .frame(width: 130)
             .autocorrectionDisabled()

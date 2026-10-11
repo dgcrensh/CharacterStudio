@@ -137,6 +137,18 @@
         "pivot": { "description": "The part's own pivot, independent of the bone origin.", "$ref": "#/$defs/vec2" },
         "hidden": { "description": "Editor hint: the part is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
         "locked": { "description": "Editor hint: the part can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
+        "groups": {
+          "description": "Groups of this attachment's shapes, bottom to top. Written only when there are some. Groups don't nest and don't change how shapes draw, except that clipping stays within a group.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "description": "Local to the attachment.", "type": "integer" },
+              "name": { "type": "string" }
+            }
+          }
+        },
         "shapes": {
           "description": "Back to front.",
           "type": "array",
@@ -149,6 +161,7 @@
       "required": ["closed", "points"],
       "properties": {
         "closed": { "type": "boolean" },
+        "group": { "description": "The id of the attachment's group this shape belongs to. A group's shapes are next to each other in shapes.", "type": "integer" },
         "fill": { "description": "Solid fill, closed paths only (non-zero winding). Absent means no fill. With a gradient, the color to show where gradients are not supported.", "$ref": "#/$defs/color" },
         "fillGlobal": { "description": "Format 0.2: the name of the global color (in palette) the fill follows. fill holds its current value.", "type": "string" },
         "gradient": { "description": "Format 0.2: draws the fill as a gradient. Only with a fill.", "$ref": "#/$defs/gradient" },
@@ -169,7 +182,7 @@
           }
         },
         "opacity": { "description": "Format 0.2: multiplies the alpha of the fill and of the outline (each on its own). Defaults to 1.", "type": "number", "minimum": 0, "maximum": 1 },
-        "clipped": { "description": "Format 0.2: the shape draws only where the nearest unclipped shape below it in the same attachment draws (its fill and outline). Defaults to false.", "type": "boolean" },
+        "clipped": { "description": "Format 0.2: the shape draws only where the nearest unclipped shape below it in the same attachment (and the same group, when it has one) draws (its fill and outline). Defaults to false.", "type": "boolean" },
         "hidden": { "description": "Editor hint: the shape is hidden while editing. Defaults to false. Animation tools draw it as usual.", "type": "boolean" },
         "locked": { "description": "Editor hint: the shape can't be selected or changed while editing. Defaults to false.", "type": "boolean" },
         "points": {
