@@ -201,7 +201,12 @@ private struct JSONParser {
     }
 
     private mutating func skipWhitespace() {
-        while i < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[i]) { i += 1 }
+        while i < bytes.count {
+            switch bytes[i] {
+            case 0x20, 0x09, 0x0A, 0x0D: i += 1
+            default: return
+            }
+        }
     }
 
     private mutating func expect(_ literal: String, _ value: JSONValue) throws -> JSONValue {
@@ -275,6 +280,19 @@ private struct JSONParser {
 
     private mutating func parseString() throws -> String {
         i += 1
+        // Most strings (every key) have no escapes: read them straight from the bytes.
+        var end = i
+        while end < bytes.count, bytes[end] != UInt8(ascii: "\""), bytes[end] != UInt8(ascii: "\\"), bytes[end] >= 0x20 {
+            end += 1
+        }
+        if end < bytes.count, bytes[end] == UInt8(ascii: "\"") {
+            guard let s = String(validating: bytes[i..<end], as: UTF8.self) else {
+                i = end + 1
+                throw error("Invalid UTF-8 in string")
+            }
+            i = end + 1
+            return s
+        }
         var out: [UInt8] = []
         while true {
             guard i < bytes.count else { throw error("Unterminated string") }
@@ -330,41 +348,57 @@ private struct JSONParser {
         return v
     }
 
-    private mutating func parseNumber() throws -> Double {
-        let start = i
-        func isNumberByte(_ b: UInt8) -> Bool {
-            (0x30...0x39).contains(b) || b == UInt8(ascii: "-") || b == UInt8(ascii: "+") ||
-                b == UInt8(ascii: ".") || b == UInt8(ascii: "e") || b == UInt8(ascii: "E")
+    private static func isDigit(_ b: UInt8) -> Bool { b &- UInt8(ascii: "0") < 10 }
+
+    private static func isNumberByte(_ b: UInt8) -> Bool {
+        switch b {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "-"), UInt8(ascii: "+"), UInt8(ascii: "."),
+             UInt8(ascii: "e"), UInt8(ascii: "E"):
+            true
+        default:
+            false
         }
-        while i < bytes.count, isNumberByte(bytes[i]) { i += 1 }
-        guard i > start, let text = String(bytes: bytes[start..<i], encoding: .ascii),
-              Self.isValidNumber(text), let value = Double(text) else {
-            i = start
-            throw error("Invalid value")
-        }
-        return value
     }
 
-    /// JSON's number grammar: no leading `+`, no leading zeros, digits around the point.
-    private static func isValidNumber(_ s: String) -> Bool {
-        var chars = Substring(s)
-        if chars.hasPrefix("-") { chars = chars.dropFirst() }
-        let digits = chars.prefix { $0.isASCII && $0.isNumber }
-        guard !digits.isEmpty, digits == "0" || !digits.hasPrefix("0") else { return false }
-        chars = chars.dropFirst(digits.count)
-        if chars.hasPrefix(".") {
-            chars = chars.dropFirst()
-            let fraction = chars.prefix { $0.isASCII && $0.isNumber }
-            guard !fraction.isEmpty else { return false }
-            chars = chars.dropFirst(fraction.count)
+    /// A number. The token runs over every byte that can appear in a number and must match
+    /// JSON's grammar: an optional `-`, digits without a leading zero, an optional point
+    /// with digits, an optional exponent with digits (no leading `+`). Plain decimals are
+    /// read from the bytes (`FastDecimal`); exponents and long mantissas go through
+    /// `Double(text)`.
+    private mutating func parseNumber() throws -> Double {
+        let start = i
+        while i < bytes.count, Self.isNumberByte(bytes[i]) { i += 1 }
+        let end = i
+        func invalid() -> JSONParseError {
+            i = start
+            return error("Invalid value")
         }
-        if chars.hasPrefix("e") || chars.hasPrefix("E") {
-            chars = chars.dropFirst()
-            if chars.hasPrefix("+") || chars.hasPrefix("-") { chars = chars.dropFirst() }
-            let exponent = chars.prefix { $0.isASCII && $0.isNumber }
-            guard !exponent.isEmpty else { return false }
-            chars = chars.dropFirst(exponent.count)
+        var j = start
+        let negative = j < end && bytes[j] == UInt8(ascii: "-")
+        if negative { j += 1 }
+        let digitsStart = j
+        while j < end, Self.isDigit(bytes[j]) { j += 1 }
+        // At least one digit, and no leading zero.
+        guard j > digitsStart, bytes[digitsStart] != UInt8(ascii: "0") || j == digitsStart + 1 else { throw invalid() }
+        if j < end, bytes[j] == UInt8(ascii: ".") {
+            j += 1
+            let fraction = j
+            while j < end, Self.isDigit(bytes[j]) { j += 1 }
+            guard j > fraction else { throw invalid() }
         }
-        return chars.isEmpty
+        let decimalEnd = j
+        if j < end, bytes[j] == UInt8(ascii: "e") || bytes[j] == UInt8(ascii: "E") {
+            j += 1
+            if j < end, bytes[j] == UInt8(ascii: "+") || bytes[j] == UInt8(ascii: "-") { j += 1 }
+            let exponent = j
+            while j < end, Self.isDigit(bytes[j]) { j += 1 }
+            guard j > exponent else { throw invalid() }
+        }
+        guard j == end else { throw invalid() }
+        if decimalEnd == end, let value = FastDecimal.value(bytes, from: digitsStart, to: end, negative: negative) {
+            return value
+        }
+        guard let value = Double(String(decoding: bytes[start..<end], as: UTF8.self)) else { throw invalid() }
+        return value
     }
 }

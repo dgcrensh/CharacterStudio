@@ -332,7 +332,7 @@ public enum CharacterFormat {
     // MARK: Decoding
 
     public static func decode(_ json: JSONValue) throws -> DecodedCharacter {
-        let root = Node(value: try migrate(json), path: "")
+        let root = Node(root: try migrate(json))
         _ = try root.members()
         var drawing = Drawing()
         if let name = try root.field("name")?.string() { drawing.name = name }
@@ -646,16 +646,63 @@ extension JSONValue: ExpressibleByIntegerLiteral {
     public init(integerLiteral value: Int) { self = .number(Double(value)) }
 }
 
+/// One step from a node to a child: a member key or an array index.
+private enum PathStep {
+    case root
+    case key(String)
+    case index(Int)
+}
+
+/// A node's place in the document, shared by its children so that reading a value builds
+/// no strings: the path is only spelled out when an error needs it.
+private final class PathLink {
+    let parent: PathLink?
+    let step: PathStep
+
+    init(parent: PathLink?, step: PathStep) {
+        self.parent = parent
+        self.step = step
+    }
+
+    static func path(parent: PathLink?, step: PathStep) -> String {
+        let prefix = parent.map { path(parent: $0.parent, step: $0.step) } ?? ""
+        switch step {
+        case .root: return prefix
+        case .key(let key): return prefix.isEmpty ? key : prefix + "." + key
+        case .index(let index): return "\(prefix)[\(index)]"
+        }
+    }
+}
+
 /// A JSON value with its path, for error messages.
 private struct Node {
     let value: JSONValue
-    let path: String
+    /// The parent's place, and the step from it to this node.
+    private let parent: PathLink?
+    private let step: PathStep
+
+    init(root value: JSONValue) {
+        self.value = value
+        parent = nil
+        step = .root
+    }
+
+    private init(value: JSONValue, parent: PathLink, step: PathStep) {
+        self.value = value
+        self.parent = parent
+        self.step = step
+    }
+
+    /// The JSON path, such as `skins.default.Head.Head.shapes[2].points[0].p`; empty at the root.
+    var path: String { PathLink.path(parent: parent, step: step) }
+
+    private var link: PathLink { PathLink(parent: parent, step: step) }
 
     private func fail(_ problem: String) -> CharacterFileError {
         .invalid(path: path.isEmpty ? "(root)" : path, problem: problem)
     }
 
-    private func childPath(_ key: String) -> String { path.isEmpty ? key : path + "." + key }
+    private func childPath(_ key: String) -> String { PathLink.path(parent: link, step: .key(key)) }
 
     func members() throws -> [(key: String, value: JSONValue)] {
         guard case .object(let m) = value else { throw fail("is not an object") }
@@ -666,7 +713,7 @@ private struct Node {
     func field(_ key: String) throws -> Node? {
         let m = try members()
         guard let v = m.first(where: { $0.key == key })?.value, !v.isNull else { return nil }
-        return Node(value: v, path: childPath(key))
+        return Node(value: v, parent: link, step: .key(key))
     }
 
     func require(_ key: String) throws -> Node {
@@ -678,7 +725,8 @@ private struct Node {
 
     func array() throws -> [Node] {
         guard case .array(let items) = value else { throw fail("is not an array") }
-        return items.enumerated().map { Node(value: $0.element, path: "\(path)[\($0.offset)]") }
+        let link = link
+        return items.enumerated().map { Node(value: $0.element, parent: link, step: .index($0.offset)) }
     }
 
     func string() throws -> String {
