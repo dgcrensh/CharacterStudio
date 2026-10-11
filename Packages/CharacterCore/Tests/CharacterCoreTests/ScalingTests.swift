@@ -29,6 +29,44 @@ final class ScalingTests: XCTestCase {
         XCTAssertEqual(rows.count, Workload.all.count)
     }
 
+    /// What the art pass hands the GPU at each size: vertices, and the bytes the renderer
+    /// uploads after every rebuild (`CanvasRenderer.updateArt`), which no workload times.
+    func testArtUploadSize() {
+        var lines = ["Art batch per size", "", "| Shapes | Vertices | Upload | Steps |", "| ---: | ---: | ---: | ---: |"]
+        for parts in Self.partCounts {
+            let drawing = StressDrawing.make(parts: parts, shapesPerPart: Self.shapesPerPart)
+            var builder = ArtBuilder()
+            let batch = builder.build(drawing, isolatedPart: nil, tolerance: 0.5)
+            let bytes = batch.vertices.count * MemoryLayout<Float>.size
+            lines.append("| \(drawing.shapeCount) | \(batch.vertexCount) | \(String(format: "%.1f", Double(bytes) / 1_048_576)) MB | \(batch.steps.count) |")
+            XCTAssertGreaterThan(batch.vertexCount, 0)
+        }
+        print(lines.joined(separator: "\n"))
+    }
+
+    /// The no-vertices build that `artRebuildAfterOneEditWalkOnly` times does the same walk:
+    /// the same steps as a full build, kind for kind, with nothing written.
+    func testBuildWithoutVerticesWalksTheSameSteps() {
+        let drawing = StressDrawing.make(parts: 4, shapesPerPart: 15)
+        var full = ArtBuilder()
+        var walk = ArtBuilder()
+        walk.skipsVertices = true
+        let a = full.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        let b = walk.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        XCTAssertTrue(b.vertices.isEmpty)
+        XCTAssertEqual(a.steps.map(Self.kind), b.steps.map(Self.kind))
+    }
+
+    static func kind(_ step: ArtStep) -> String {
+        switch step {
+        case .stencil: "stencil"
+        case .cover: "cover"
+        case .stencilView: "stencilView"
+        case .veil: "veil"
+        case .moving(let on): "moving \(on)"
+        }
+    }
+
     /// The median time of `runs` calls of `operation`, in seconds.
     static func median(of operation: () -> Void, runs: Int) -> Double {
         operation()

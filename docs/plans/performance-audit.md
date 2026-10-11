@@ -654,6 +654,50 @@ What they say (on a Mac; an iPad will be slower, so read them against a 120 Hz f
 
 The plan for these is [performance-plan.md](performance-plan.md).
 
+#### The slow rows, split (plan step 0)
+
+Step 0 of the plan added workloads that split the two slow rows into their parts, plus rows for the
+outline-view wireframe and the scissors, and `testArtUploadSize`, which logs what the art pass hands
+the GPU. Same Mac, `-c release`, median of 9, on top of PR #23:
+
+| Workload | 300 shapes | 600 | 1,200 | 2,400 | 4,800 | Growth |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild after one edit | 0.965 | 1.88 | 3.80 | 7.58 | 15.5 | 1.00 |
+| Art rebuild after one edit, no vertices | 0.155 | 0.236 | 0.425 | 0.942 | 1.99 | 0.92 |
+| Outline view, overlay at a new zoom | 1.41 | 3.03 | 6.42 | 13.5 | 26.6 | 1.06 |
+| Scissors hover | 0.897 | 0.919 | 0.374 | 1.17 | 0.996 | 0.04 |
+| Open: parse and decode | 48.0 | 96.1 | 192.5 | 386.3 | 775.5 | 1.00 |
+| Open: parse only | 32.8 | 66.1 | 133.2 | 267.5 | 541.5 | 1.01 |
+| Open: decode only | 15.2 | 30.3 | 60.0 | 119.9 | 239.0 | 0.99 |
+
+| Shapes | Art vertices | Uploaded after every rebuild | Steps |
+| ---: | ---: | ---: | ---: |
+| 300 | 254,826 | 1.9 MB | 1,002 |
+| 600 | 505,380 | 3.9 MB | 2,003 |
+| 1,200 | 998,268 | 7.6 MB | 4,005 |
+| 2,400 | 1,992,051 | 15.2 MB | 8,010 |
+| 4,800 | 3,970,341 | 30.3 MB | 16,020 |
+
+What the split says:
+
+- **Art rebuild after one edit is the vertex appends.** The walk alone (cache lookups, shape
+  comparisons, clip plans, steps) is 0.94 ms of the 7.6 ms at 2,400 shapes; the other 88% is
+  converting cached `Vec2`s to floats and appending them. Step 2 starts with its first bullet, as
+  written. The walk is still linear, so it remains after step 2.1 only for the edited part.
+- **The upload is larger than expected.** Every rebuild copies the whole batch to the GPU: 15 MB at
+  2,400 shapes, 30 MB at 4,800, after every edit. That copy isn't timed here (it is app code), but
+  at that size it is likely to show in the `Art upload` signpost on an iPad, so step 2.3 is more
+  likely to be needed than the plan assumed. Check it on a device trace right after step 2.1.
+- **Open is mostly parsing.** `JSONValue(parsing:)` is 69% of open (268 of 386 ms at 2,400 shapes),
+  decoding 31%. Step 3 does number parsing (its first bullet) first.
+- **The outline-view wireframe** costs 13.5 ms per pinch frame at 2,400 shapes, linear. Step 4 as
+  planned.
+- **Scissors hover doesn't grow with the drawing.** About 1 ms at every size, varying with what is
+  under the hover point (the stress drawing's busy point lands on different shapes at each size).
+  So the per-frame cost is `nearestSegment` on the few shapes near the point, not the bounds pass
+  over every shape. Step 5's segment skip (its third bullet) matters more for the scissors than
+  the grid; the grid still matters for `hitTest` and the eraser, which do scale.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and
