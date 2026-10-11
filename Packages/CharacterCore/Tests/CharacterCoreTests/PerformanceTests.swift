@@ -61,6 +61,101 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
+    // MARK: Dragging
+
+    /// Every shape, as select all leaves it.
+    private var everything: Selection {
+        .covering(Set(drawing.parts.flatMap { part in part.shapes.map { ShapeRef(part: part.id, shape: $0.id) } }))
+    }
+
+    /// Drags the whole character 20 samples to the right, building the art after each
+    /// sample as `build` says, from a warm builder.
+    private func measureDrag(_ build: @escaping (inout ArtBuilder, DrawingEditor) -> Void) {
+        var start = DrawingEditor(drawing: drawing)
+        start.tool = .select
+        start.selection = everything
+        // A third of the way in, clear of the pivot and the handles.
+        let frame = try! XCTUnwrap(drawing.geometryBounds(of: everything))
+        let grab = frame.minPoint + Vec2(frame.width, frame.height) / 3
+        var warm = ArtBuilder()
+        _ = warm.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        measure {
+            var editor = start
+            var builder = warm
+            editor.pencilBegan(at: grab, zoom: 1)
+            for i in 1...20 {
+                editor.pencilMoved(to: grab + Vec2(Double(i) * 3, 0))
+                build(&builder, editor)
+            }
+            editor.pencilEnded(at: grab + Vec2(60, 0))
+            build(&builder, editor)
+        }
+    }
+
+    /// The renderer before live transforms: every sample re-tessellates every moved shape.
+    func testDragRebuildingEverySample() {
+        measureDrag { builder, editor in _ = builder.build(editor.drawing, isolatedPart: nil, tolerance: 0.5) }
+    }
+
+    /// As the renderer draws a drag now: the drag's starting drawing once, then only the
+    /// transform changes, and one rebuild of the moved drawing at the end.
+    func testDragWithLiveTransform() {
+        var built: Int?
+        measureDrag { builder, editor in
+            if let live = editor.liveTransform, live.movesTessellation {
+                guard built != live.id else { return }
+                built = live.id
+                _ = builder.build(live.base, isolatedPart: nil, tolerance: 0.5, moving: live.shapes)
+            } else {
+                built = nil
+                _ = builder.build(editor.drawing, isolatedPart: nil, tolerance: 0.5)
+            }
+        }
+    }
+
+    // MARK: Refresh
+
+    /// The editor queries `CanvasStore.refresh()` reads after every edit, with
+    /// everything selected (10 refreshes).
+    func testRefreshQueries() {
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .select
+        editor.selection = everything
+        measure {
+            for _ in 0..<10 { Self.readRefreshQueries(editor) }
+        }
+    }
+
+    /// What one refresh reads from the editor beyond plain flags.
+    private static func readRefreshQueries(_ editor: DrawingEditor) {
+        var n = 0
+        func read<T>(_ value: T) { withExtendedLifetime(value) { n += 1 } }
+        read(editor.canJoinSelection)
+        read(editor.canTransformSelection)
+        read(editor.selectionGeometry)
+        read(editor.selectionAppearance)
+        read(editor.selectionStyle)
+        read(editor.canClipSelection)
+        read(editor.canGroupSelection)
+        read(editor.canUngroupSelection)
+        read(editor.selectedGroup)
+        read(editor.groupsToAddSelectionTo)
+        read(editor.canArrange)
+        read(editor.canHideOrLockSelection)
+        read(editor.canMoveSelectedShapes)
+        read(editor.accessoryOwnerForSelection)
+        read(editor.hasHiddenArt)
+        read(editor.hasLockedArt)
+        read(editor.canAttachSelectedPart)
+        read(editor.canSnapPivotToBone)
+        read(editor.canDuplicateMirrored)
+        read(editor.canAddJointCap)
+        read(editor.wiggleCandidate)
+        read(editor.drawing.exportArea())
+        read(LayerTree(drawing: editor.drawing))
+        XCTAssertEqual(n, 23)
+    }
+
     // MARK: Live stroke
 
     /// A 5-second stroke at 240 Hz, tessellated once per 120 Hz frame as it grows,

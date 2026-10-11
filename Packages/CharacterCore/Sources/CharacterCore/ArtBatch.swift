@@ -94,6 +94,10 @@ public enum ArtStep: Hashable, Sendable {
     case stencilView(state: StencilState, reference: UInt8)
     /// Dims everything drawn so far: the parts outside isolation.
     case veil
+    /// The `stencil` and `cover` steps that follow draw shapes a live transform is
+    /// moving (true) or not (false): the renderer applies the transform to them, so a
+    /// drag needs no rebuild. See `DrawingEditor.liveTransform`.
+    case moving(Bool)
 }
 
 /// The art ready for the GPU: world-space triangles and the steps that draw them.
@@ -129,6 +133,9 @@ public struct ArtBuilder: Sendable {
     }
 
     private var cache: [Int: Tessellation] = [:]
+    /// While building: the shapes to mark as moving, and whether the last mark was on.
+    private var moving: Set<Int> = []
+    private var isMoving = false
 
     /// How strongly the ghost view draws the shapes outside its focus.
     public static let ghostOpacity = 0.25
@@ -138,9 +145,12 @@ public struct ArtBuilder: Sendable {
     /// The isolated part draws on top of a veil over everything else; with an
     /// `isolatedGroup` in it, only that group does, and the rest of the part stays under
     /// the veil. With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
+    /// The shapes in `moving` are bracketed by `.moving` steps.
     public mutating func build(_ drawing: Drawing, isolatedPart: Int?, isolatedGroup: Int? = nil, tolerance: Double,
-                               ghostFocus: Set<Int>? = nil) -> ArtBatch {
+                               ghostFocus: Set<Int>? = nil, moving: Set<Int> = []) -> ArtBatch {
         var batch = ArtBatch()
+        self.moving = moving
+        isMoving = false
         var live: Set<Int> = []
         var parts = drawing.parts
         if let isolatedPart {
@@ -160,7 +170,10 @@ public struct ArtBuilder: Sendable {
                 appendShapes(all, of: part, skippingBases: [], tolerance: tolerance, ghostFocus: ghostFocus, to: &batch)
             }
         }
-        cache = cache.filter { live.contains($0.key) }
+        if isMoving { batch.steps.append(.moving(false)) }
+        self.moving = []
+        // Forget shapes that are gone, without copying the cache.
+        for id in cache.keys where !live.contains(id) { cache.removeValue(forKey: id) }
         return batch
     }
 
@@ -206,9 +219,14 @@ public struct ArtBuilder: Sendable {
         return result
     }
 
-    private func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, fade: Double,
+    private mutating func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, fade: Double,
                         to batch: inout ArtBatch) {
         if role == .base { batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0)) }
+        let moves = moving.contains(shape.id)
+        if moves != isMoving {
+            batch.steps.append(.moving(moves))
+            isMoving = moves
+        }
 
         if let fill = shape.visibleFill, !geometry.fan.isEmpty {
             let fan = batch.add(geometry.fan)
@@ -290,7 +308,7 @@ public struct ArtBuilder: Sendable {
 extension ArtBatch {
     mutating func add(_ points: [Vec2]) -> Range<Int> {
         let start = vertexCount
-        vertices.reserveCapacity(vertices.count + points.count * 2)
+        vertices.reserveAdditional(points.count * 2)
         for p in points {
             vertices.append(Float(p.x))
             vertices.append(Float(p.y))

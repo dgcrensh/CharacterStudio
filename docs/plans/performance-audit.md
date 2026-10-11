@@ -21,9 +21,9 @@ frame or every touch sample.**
 | # | Finding | Where | When it hurts | Effort |
 | --- | --- | --- | --- | --- |
 | 1 | Hit-testing flattens every path twice, on every hover frame, tap and eraser sample (partly shipped) | `Drawing.swift:71-85`, `444-452` | Hovering, erasing, select taps on large drawings | S |
-| 2 | A drag rebuilds the whole drawing and re-uploads every vertex per sample | `DrawingEditor.swift:437-441`, `ArtBatch.swift:155-179`, `CanvasRenderer.swift:282-302` | Moving a part with many shapes | M |
+| 2 | A drag rebuilds the whole drawing and re-uploads every vertex per sample (shipped) | `DrawingEditor.swift:437-441`, `ArtBatch.swift:155-179`, `CanvasRenderer.swift:282-302` | Moving a part with many shapes | M |
 | 3 | Clip-base lookups are O(n) per shape, so a part's art pass is O(n²) (shipped; smaller than estimated) | `Drawing.swift:168-193`, `ArtBatch.swift:189-219` | Parts with hundreds of shapes, worse with clipping (#17) | S |
-| 4 | `refresh()` recomputes ~90 derived values, several O(all shapes), after every edit and every color-picker tick | `CanvasStore.swift:221-331` | Picker drags, layers panel open | M |
+| 4 | `refresh()` recomputes ~90 derived values, several O(all shapes), after every edit and every color-picker tick (shipped) | `CanvasStore.swift:221-331` | Picker drags, layers panel open | M |
 | 5 | Overlay re-flattens the selection, hover target and (in outline view) every shape each frame | `EditorOverlay.swift:62-64`, `114-128`, `206-208`, `262-283` | Outline view, large selections | S-M |
 | 6 | Three fresh `MTLBuffer`s per frame and a full vertex re-upload per art rebuild (shipped) | `CanvasRenderer.swift:301`, `397-406` | Every frame while drawing or editing | S |
 | 7 | Undo history is unbounded and holds whole-drawing snapshots (shipped) | `UndoStack.swift:6`, `DrawingEditor.swift:1541` | Long sessions, memory | S |
@@ -33,7 +33,9 @@ frame or every touch sample.**
 
 Suggested order: 10 first (so the rest can be checked), then 1, 3, 6, 7 as quick wins, then 2 and 4,
 then 5, 8, 9. 10 shipped first; the quick wins 1 (its cheap half), 3, 6 and 7 shipped next, on top of
-it, with before and after numbers under "Measuring performance".
+it, with before and after numbers under "Measuring performance". 2 and 4 followed, and found what
+really dominated art rebuilds and the outline view: a `reserveCapacity` call that made appending
+vertices quadratic (see finding 2).
 
 ## What already works well
 
@@ -143,6 +145,35 @@ Recommendations:
   wiggling parts' shapes on the CPU every frame and re-tessellates them. The same live-transform
   uniform makes the wiggle free.
 
+Shipped (2026-10-11):
+
+- The cause of slow rebuilds was none of the above. `ArtBatch.add` called
+  `vertices.reserveCapacity(vertices.count + n)` before each shape's triangles, and `reserveCapacity`
+  allocates exactly what it is asked for, so every shape copied the whole vertex array built so far:
+  about 4 M floats, copied 8,000 times per build. `CapsuleTessellator.append` did the same into the
+  overlay's array, which is the "unexplained" 12 s outline view. Both now grow geometrically
+  (`Array.reserveAdditional`), and a warm rebuild of the full stress drawing went from 0.83 s to
+  0.011 s, a cold one from 0.91 s to 0.07 s, and the outline-view overlay from 12 s to 0.02 s
+  (finding 5's re-flattening remains, but is now small).
+- `DrawingEditor.liveTransform` (`LiveTransform`) describes a select-tool drag that moves shapes: the
+  drawing as the drag began, the ids of the shapes it moves (a part brings its accessories) and the
+  affine from there to now. `ArtBuilder.build(_:...moving:)` brackets those shapes' steps with
+  `ArtStep.moving(true/false)`, and the renderer builds the starting drawing once per drag and then
+  draws the bracketed steps with `worldToClip × transform`, so a drag re-tessellates and re-uploads
+  nothing until the Pencil lifts, which is one rebuild. The fragment shader still sees the untransformed
+  point, which is what the untransformed gradient expects. `movesTessellation` limits this to
+  similarities (move, rotate, uniform scale, mirror) that enlarge by at most 2x, where it is exact
+  because outline widths and dashes scale by the same factor (`VectorShape.apply`); stretches, and
+  bigger enlargements whose flattening would show, rebuild per sample as before, now cheaply. The
+  editor still applies the transform to `drawing` on every sample, so the overlay, snapping and
+  everything else that reads the drawing are unchanged. A test plays the bracketed batch through the
+  stencil simulator and checks it paints what the transformed drawing does, clipping included.
+- The cache drops dead ids in place instead of filtering into a new dictionary.
+
+Still open: the wiggle preview still re-tessellates the wiggling parts every frame (the same
+`.moving` steps could carry it, with one transform per part), and an incremental vertex buffer
+is no longer worth it at these costs.
+
 ### 3. Clip-base lookups are O(n) per shape, so a part's art pass is O(n²) (S)
 
 For every shape it appends, `ArtBuilder.appendShapes` (`ArtBatch.swift:189-219`) calls
@@ -208,6 +239,27 @@ Recommendations:
 - The continuous-color path (`setFill`, `setOutline`, `setGlobalColor`) could skip the document
   hand-off and the layers rebuild until the picker ends (see finding 9).
 
+Shipped (2026-10-11), measured with `testRefreshQueries` (the editor queries one refresh reads, with
+the whole stress drawing selected):
+
+- What the queries cost was mostly flattening: `selectionGeometry`, `Drawing.frame(of:)` and
+  `exportArea()` all took `BezierPath.bounds()`, which flattened every path. `bounds()` is now exact
+  and analytic (each segment's ends plus the roots of its derivative, skipping segments whose handles
+  are already inside the box), so it needs no flattening and is tighter than before by up to the old
+  0.25 pt tolerance. `bounds(tolerance:)` keeps the flattened version. One refresh's queries went from
+  20 ms to 3.5 ms with everything selected; with one part selected they are well under 1 ms.
+- `refresh()` reads the drawing-wide values (layers tree, bones, hidden and locked art, export area,
+  palette, global colors, name, frame) only when `editor.revision` changed since it last read them,
+  so selection, tool and view changes skip them.
+- Fill and outline colors, outline width, opacity, gradient stops and global colors go through
+  `CanvasStore.restyle`, whose `refreshStyle()` copies only what a style change can alter (undo flags,
+  style, appearance, recent colors, palette, global colors), so a color-picker drag no longer reads
+  the selection's flags or rebuilds the layers tree per tick.
+
+Still open: the document hand-off per tick (finding 9), and `shapeIndices(in:)` is still walked about
+fifteen times per full refresh for a multi-shape selection (about 0.08 ms each at full size, so not
+worth a memo yet). The layers panel's own per-render work belongs to PR #15's tree.
+
 ### 5. Overlay re-flattens the selection and hover target every frame (S-M)
 
 `EditorOverlay.vertices` (`EditorOverlay.swift`) is rebuilt and re-uploaded every frame
@@ -267,7 +319,8 @@ it never blocks. The art buffer is pinned until the next rebuild. Capsule draws 
 between frames and tessellates only the new points and the predicted tail; a test checks it matches
 `CapsuleTessellator.vertices(for:)` as a stroke grows, with pressure, and when a quick shape replaces
 the points. The art buffer is still uploaded on every rebuild (that waits on finding 2), and the
-per-frame copy of the live stroke into its buffer remains.
+per-frame copy of the live stroke into its buffer remains. Since finding 2 a drag no longer rebuilds
+or re-uploads the art; other edits still upload it once per rebuild.
 
 ### 7. Undo history is unbounded and holds whole-drawing snapshots (S)
 
@@ -415,7 +468,29 @@ After findings 1, 3, 6 and 7, same machine, same settings:
 The live-stroke pair times the old per-frame full tessellation against the incremental one on the
 same 1,200-point stroke, so its "before" is `testLiveStrokeFullEveryFrame`. The GPU-side half of
 finding 6 (no buffer allocation per frame) can't be measured here; check it in Metal System Trace.
-Art rebuilds are unchanged: what dominates them is still unknown and belongs with finding 2.
+Art rebuilds are unchanged: what dominates them is still unknown and belongs with finding 2. (It was
+quadratic vertex appends; see finding 2 and the next table.)
+
+After findings 2 and 4 (on top of the table above), same machine and settings. The "before" for
+the new tests is PR #19's code with the new test file:
+
+| Test | Before | After |
+| --- | --- | --- |
+| `testArtBuildCold` | 0.914 | 0.070 |
+| `testArtBuildWarm` | 0.832 | 0.011 |
+| `testArtBuildWarmOnePart` | 0.813 | 0.011 |
+| `testDragRebuildingEverySample` (new: select all, 20-sample drag, a build per sample) | 19.030 | 1.236 |
+| `testDragWithLiveTransform` (new: the same drag as the renderer now draws it) | | 0.110 |
+| `testRefreshQueries` (new: 10 refreshes' editor queries, everything selected) | 0.202 | 0.035 |
+| `testOverlayInOutlineView` | 12.015 | 0.018 |
+| `testEncodeAndFormat` | 0.157 | 0.158 |
+| `testEraseAlongDiagonal` | 0.015 | 0.015 |
+| `testHitTestMiss` / `testHitTestHit` | 0.006 / 0.007 | 0.010 / 0.007 |
+| `testUndoGrowthOver500Commits` | 0.008 | 0.012 |
+
+So a select-all drag of the full stress drawing went from about 0.9 s per sample to about 1 ms of
+editor work per sample and no art work, plus one 55 ms rebuild when the Pencil lifts. The hit-test
+and undo rows are within run-to-run noise.
 
 What they said before these fixes: a warm art rebuild costs nearly as much as a cold one at this size, so the
 per-shape cache is not what dominates; the outline view's overlay is the worst case by an order of

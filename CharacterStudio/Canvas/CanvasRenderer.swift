@@ -66,8 +66,10 @@ private struct PaintUniforms {
 /// steps: fills, outlines (from the stroker, with caps, joins, dashes and varying
 /// width), gradients and clipping all mark the stencil and then paint a rectangle
 /// where the test passes, and multisampling anti-aliases the edges. Each shape's
-/// triangles are cached and rebuilt only when that shape changes, so a drag
-/// re-tessellates just the shapes it moves. Vertices are in world space and the
+/// triangles are cached and rebuilt only when that shape changes. A select-tool drag
+/// keeps the art built from the drawing as it began and draws the moved shapes through
+/// the drag's transform, so it re-tessellates nothing until the Pencil lifts (see
+/// `LiveTransform`). Vertices are in world space and the
 /// camera is applied in the vertex shader, so navigation never re-tessellates, except
 /// for a refinement pass when zoom crosses a power of two.
 @MainActor
@@ -101,6 +103,9 @@ final class CanvasRenderer {
     private var artGhost: Set<Int>?
     /// True when the cached art was built from the wiggle preview's moving picture.
     private var artWiggled = false
+    /// The live transform the cached art was built for, and its current transform.
+    private var artLive: Int?
+    private var liveTransform = Affine2D.identity
     private var artSteps: [ArtStep] = []
     private var artBuffer: VertexBufferPool.Handle?
 
@@ -298,16 +303,23 @@ final class CanvasRenderer {
 
     /// Rebuilds the art when the drawing, zoom bucket, isolation or ghost focus changed,
     /// and on every frame of the wiggle preview (only the wiggling shapes re-tessellate).
+    /// During a drag that `LiveTransform` can draw, it builds the drag's starting
+    /// drawing once and then only updates the transform.
     private func updateArt(editor: DrawingEditor, zoom: Double, time: Double) {
         // Flatten finely enough for the current zoom, in power-of-two steps.
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let tolerance = 0.2 / bucket
         let wiggling = editor.wigglePart != nil
         let ghost = editor.ghostFocus
-        guard wiggling || artWiggled || editor.revision != artRevision || tolerance != artTolerance ||
+        let live = wiggling ? nil : editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
+        liveTransform = live?.transform ?? .identity
+        let current = live.map { artLive == $0.id } ?? (artLive == nil && editor.revision == artRevision)
+        guard wiggling || artWiggled || !current || tolerance != artTolerance ||
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
-        artRevision = editor.revision
+        // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
+        artRevision = live == nil ? editor.revision : -1
+        artLive = live?.id
         artTolerance = tolerance
         artIsolation = editor.isolatedPart
         artGroupIsolation = editor.isolatedGroup
@@ -315,9 +327,9 @@ final class CanvasRenderer {
         artWiggled = wiggling
         let interval = Signposts.canvas.beginInterval("Art rebuild")
         defer { Signposts.canvas.endInterval("Art rebuild", interval) }
-        let drawing = wiggling ? editor.displayDrawing(at: time) : editor.drawing
+        let drawing = live?.base ?? (wiggling ? editor.displayDrawing(at: time) : editor.drawing)
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
-                                     tolerance: tolerance, ghostFocus: ghost)
+                                     tolerance: tolerance, ghostFocus: ghost, moving: live?.shapes ?? [])
         artSteps = batch.steps
         if let artBuffer { buffers.release(artBuffer) }
         artBuffer = buffers.upload([batch.vertices], pin: true)
@@ -332,12 +344,20 @@ final class CanvasRenderer {
             view.append(Float(corners[i].x))
             view.append(Float(corners[i].y))
         }
+        // Shapes a drag moves draw through its transform, applied before the camera.
+        var moved = uniforms
+        moved.worldToClip = uniforms.worldToClip * liveTransform.matrix4x4
+        var moving = false
         enum Bound { case none, stencil, cover }
         var bound = Bound.none
         func bind(_ pipeline: any MTLRenderPipelineState, as kind: Bound) {
             guard bound != kind else { return }
             encoder.setRenderPipelineState(pipeline)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+            if moving {
+                encoder.setVertexBytes(&moved, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+            } else {
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+            }
             if let artBuffer { encoder.setVertexBuffer(artBuffer.buffer, offset: 0, index: 0) }
             bound = kind
         }
@@ -376,6 +396,10 @@ final class CanvasRenderer {
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
                 encoder.setFragmentBytes(&paint, length: MemoryLayout<PaintUniforms>.stride, index: 0)
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+                bound = .none
+
+            case .moving(let on):
+                moving = on
                 bound = .none
             }
         }
