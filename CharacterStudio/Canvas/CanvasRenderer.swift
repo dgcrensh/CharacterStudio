@@ -194,6 +194,8 @@ final class CanvasRenderer {
     @discardableResult
     func render(session: CanvasSession, viewSize: CGSize, scale: CGFloat, darkMode: Bool) -> Bool {
         guard let layer, viewSize.width > 0, viewSize.height > 0 else { return true }
+        let frameInterval = Signposts.canvas.beginInterval("Frame")
+        defer { Signposts.canvas.endInterval("Frame", frameInterval) }
         guard let drawable = layer.nextDrawable(), let commandBuffer = queue.makeCommandBuffer() else { return false }
 
         ensureTargets(width: drawable.texture.width, height: drawable.texture.height)
@@ -218,6 +220,7 @@ final class CanvasRenderer {
         pass.stencilAttachment.storeAction = .dontCare
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        let encodeInterval = Signposts.canvas.beginInterval("Encode")
         encoder.setDepthStencilState(plainState)
 
         encoder.setRenderPipelineState(gridPipeline)
@@ -240,13 +243,16 @@ final class CanvasRenderer {
             drawCapsules(CapsuleTessellator.vertices(for: mirrored), encoder: encoder)
         }
         let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
-        drawCapsules(EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
-                                            art: shown, darkMode: darkMode),
-                     encoder: encoder)
+        let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
+            EditorOverlay.vertices(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
+                                   art: shown, darkMode: darkMode)
+        }
+        drawCapsules(overlay, encoder: encoder)
 
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        Signposts.canvas.endInterval("Encode", encodeInterval)
         return true
     }
 
@@ -294,6 +300,8 @@ final class CanvasRenderer {
         artGroupIsolation = editor.isolatedGroup
         artGhost = ghost
         artWiggled = wiggling
+        let interval = Signposts.canvas.beginInterval("Art rebuild")
+        defer { Signposts.canvas.endInterval("Art rebuild", interval) }
         let drawing = wiggling ? editor.displayDrawing(at: time) : editor.drawing
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
                                      tolerance: tolerance, ghostFocus: ghost)

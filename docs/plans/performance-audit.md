@@ -29,7 +29,7 @@ frame or every touch sample.**
 | 7 | Undo history is unbounded and holds whole-drawing snapshots | `UndoStack.swift:6`, `DrawingEditor.swift:1541` | Long sessions, memory | S |
 | 8 | Full-screen stencil passes per clip base and group; 4x MSAA everywhere | `ArtBatch.swift:199-203`, `243`; `CanvasRenderer.swift:75` | Many clipped shapes, fill-rate on 12.9" at 2x | M |
 | 9 | Document hand-off and thumbnail re-render on every finished change, including picker ticks | `CanvasStore.swift:187-197`, `CharacterDocument.swift:28-31` | Autosave churn, I/O | S |
-| 10 | No benchmarks or signposts, so none of this is measured | `Packages/CharacterCore/Tests` | Now | S |
+| 10 | No benchmarks or signposts, so none of this is measured (shipped: see below) | `Packages/CharacterCore/Tests` | Now | S |
 
 Suggested order: 10 first (so the rest can be checked), then 1, 3, 6, 7 as quick wins, then 2 and 4,
 then 5, 8, 9.
@@ -300,25 +300,67 @@ Recommendations:
 - Compare `sentDocuments` by drawing identity (a revision tag stored in the package) rather than by
   value.
 
-### 10. Nothing is measured (S)
+### 10. Nothing is measured (S): shipped
 
-`CharacterCoreTests` has no performance tests, and the app has no `os_signpost` marks. Everything in
-this document is an estimate.
+Done on 2026-10-11, on top of `main` (so before #15-#17 landed):
 
-Recommendations, in this order:
+- `PerformanceTests` in `CharacterCoreTests` times, on a generated `StressDrawing`:
+  `ArtBuilder.build` cold and warm, `Drawing.hitTest` miss and hit (20 calls each), an eraser
+  stroke of 20 samples diagonally across the character, `LayerTree(drawing:)` (10 calls),
+  `CharacterFormat.encode` plus `formatted()`, `EditorOverlay.vertices` in outline view with a part
+  selected, and 500 separate fill changes on the undo stack. `testStressDrawingIsValid` checks the
+  drawing itself. The tests have no baselines, so they never fail on speed; CI runs them as part of
+  the core tests and prints the numbers in its log.
+- `StressDrawing` is deterministic (its own seeded generator): a grid of parts of 24-anchor closed
+  smooth shapes with fills, two in three outlined, one in ten of those dashed, a clipped group (a
+  base and two clipped shapes) in every fourth part, and every tenth part an accessory of the one
+  before it. Behind-owner shapes come with PR #17 and can be added to it then.
+- By default it is a quarter of the audit's size (10 parts × 15 shapes) so the debug `swift test`
+  on every CI run stays quick (the suite takes about 20 s on a Mac). `STRESS_DRAWING=full` gives the full 40 ×
+  60 × 24.
+- Instead of a stress document in `Schema/examples/`, the generator is the repeatable source: the
+  full drawing would be several megabytes of JSON, and the schema check and the byte-for-byte test
+  would have to carry it.
+- The app has `os_signpost` intervals (`CharacterStudio/Canvas/Signposts.swift`, Points of Interest
+  category): `Frame` around `CanvasRenderer.render`, `Art rebuild`, `Overlay build` and `Encode`
+  inside it, and `Refresh` around `CanvasStore.refresh`.
 
-- Add a `PerformanceTests` target or file in CharacterCore with a generated stress drawing (say 40
-  parts × 60 shapes × 24 anchors with outlines, a few clipped groups, a few dashed outlines, one
-  accessory with behind-owner shapes) and `measure {}` blocks for: `ArtBuilder.build` cold and warm,
-  `Drawing.hitTest` miss and hit, `eraseAlong` over a diagonal, `LayerTree(drawing:)`,
-  `CharacterFormat.encode` plus `formatted()`, `EditorOverlay.vertices` in outline view, and
-  `UndoStack` growth over 500 commits. XCTest `measure` works on Linux, so CI can run them (as
-  informational, not gating).
-- Add signposts in `CanvasRenderer.render` (art rebuild, overlay build, encode) and
-  `CanvasStore.refresh`, then record one Instruments trace of each of: drawing a long stroke, dragging
-  the whole character, erasing across it, hovering in the select tool, a color-picker drag with the
-  layers panel open. Metal System Trace plus Time Profiler is enough.
-- Keep the stress document in `Schema/examples/` so the numbers are repeatable.
+Still to do by hand on a device: record one Instruments trace (Metal System Trace plus Time
+Profiler, which show the signposts in their Points of Interest track) of each of: drawing a long
+stroke, dragging the whole character, erasing across it, hovering in the select tool, a
+color-picker drag with the layers panel open.
+
+#### Measuring performance
+
+```sh
+# Quarter size, debug, as CI runs it
+swift test --package-path Packages/CharacterCore --filter PerformanceTests
+# Full size, optimized: closer to the app
+STRESS_DRAWING=full swift test -c release --package-path Packages/CharacterCore --filter PerformanceTests
+```
+
+Each test logs `measured [Time, seconds] average: ...` over 10 runs. Compare the averages before
+and after a change on the same machine; a single run's relative standard deviation is often 10-40%.
+
+First numbers, full size, `-c release`, on the Mac this was written on (an M-series laptop, not an
+iPad), average seconds per `measure` run:
+
+| Test | Seconds | Per operation |
+| --- | --- | --- |
+| `testArtBuildCold` | 0.965 | |
+| `testArtBuildWarm` | 0.844 | the cache saves only ~13% (findings 3 and 6) |
+| `testHitTestMiss` (20 calls) | 0.195 | ~10 ms per hover frame off the art (finding 1) |
+| `testHitTestHit` (20 calls) | 0.099 | ~5 ms per tap |
+| `testEraseAlongDiagonal` (20 samples) | 2.694 | ~135 ms per eraser sample (finding 1) |
+| `testLayerTree` (10 calls) | < 0.001 | |
+| `testEncodeAndFormat` | 0.159 | |
+| `testOverlayInOutlineView` | 11.912 | far beyond the flattening cost finding 5 describes; profile it first |
+| `testUndoGrowthOver500Commits` | 0.011 | time only; XCTest can't measure memory on Linux |
+
+What they say so far: a warm art rebuild costs nearly as much as a cold one at this size, so the
+per-shape cache is not what dominates; the outline view's overlay is the worst case by an order of
+magnitude and is not explained by this document yet; hit-testing and erasing are slow enough to
+drop frames on a big drawing, as finding 1 predicts.
 
 ## Smaller notes
 
