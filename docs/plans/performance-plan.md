@@ -57,6 +57,14 @@ starts with its second bullet instead of its first.
 
 ## Step 1: never stall a pinch on re-tessellation (M)
 
+**Done.** Bullets 1 to 4 shipped: `TessellationCache` (CharacterCore) with `refinePlan`, `tessellate` and
+`merge`; the renderer refines in a detached task, visible shapes first, and builds with
+`reusingOtherTolerances` while a refine is under way; the second tier is capped at 1,000,000 first-tier
+vertices. Signposts: `Art rebuild` ends with `refine` (no more `zoom`), plus `Art refine` (the job) and
+`Art merge`. `Workload.zoomInRefineVisible` is in the scaling table. Not done: a vertex cap for zooming out
+mid-gesture (bullet 1's optional cap), until a device shows it matters. A device trace is still the
+acceptance check.
+
 **Today.** `updateArt` (`CanvasRenderer.swift:344-377`) flattens at `0.2 / bucket`, where `bucket` is the zoom
 rounded up to a power of two. When a pinch crosses a bucket, the tolerance changes, every cached tessellation
 misses (`ArtBuilder.tessellation` compares `cached.tolerance == tolerance`, `ArtBatch.swift:228-229`), and the whole
@@ -159,6 +167,14 @@ from 300 to 4,800 shapes at 60 shapes per part, under 1 ms on the Mac.
 
 ## Step 3: open and import without the wait (M)
 
+**Done (except Open bullet 3).** Numbers are read from bytes (`FastDecimal`, shared by `JSONParser` and the
+SVG `NumberScanner`, with `Double(text)` as the fallback for exponents and more than 15 significant digits),
+whitespace is a `switch`, and strings without escapes skip the byte buffer. `Node` keeps a parent link and a key
+or index, so decoding builds no path strings unless it throws. Import parses in a detached task behind an
+"Importing..." toast and ignores a second import while one runs; `XMLReader` no longer allocates arrays per tag.
+`NumberParsingTests` checks every path against `Double(text)` bit for bit. Open bullet 3 (art after the first
+frame) is deferred: it needs step 1's background job. Numbers in the audit under "Step 3".
+
 ### Open
 
 **Today.** 390 ms at 2,400 shapes, all of it string work as far as the code shows:
@@ -215,6 +231,15 @@ and can't be tested on Linux; say so in the PR.
 
 ## Step 4: a pinch in outline view keeps the wireframe (S-M)
 
+**Done** (bullets 1 and 2). Every overlay capsule is screen-space: `CapsuleTessellator.append(screenSpace:)`
+sets the `StrokeVertex` flag (the old padding float) and the vertex shader scales the radius by a new
+`worldPerPoint` uniform (in the `Uniforms` padding slot) rather than `worldPerPixel`, since the overlay's
+widths are in points and the core doesn't know the screen scale. The live stroke and the bones' fill leave
+the flag clear. The wireframe and selection layers key on `EditorOverlay.zoomBucket` and flatten and dash
+at the bucket's `px`. `overlayWireframeAtNewZoom` now changes zoom inside a bucket (1 to 0.99); the new
+`overlayWireframeAcrossZoomBucket` (1 to 1.01) times a rebuild. Bullet 3 is deferred: it needs step 1's
+`TessellationCache`. The shader is checked by eye only (outline view, pinch 0.25x to 8x).
+
 **Today.** `OverlayCache.WireframeKey` and `SelectionKey` include the exact `zoom` (`EditorOverlay.swift:115-130`)
 because capsule widths are baked in world units (`width * px`) when the vertices are built, so every pinch frame
 rebuilds the wireframe (16 ms at 2,400 shapes) and, in direct select, the selection's anchors and outlines.
@@ -245,6 +270,17 @@ comparing against a fresh build at the same bucket. The shader change is app-onl
 **Done when** `overlayWireframeAtNewZoom` (step 0) is under 0.1 ms for a zoom inside the bucket.
 
 ## Step 5: hover from an index, not a scan (S-M)
+
+**Done.** All four bullets. `ShapeIndex` (CharacterCore) holds each editable shape with its bounds, draw-stack
+rank and clip bases in a uniform grid; the editor keeps one tagged with `revision`, rebuilt by `pencilHovered`,
+`pencilBegan`, the eraser and the marquee, and read by the getters only when fresh. `cutTarget` walks shapes by
+index (or the grid's candidates) and skips segments whose control box is farther than the best so far
+(`BezierPath.nearestSegment(to:within:)`). An eraser stroke patches the index as shapes go instead of rebuilding
+it; a patched index serves the geometry queries but not `hitTest` (an erased shape can change another's clip base
+and the draw stack), which rebuilds on the next hover. `ShapeIndexTests` checks every answer against the old scans
+(isolation, an isolated group, hidden and locked shapes, clipping, an accessory split around its owner, ties) and
+the fallback after an edit and an undo. New scaling row: "Select hover, hit test only". `Drawing.hitTest` and
+`editableShapeRefs` are unchanged and still used by the pen and the select menu.
 
 **Today.** `cutTarget` (`DrawingEditor.swift:423-434`) runs on every hover frame with the scissors (through
 `hoverCut`, a computed property). For every editable shape it looks the shape up by id (`drawing.shape(ref)`, a

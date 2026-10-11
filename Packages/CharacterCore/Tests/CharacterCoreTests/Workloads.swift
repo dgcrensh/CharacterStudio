@@ -67,14 +67,37 @@ struct Workload: @unchecked Sendable {
     }
 
     /// A zoom that crosses a power-of-two bucket changes the flattening tolerance, which
-    /// re-tessellates every shape (`CanvasRenderer.updateArt`).
+    /// re-tessellates every shape. Since plan step 1 the renderer no longer does this in
+    /// a frame (it refines in the background, `zoomInRefineVisible`); the row stays as
+    /// the total work of a refine and for comparison with earlier tables. With no second
+    /// tier, since that would turn this back-and-forth into warm builds.
     static let artRebuildAtNewZoomBucket = Workload(name: "Art rebuild, new zoom bucket") { drawing in
         var builder = ArtBuilder()
+        builder.tessellations.secondTierLimit = 0
         _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2)
         var flip = false
         return {
             flip.toggle()
             _ = builder.build(drawing, isolatedPart: nil, tolerance: flip ? 0.1 : 0.2)
+        }
+    }
+
+    /// What a zoom-in across a bucket costs since plan step 1, in the background job's
+    /// first result: planning the refine (every shape's bounds, against a warm cache at
+    /// the old tolerance) and tessellating the shapes that meet an iPad-sized view
+    /// (1,180 × 820 points) at 4x around the busy point, plus the quarter-screen margin.
+    /// The renderer keeps drawing meanwhile; this is how long the coarse art shows.
+    static let zoomInRefineVisible = Workload(name: "Zoom-in refine, visible shapes") { drawing in
+        var builder = ArtBuilder()
+        _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2)
+        let cache = builder.tessellations
+        let center = StressDrawing.busyPoint(parts: drawing.parts.count)
+        let half = Vec2(1180, 820) / 8
+        let view = Rect(minPoint: center - half, maxPoint: center + half)
+        return {
+            let plan = cache.refinePlan(for: drawing, tolerance: 0.1, viewRect: view)
+            precondition(!plan.visible.isEmpty)
+            _ = TessellationCache.tessellate(plan.visible, tolerance: 0.1)
         }
     }
 
@@ -95,9 +118,38 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The select tool's hover hit test alone (the topmost shape under the Pencil), with
+    /// nothing selected, on the busy point: what every hover frame and tap pays.
+    static let selectHoverHitTest = Workload(name: "Select hover, hit test only") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.tool = .select
+        let start = StressDrawing.busyPoint(parts: drawing.parts.count)
+        var i = 0
+        return {
+            i += 1
+            editor.pencilHovered(at: start + Vec2(Double(i % 20) * 2, 0), zoom: 1)
+            _ = editor.hoverTarget
+        }
+    }
+
     /// One overlay frame in the outline view during a pinch: a warm cache, with the zoom
-    /// changed by 1% (the wireframe's cache key is the exact zoom).
+    /// changed by 1% inside one zoom bucket (1 and 0.99 both round up to 1), which keeps
+    /// the wireframe since plan step 4.
     static let overlayWireframeAtNewZoom = Workload(name: "Outline view, overlay at a new zoom") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.outlineView = true
+        var cache = OverlayCache()
+        _ = EditorOverlay.layers(for: editor, zoom: 1, cache: &cache)
+        var flip = false
+        return {
+            flip.toggle()
+            _ = EditorOverlay.layers(for: editor, zoom: flip ? 0.99 : 1, cache: &cache)
+        }
+    }
+
+    /// The same, with the 1% zoom change crossing a zoom bucket (1.01 rounds up to 2), so
+    /// every frame rebuilds the wireframe: what a pinch pays once per power of two.
+    static let overlayWireframeAcrossZoomBucket = Workload(name: "Outline view, overlay across a zoom bucket") { drawing in
         var editor = DrawingEditor(drawing: drawing)
         editor.outlineView = true
         var cache = OverlayCache()
@@ -278,9 +330,10 @@ struct Workload: @unchecked Sendable {
     /// Everything above, in the order `ScalingTests` prints them.
     static var all: [Workload] {
         [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAfterOneEditAndUpload, artRebuildAtNewZoomBucket,
-         hoverFrame, overlayWireframeAtNewZoom, scissorsHover, pencilStroke, quickShapeCheck, eraserSample,
-         dragSampleEverything, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse,
-         openDecode, svgExport, svgImport]
+         zoomInRefineVisible, hoverFrame, selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
+         scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything,
+         undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
+         svgImport]
     }
 
     static func everything(in drawing: Drawing) -> Selection {

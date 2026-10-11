@@ -592,7 +592,9 @@ Everything the app marks for Instruments, all in the Points of Interest track. I
 | `No drawable` | event | `CanvasRenderer.render` | A dropped frame, retried on the next tick |
 | `GPU frame` | event | command buffer completion | The frame's GPU time in ms (`gpuEndTime - gpuStartTime`) |
 | `Render targets` | event | `CanvasRenderer.ensureTargets` | The MSAA and stencil targets reallocated, with the size |
-| `Art rebuild` | interval | `CanvasRenderer.updateArt` | Tessellating the art; ends with why: `edit`, `zoom` (a new zoom bucket, which re-tessellates everything), `drag`, `wiggle` or `focus` |
+| `Art rebuild` | interval | `CanvasRenderer.updateArt` | Building the art; ends with why: `edit`, `refine` (a background refine merged; a warm build), `drag`, `wiggle` or `focus` |
+| `Art refine` | interval | background task | The job that re-flattens shapes at a new zoom bucket, off the main thread, with the number of shapes it made |
+| `Art merge` | interval | `CanvasRenderer.mergeRefinement` | Taking one of the job's results into the cache on the main thread |
 | `Art upload` | interval | `CanvasRenderer.updateArt` | Copying the art's vertices to the GPU, with the float count |
 | `Encode` / `Art draw` / `Live stroke` / `Overlay build` | interval | `CanvasRenderer.render` | Encoding the pass, the art's draw calls inside it, the live stroke's incremental tessellation, and the overlay |
 | `Reference texture` / `Reference decode` | interval | `CanvasRenderer`, `CanvasStore` | First use of a reference image: decoding it, then uploading it with mipmaps |
@@ -698,6 +700,22 @@ What the split says:
   over every shape. Step 5's segment skip (its third bullet) matters more for the scissors than
   the grid; the grid still matters for `hitTest` and the eraser, which do scale.
 
+#### Step 1: pinch refine
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild, new zoom bucket (before, on the main thread inside the frame) | 11.3 | 22.5 | 44.6 | 90.9 | 179.7 |
+| Art rebuild, new zoom bucket (after, same work, now the background job) | 11.2 | 22.6 | 43.8 | 87.8 | 175.0 |
+| Zoom-in refine, visible shapes (after, the job's first result) | 7.7 | 9.8 | 15.6 | 20.7 | 16.5 |
+
+The full re-tessellation costs what it did, but it no longer runs in a frame: a pinch that crosses a
+bucket keeps drawing the current art while the job runs, and the visible shapes come back in 8 to 21 ms
+instead of the whole drawing in 90 to 180 ms. The main-thread merge and the warm build after it are app
+code and aren't timed here; a device trace of a pinch is the real check (no `zoom` reason on `Art
+rebuild`, `Art merge` about the cost of a warm build). Other rows are unchanged within noise.
+
 #### Step 2: edit frame proportional to the edit
 
 Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
@@ -723,6 +741,57 @@ down from 7.7 ms plus a 15 MB upload, and grows slowly with the number of parts 
 "after one edit" row still concatenates every part's floats, so it stays linear; it is kept for
 comparison with the older tables. Storing floats in the shape cache also took 20% off the new-bucket
 rebuild. The per-part Metal buffers are app code; check the `Art upload` signpost on an iPad.
+
+#### Step 3: open and import
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Open: parse and decode | before | 48.1 | 96.2 | 193.5 | 386.5 | 769.7 |
+| | after | 17.3 | 34.6 | 69.6 | 140.0 | 280.7 |
+| Open: parse only | before | 32.2 | 65.1 | 131.3 | 263.5 | 532.5 |
+| | after | 7.9 | 15.9 | 31.9 | 64.1 | 128.6 |
+| Open: decode only | before | 15.1 | 29.9 | 59.6 | 119.0 | 236.6 |
+| | after | 9.3 | 18.8 | 37.9 | 75.7 | 151.4 |
+| SVG import | before | 49.3 | 99.6 | 202.8 | 404.1 | 820.8 |
+| | after | 2.77 | 5.55 | 11.1 | 22.2 | 45.4 |
+
+Open is 2.8x faster (parsing 4.1x, decoding 1.6x) and misses the plan's 100 ms target at 2,400 shapes:
+decoding is now the larger half, at 76 ms. SVG import is 18x faster, most of it from `XMLReader` no
+longer building arrays per tag, and it now runs off the main thread as well.
+
+#### Step 4: outline-view pinch
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Outline view, overlay at a new zoom (inside a bucket) | before | 1.45 | 3.09 | 6.59 | 13.1 | 27.1 |
+| | after | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| Outline view, overlay across a zoom bucket | after | 1.46 | 3.08 | 6.43 | 12.7 | 30.0 |
+
+A pinch inside a power of two keeps the wireframe and selection layers (under a microsecond); crossing a
+bucket rebuilds them at the old cost, once per doubling instead of every frame. The screen-space widths
+are a shader change that needs checking by eye in the Simulator.
+
+#### Step 5: hover index
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Hover frame (select tool) | before | 0.062 | 0.100 | 0.120 | 0.213 | 0.331 |
+| | after | 0.048 | 0.050 | 0.049 | 0.049 | 0.049 |
+| Select hover, hit test only | after | 0.005 | 0.008 | 0.005 | 0.007 | 0.005 |
+| Scissors hover | before | 0.898 | 0.936 | 0.381 | 1.20 | 1.09 |
+| | after | 0.080 | 0.080 | 0.027 | 0.079 | 0.032 |
+| Eraser sample | before | 0.044 | 0.100 | 0.223 | 0.399 | 0.906 |
+| | after | 0.024 | 0.037 | 0.078 | 0.081 | 0.214 |
+
+Hover and scissors are now flat across sizes; scissors is 10 to 30x faster, mostly from the segment skip.
+The eraser is 4x faster at 2,400 shapes but still grows, since the stress drawing packs more shapes under
+the same eraser path as it gets denser.
 
 ## Smaller notes
 

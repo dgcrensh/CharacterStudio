@@ -197,6 +197,9 @@ public struct ArtBuilder: Sendable {
         /// Outline triangles, two floats per vertex, and their bounds.
         var outline: [Float]
         var outlineBounds: Rect
+
+        /// What the cache counts against its second-tier limit.
+        var vertexCount: Int { (fan.count + outline.count) / 2 }
     }
 
     /// What one part's steps and vertices depend on besides its shapes' tessellations:
@@ -220,6 +223,10 @@ public struct ArtBuilder: Sendable {
     struct PartBatch: Sendable {
         var key: PartKey
         var id: Int
+        /// Every shape was drawn at `key.tolerance`. A part built while a refine was under
+        /// way may hold shapes at an older tolerance; it is rebuilt rather than reused, so
+        /// it picks up the refined shapes once they are merged.
+        var isExact: Bool
         var vertices: [Float]
         var steps: [ArtStep]
     }
@@ -231,13 +238,22 @@ public struct ArtBuilder: Sendable {
         var occurrence: Int
     }
 
-    private var cache: [Int: Tessellation] = [:]
     private var partCache: [PartSlot: PartBatch] = [:]
     private var nextPartBatchID = 1
     /// How many part batches have been built rather than reused, for tests.
     private(set) var partBuilds = 0
     /// How many shapes have a cached tessellation, for tests.
-    var cachedShapeCount: Int { cache.count }
+    var cachedShapeCount: Int { tessellations.count }
+    /// Each shape's tessellation. Public so the renderer can refine a copy in the
+    /// background and merge the result (see `TessellationCache`).
+    public var tessellations = TessellationCache()
+    /// While building: use a cached tessellation of an unchanged shape at any tolerance
+    /// rather than tessellating it again.
+    private var reusesOtherTolerances = false
+    /// How many shapes builds have tessellated, for tests.
+    var tessellationCount = 0
+    /// Set while building a part when a shape used a tessellation at another tolerance.
+    private var usedOtherTolerance = false
     /// Builds the steps without writing any vertices (their ranges are empty), so
     /// `ScalingTests` can time the cache walk apart from the vertex appends.
     var skipsVertices = false
@@ -257,9 +273,16 @@ public struct ArtBuilder: Sendable {
     /// `isolatedGroup` in it, only that group does, and the rest of the part stays under
     /// the veil. With a `ghostFocus` (shape ids), every other shape draws at `ghostOpacity`.
     /// The shapes in `moving` are bracketed by `.moving` steps.
+    ///
+    /// With `reusingOtherTolerances`, an unchanged shape cached at another tolerance
+    /// keeps that tessellation; only new and edited shapes are tessellated, at
+    /// `tolerance`. The renderer builds that way while a background refine is under way.
     public mutating func build(_ drawing: Drawing, isolatedPart: Int?, isolatedGroup: Int? = nil, tolerance: Double,
-                               ghostFocus: Set<Int>? = nil, moving: Set<Int> = []) -> ArtBatch {
+                               ghostFocus: Set<Int>? = nil, moving: Set<Int> = [],
+                               reusingOtherTolerances: Bool = false) -> ArtBatch {
         var batch = ArtBatch()
+        reusesOtherTolerances = reusingOtherTolerances
+        defer { reusesOtherTolerances = false }
         var parts = drawing.drawStack
         if let isolatedPart {
             parts = parts.filter { $0.id != isolatedPart } + parts.filter { $0.id == isolatedPart }
@@ -280,7 +303,7 @@ public struct ArtBuilder: Sendable {
                               isolatedGroup: isolated ? isolatedGroup.flatMap { part.group($0) == nil ? nil : $0 } : nil,
                               ghostFocus: ghostFocus.map { Self.restrict($0, to: part) },
                               moving: Self.restrict(moving, to: part))
-            if let cached = partCache[slot], cached.key == key {
+            if let cached = partCache[slot], cached.isExact, cached.key == key {
                 batch.append(cached, concatenating: concatenatesVertices)
                 continue
             }
@@ -293,7 +316,7 @@ public struct ArtBuilder: Sendable {
         for slot in Array(partCache.keys) where !seen.contains(slot) {
             if let old = partCache.removeValue(forKey: slot) { retired.formUnion(old.key.shapes.lazy.map(\.id)) }
         }
-        for id in retired where !fresh.contains(id) { cache.removeValue(forKey: id) }
+        for id in retired where !fresh.contains(id) { tessellations.remove(id) }
         return batch
     }
 
@@ -311,6 +334,7 @@ public struct ArtBuilder: Sendable {
         var batch = ArtBatch()
         moving = key.moving
         isMoving = false
+        usedOtherTolerance = false
         let all = Array(part.shapes.indices)
         if let group = key.isolatedGroup {
             let inGroup = all.filter { part.shapes[$0].group == group }
@@ -328,7 +352,8 @@ public struct ArtBuilder: Sendable {
         moving = []
         isMoving = false
         defer { nextPartBatchID += 1 }
-        return PartBatch(key: key, id: nextPartBatchID, vertices: batch.vertices, steps: batch.steps)
+        return PartBatch(key: key, id: nextPartBatchID, isExact: !usedOtherTolerance, vertices: batch.vertices,
+                         steps: batch.steps)
     }
 
     /// Adds the shapes at `indices` of `part`, leaving out clipped shapes and clipped
@@ -400,7 +425,19 @@ public struct ArtBuilder: Sendable {
     }
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {
-        if let cached = cache[shape.id], cached.shape == shape, cached.tolerance == tolerance { return cached }
+        if let cached = tessellations.use(shape, tolerance: tolerance) { return cached }
+        if reusesOtherTolerances, let cached = tessellations.anyTessellation(of: shape) {
+            usedOtherTolerance = true
+            return cached
+        }
+        let result = Self.tessellate(shape, tolerance: tolerance)
+        tessellationCount += 1
+        tessellations.store(result)
+        return result
+    }
+
+    /// Flattens and strokes one shape. Pure, so a background refine can call it.
+    static func tessellate(_ shape: VectorShape, tolerance: Double) -> Tessellation {
         let poly = shape.path.flattened(tolerance: tolerance)
         var fan: [Float] = []
         if shape.path.closed, poly.count >= 3 {
@@ -426,7 +463,6 @@ public struct ArtBuilder: Sendable {
         }
         let result = Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: Rect(points: poly),
                                   outline: outlineFloats, outlineBounds: Rect(points: outline))
-        cache[shape.id] = result
         return result
     }
 

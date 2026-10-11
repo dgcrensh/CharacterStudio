@@ -117,6 +117,29 @@ final class TessellatorTests: XCTestCase {
         XCTAssertEqual(out[6], 3)
     }
 
+    /// The flag float says whether the radius is in screen points (the overlay) or world
+    /// units (ink). The live stroke's widths are ink widths, so it leaves the flag clear.
+    func testScreenSpaceFlag() {
+        let n = CapsuleTessellator.floatsPerVertex
+        var world: [Float] = []
+        CapsuleTessellator.append(points: [.zero, Vec2(10, 0)], width: 6, color: .black, to: &world)
+        var screen: [Float] = []
+        CapsuleTessellator.append(points: [.zero, Vec2(10, 0)], width: 6, color: .black, screenSpace: true, to: &screen)
+        XCTAssertEqual(world.count, screen.count)
+        for v in stride(from: 0, to: world.count, by: n) {
+            XCTAssertEqual(world[v + 7], 0)
+            XCTAssertEqual(screen[v + 7], 1)
+            XCTAssertEqual(screen[v + 6], 3, "the radius is written as given")
+        }
+        var stroke = InkStroke(id: 1, start: .zero, brush: Brush(width: 4, color: .black))
+        stroke.append(Vec2(5, 5), minSpacing: 0)
+        stroke.append(Vec2(10, 0), minSpacing: 0)
+        var tessellator = LiveStrokeTessellator()
+        let live = tessellator.update(for: stroke) + tessellator.committed + CapsuleTessellator.vertices(for: stroke)
+        XCTAssertFalse(live.isEmpty)
+        XCTAssertTrue(stride(from: 7, to: live.count, by: n).allSatisfy { live[$0] == 0 })
+    }
+
     func testColorIsPremultiplied() {
         var out: [Float] = []
         CapsuleTessellator.append(points: [.zero], width: 1, color: RGBAColor(r: 1, g: 0.5, b: 0, a: 0.5), to: &out)

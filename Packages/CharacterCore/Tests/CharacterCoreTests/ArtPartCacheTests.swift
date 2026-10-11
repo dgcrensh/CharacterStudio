@@ -201,6 +201,36 @@ final class ArtPartCacheTests: XCTestCase {
         XCTAssertEqual(assertWarmEqualsCold(from: base, to: base, fine).rebuilt, base.drawStack.count)
     }
 
+    /// A part built while a refine is under way holds shapes at the old tolerance. Once
+    /// the refined shapes are merged it must be rebuilt, not reused, even though its key
+    /// (and so the tolerance it was built for) is unchanged; after that it is reused.
+    func testAPartBuiltDuringARefineIsRebuiltOnceRefined() {
+        var warm = ArtBuilder()
+        _ = warm.build(base, isolatedPart: nil, tolerance: 0.5)
+        let tessellated = warm.tessellationCount
+        _ = warm.build(base, isolatedPart: nil, tolerance: 0.25, reusingOtherTolerances: true)
+        XCTAssertEqual(warm.tessellationCount, tessellated, "nothing is flattened again while the refine runs")
+
+        let shapes = base.parts.flatMap(\.shapes)
+        guard let refined = TessellationCache.tessellate(shapes, tolerance: 0.25, isCancelled: { false }) else {
+            return XCTFail("not cancelled")
+        }
+        _ = warm.tessellations.merge(refined, for: base)
+        let builds = warm.partBuilds
+        let after = warm.build(base, isolatedPart: nil, tolerance: 0.25, reusingOtherTolerances: true)
+        XCTAssertEqual(warm.partBuilds - builds, base.drawStack.count, "every mixed part is rebuilt")
+        XCTAssertEqual(warm.tessellationCount, tessellated, "from the merged tessellations")
+
+        var cold = ArtBuilder()
+        let coldBatch = cold.build(base, isolatedPart: nil, tolerance: 0.25)
+        XCTAssertEqual(after.vertices, coldBatch.vertices)
+        XCTAssertEqual(after.steps, coldBatch.steps)
+
+        let rebuilt = warm.partBuilds
+        _ = warm.build(base, isolatedPart: nil, tolerance: 0.25)
+        XCTAssertEqual(warm.partBuilds, rebuilt, "exact parts are reused")
+    }
+
     func testHiddenPartsAndShapes() {
         var hidden = base
         hidden.parts[2].isHidden = true
