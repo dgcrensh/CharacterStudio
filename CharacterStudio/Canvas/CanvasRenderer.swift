@@ -97,6 +97,7 @@ final class CanvasRenderer {
     private var artRevision = -1
     private var artTolerance = 0.0
     private var artIsolation: Int?
+    private var artGroupIsolation: Int?
     private var artGhost: Set<Int>?
     /// True when the cached art was built from the wiggle preview's moving picture.
     private var artWiggled = false
@@ -285,14 +286,17 @@ final class CanvasRenderer {
         let wiggling = editor.wigglePart != nil
         let ghost = editor.ghostFocus
         guard wiggling || artWiggled || editor.revision != artRevision || tolerance != artTolerance ||
-            editor.isolatedPart != artIsolation || ghost != artGhost else { return }
+            editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
+        else { return }
         artRevision = editor.revision
         artTolerance = tolerance
         artIsolation = editor.isolatedPart
+        artGroupIsolation = editor.isolatedGroup
         artGhost = ghost
         artWiggled = wiggling
         let drawing = wiggling ? editor.displayDrawing(at: time) : editor.drawing
-        let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, tolerance: tolerance, ghostFocus: ghost)
+        let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
+                                     tolerance: tolerance, ghostFocus: ghost)
         artSteps = batch.steps
         artBuffer = makeBuffer(batch.vertices)
     }

@@ -199,7 +199,18 @@ public enum CharacterFormat {
             (key: "pivot", value: vec(part.pivot)),
         ]
         members += editorHints(hidden: part.isHidden, locked: part.isLocked)
-        members.append((key: "shapes", value: .array(part.shapes.map { shape($0, globals: globals) })))
+        // Groups are numbered from 1 within the attachment, bottom to top, and written
+        // only when the part has some.
+        let runs = part.groupRuns
+        var groupNumbers: [Int: Int] = [:]
+        for (i, run) in runs.enumerated() { groupNumbers[run.group.id] = i + 1 }
+        if !runs.isEmpty {
+            let groups: [JSONValue] = runs.enumerated().map { i, run in
+                obj(["id": .number(Double(i + 1)), "name": .string(run.group.name)])
+            }
+            members.append((key: "groups", value: .array(groups)))
+        }
+        members.append((key: "shapes", value: .array(part.shapes.map { shape($0, globals: globals, groups: groupNumbers) })))
         return .object(members)
     }
 
@@ -213,8 +224,11 @@ public enum CharacterFormat {
 
     /// Keys beyond 0.1's are written only when they differ from their defaults, so a
     /// shape that uses none of them is written as before.
-    private static func shape(_ shape: VectorShape, globals: [Int: String]) -> JSONValue {
+    private static func shape(_ shape: VectorShape, globals: [Int: String], groups: [Int: Int]) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [(key: "closed", value: .bool(shape.path.closed))]
+        if let number = shape.group.flatMap({ groups[$0] }) {
+            members.append((key: "group", value: .number(Double(number))))
+        }
         if let fill = shape.fill {
             members.append((key: "fill", value: .string(fill.hexString)))
             if let name = shape.fillGlobal.flatMap({ globals[$0] }) {
@@ -358,8 +372,22 @@ public enum CharacterFormat {
             if let pivot = try node.field("pivot")?.vec2() { part.pivot = pivot }
             part.isHidden = try node.field("hidden")?.bool() ?? false
             part.isLocked = try node.field("locked")?.bool() ?? false
+            // Group ids in the file are local to the attachment.
+            var groups: [Int: Int] = [:]
+            for groupNode in try node.field("groups")?.array() ?? [] {
+                let number = try groupNode.require("id").integer()
+                guard groups[number] == nil else {
+                    throw CharacterFileError.invalid(path: groupNode.path + ".id", problem: "repeats group \(number)")
+                }
+                let group = ShapeGroup(id: drawing.makeID(), name: try groupNode.field("name")?.string() ?? "Group")
+                groups[number] = group.id
+                part.groups.append(group)
+            }
             for shapeNode in try node.field("shapes")?.array() ?? [] {
-                part.shapes.append(try shape(shapeNode, id: drawing.makeID(), globals: globals))
+                var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals)
+                // An unknown group leaves the shape ungrouped.
+                decoded.group = try shapeNode.field("group").flatMap { groups[try $0.integer()] }
+                part.shapes.append(decoded)
             }
             // Attachments are in their bone's space; the editor works in world space.
             let boneName = slot.bone ?? rootBone
@@ -383,6 +411,8 @@ public enum CharacterFormat {
         for p in drawing.parts.indices {
             drawing.parts[p].bone = partBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
         }
+        // A group whose shapes aren't together is read as one group per run; unused groups go.
+        if !drawing.groupsAreValid { drawing.repairGroups() }
 
         var files: [Int: String] = [:]
         for node in try root.field("references")?.array() ?? [] {
@@ -630,6 +660,11 @@ private struct Node {
 
     func number() throws -> Double {
         guard case .number(let n) = value, n.isFinite else { throw fail("is not a number") }
+        return n
+    }
+
+    func integer() throws -> Int {
+        guard let n = Int(exactly: try number()) else { throw fail("is not a whole number") }
         return n
     }
 

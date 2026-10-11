@@ -52,9 +52,14 @@ struct EditorCommands: Commands {
             Button("Unlock All") { store?.unlockAll() }
                 .keyboardShortcut("2", modifiers: [.command, .option])
             Divider()
+            Button("Group") { store?.groupSelection() }
+                .keyboardShortcut("g")
+            Button("Ungroup") { store?.ungroupSelection() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            Divider()
             Button("Isolate Part") { store?.isolateSelection() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
-            Button("Exit Isolation") { store?.exitIsolation() }
+            Button("Exit Isolation") { store?.stepOutOfIsolation() }
                 .keyboardShortcut(.escape, modifiers: [])
             Divider()
             Button("Nudge Left") { store?.nudge(-1, 0) }

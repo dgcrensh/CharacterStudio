@@ -22,6 +22,8 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     /// neither a hidden nor a locked shape can be tapped, selected or erased.
     public var isHidden: Bool
     public var isLocked: Bool
+    /// The group (a `ShapeGroup` id in the same part) this shape belongs to, if any.
+    public var group: Int?
 
     public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -96,6 +98,19 @@ public func windingNumber(of p: Vec2, polygon: [Vec2]) -> Int {
     return wn
 }
 
+/// A named set of shapes inside one part, such as an eye's white, iris and highlight.
+/// They select, hide and arrange together. Shapes point at their group with
+/// `VectorShape.group`, and a group's shapes are always next to each other in the part.
+public struct ShapeGroup: Hashable, Sendable, Codable, Identifiable {
+    public var id: Int
+    public var name: String
+
+    public init(id: Int, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 /// A body part: a group of shapes that will later bind to a bone.
 public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var id: Int
@@ -108,6 +123,8 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// Editor hints, saved in the file, that apply to every shape in the part.
     public var isHidden: Bool
     public var isLocked: Bool
+    /// The part's groups of shapes, in no particular order (the shapes keep the order).
+    public var groups: [ShapeGroup] = []
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -127,16 +144,46 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public func isEditable(_ index: Int) -> Bool { isShown(index) && !isLocked && !shapes[index].isLocked }
 
     /// The index of the shape that clipped shape `index` draws inside: the nearest
-    /// unclipped shape below it. Nil for an unclipped shape, or a clipped one with
-    /// nothing below it (which draws unclipped).
+    /// unclipped shape below it, without leaving the shape's group. Nil for an
+    /// unclipped shape, or a clipped one with nothing below it (which draws unclipped).
     public func clipBase(of index: Int) -> Int? {
         guard shapes[index].isClipped else { return nil }
-        return shapes[..<index].lastIndex { !$0.isClipped }
+        var floor = 0
+        if let group = shapes[index].group, let first = shapes.firstIndex(where: { $0.group == group }) {
+            floor = first
+        }
+        return shapes[floor..<index].lastIndex { !$0.isClipped }
     }
 
     /// True when shape `index` is the base of the clipped shapes right above it.
     public func isClipBase(_ index: Int) -> Bool {
-        !shapes[index].isClipped && index + 1 < shapes.count && shapes[index + 1].isClipped
+        index + 1 < shapes.count && clipBase(of: index + 1) == index
+    }
+
+    public func group(_ id: Int) -> ShapeGroup? { groups.first { $0.id == id } }
+
+    /// The indices of group `id`'s shapes, bottom to top.
+    public func members(ofGroup id: Int) -> [Int] {
+        shapes.indices.filter { shapes[$0].group == id }
+    }
+
+    /// The groups in stacking order (by their bottom shape), each with its shape indices.
+    public var groupRuns: [(group: ShapeGroup, indices: [Int])] {
+        var seen: [Int] = []
+        for shape in shapes { if let g = shape.group, !seen.contains(g) { seen.append(g) } }
+        return seen.compactMap { id in group(id).map { ($0, members(ofGroup: id)) } }
+    }
+
+    /// `base`, or `base 2`, `base 3`... so no other group in the part has the same name.
+    public func uniqueGroupName(_ base: String, excluding id: Int? = nil) -> String {
+        let taken = Set(groups.filter { $0.id != id }.map(\.name))
+        var name = base
+        var n = 2
+        while taken.contains(name) {
+            name = "\(base) \(n)"
+            n += 1
+        }
+        return name
     }
 
     /// True when `p` is on shape `index` where it shows: a clipped shape only shows
@@ -344,22 +391,25 @@ public struct Drawing: Hashable, Sendable, Codable {
         return name
     }
 
-    /// The topmost editable shape under `p`, only in part `within` when it is given.
-    /// Hidden and locked shapes, and reference images, are never hit.
-    public func hitTest(_ p: Vec2, tolerance: Double, within: Int? = nil) -> (part: Int, shape: Int)? {
+    /// The topmost editable shape under `p`, only in part `within` when it is given,
+    /// and only in its group `group` when that is given too. Hidden and locked shapes,
+    /// and reference images, are never hit.
+    public func hitTest(_ p: Vec2, tolerance: Double, within: Int? = nil, group: Int? = nil) -> (part: Int, shape: Int)? {
         for part in parts.reversed() where within == nil || part.id == within {
-            for i in part.shapes.indices.reversed() where part.isEditable(i) && part.shape(i, contains: p, tolerance: tolerance) {
+            for i in part.shapes.indices.reversed() where (group == nil || part.shapes[i].group == group) &&
+                part.isEditable(i) && part.shape(i, contains: p, tolerance: tolerance) {
                 return (part.id, part.shapes[i].id)
             }
         }
         return nil
     }
 
-    /// Every editable shape, in draw order, only in part `within` when it is given.
-    public func editableShapeRefs(within: Int? = nil) -> [ShapeRef] {
+    /// Every editable shape, in draw order, only in part `within` when it is given,
+    /// and only in its group `group` when that is given too.
+    public func editableShapeRefs(within: Int? = nil, group: Int? = nil) -> [ShapeRef] {
         var out: [ShapeRef] = []
         for part in parts where within == nil || part.id == within {
-            for i in part.shapes.indices where part.isEditable(i) {
+            for i in part.shapes.indices where (group == nil || part.shapes[i].group == group) && part.isEditable(i) {
                 out.append(ShapeRef(part: part.id, shape: part.shapes[i].id))
             }
         }

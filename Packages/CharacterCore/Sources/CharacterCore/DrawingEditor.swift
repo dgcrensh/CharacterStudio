@@ -131,6 +131,7 @@ public struct DrawingEditor: Sendable {
             revision &+= 1
             // Isolation ends when its part goes (deleted, erased, merged or undone away).
             if let id = isolatedPart, drawing.partIndex(id) == nil { isolatedPart = nil }
+            if let id = isolatedGroup, isolatedPart.flatMap({ drawing.part($0)?.group(id) }) == nil { isolatedGroup = nil }
             if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
             if let id = wigglePart, drawing.partIndex(id) == nil { wigglePart = nil }
         }
@@ -190,6 +191,9 @@ public struct DrawingEditor: Sendable {
     /// The part being edited on its own: everything else is dimmed and can't be touched,
     /// and new shapes join this part.
     public internal(set) var isolatedPart: Int?
+    /// The group of `isolatedPart` being edited on its own, one level further in: only
+    /// its shapes can be picked, and new shapes join it.
+    public internal(set) var isolatedGroup: Int?
     /// Fill and outline colors used lately, newest first, for the squeeze palette.
     public internal(set) var recentColors: [RGBAColor] = []
     /// Set by a run of color changes from one control, so a picker drag adds one recent color.
@@ -383,7 +387,7 @@ public struct DrawingEditor: Sendable {
         switch tool {
         case .select, .directSelect, .eraser:
             let reach = (tool == .eraser ? EditorMetrics.eraserRadius : EditorMetrics.shapeHit) / hoverZoom
-            return drawing.hitTest(p, tolerance: reach, within: isolatedPart).map { ShapeRef(part: $0.part, shape: $0.shape) }
+            return drawing.hitTest(p, tolerance: reach, within: isolatedPart, group: isolatedGroup).map { ShapeRef(part: $0.part, shape: $0.shape) }
         case .scissors:
             return cutTarget(at: p, zoom: hoverZoom)?.ref
         case .pencil, .pen, .shape, .bone:
@@ -407,7 +411,7 @@ public struct DrawingEditor: Sendable {
     /// The outline nearest `p` that the scissors can cut, within reach.
     func cutTarget(at p: Vec2, zoom: Double) -> (ref: ShapeRef, segment: Int, t: Double)? {
         var best: (ref: ShapeRef, segment: Int, t: Double, distance: Double)?
-        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
             guard let shape = drawing.shape(ref), let near = shape.path.nearestSegment(to: p),
                   near.distance <= EditorMetrics.curveHit / zoom + (shape.stroke?.width ?? 0) / 2,
                   near.distance < (best?.distance ?? .infinity) else { continue }
@@ -600,7 +604,7 @@ public struct DrawingEditor: Sendable {
                 return .pending(.selectionBody, start: p)
             }
         }
-        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart) {
+        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart, group: isolatedGroup) {
             return .pending(.shape(ShapeRef(part: hit.part, shape: hit.shape)), start: p)
         }
         return .pending(.empty, start: p)
@@ -612,41 +616,78 @@ public struct DrawingEditor: Sendable {
             p.distance(to: last.point) <= EditorMetrics.doubleTapDistance / gestureZoom
     }
 
-    /// With the select tool, double-tapping a part isolates it, and double-tapping
-    /// empty canvas leaves isolation.
+    /// With the select tool, double-tapping goes one level in: into a grouped shape's
+    /// group, or else into the shape's part (isolating it). Double-tapping empty canvas
+    /// goes one level out.
     private mutating func doubleTap(at p: Vec2) {
         guard tool == .select else { return }
-        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart) {
-            if isolatedPart != hit.part { isolate(part: hit.part) }
+        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart, group: isolatedGroup) {
+            let ref = ShapeRef(part: hit.part, shape: hit.shape)
+            if let group = tapGroup(of: ref) {
+                isolate(group: group, inPart: hit.part)
+                selection = .shape(part: hit.part, shape: hit.shape)
+            } else if isolatedPart != hit.part {
+                isolate(part: hit.part)
+            }
         } else if isolatedPart != nil {
-            exitIsolation()
+            stepOutOfIsolation()
         }
     }
 
-    /// Tapping a shape selects its part; tapping again inside the selected part
-    /// selects the single shape. Tapping empty canvas clears the selection. With
-    /// `addToSelection`, tapping toggles single shapes in and out of the selection.
+    /// The group a select-tool tap on `ref` picks: the shape's group, unless that is the
+    /// group being edited on its own (then the tap reaches the shape).
+    func tapGroup(of ref: ShapeRef) -> Int? {
+        guard let group = drawing.shape(ref)?.group, group != isolatedGroup else { return nil }
+        return group
+    }
+
+    /// What a select-tool tap on `ref` picks once its part is selected: the shape's whole
+    /// group, or the shape itself.
+    func tapTarget(_ ref: ShapeRef) -> Selection {
+        guard let group = tapGroup(of: ref), let p = drawing.partIndex(ref.part) else {
+            return .shape(part: ref.part, shape: ref.shape)
+        }
+        let part = drawing.parts[p]
+        let refs = part.members(ofGroup: group).filter(part.isEditable).map { ShapeRef(part: part.id, shape: part.shapes[$0].id) }
+        return .covering(Set(refs).union([ref]))
+    }
+
+    /// True when the selection is part `id`, or a shape or one group inside it, so the
+    /// next tap there goes one level down. Inside an isolated group taps always reach shapes.
+    private func selectionIsInside(part id: Int) -> Bool {
+        if isolatedGroup != nil { return true }
+        return switch selection {
+        case .part(let p), .shape(let p, _): p == id
+        case .shapes(let refs): refs.allSatisfy { $0.part == id } && drawing.selectedGroup(selection) != nil
+        case .none, .reference: false
+        }
+    }
+
+    /// Tapping a shape selects its part; tapping again inside the selected part selects
+    /// the shape's group, or the single shape when it has none. Tapping empty canvas
+    /// clears the selection. With `addToSelection`, tapping toggles the shape (or its
+    /// whole group) in and out of the selection.
     private mutating func tapSelect(at p: Vec2) {
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart) else {
+        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart, group: isolatedGroup) else {
             if !addToSelection { selection = .none }
             return
         }
+        let ref = ShapeRef(part: hit.part, shape: hit.shape)
         if addToSelection {
-            toggleInSelection(ShapeRef(part: hit.part, shape: hit.shape))
+            toggleInSelection(Set(drawing.shapeRefs(in: tapTarget(ref))))
             return
         }
-        switch selection {
-        case .part(let id) where id == hit.part,
-             .shape(let id, _) where id == hit.part:
-            selection = .shape(part: hit.part, shape: hit.shape)
-        default:
-            selection = .part(hit.part)
-        }
+        selection = selectionIsInside(part: hit.part) ? tapTarget(ref) : .part(hit.part)
     }
 
     private mutating func toggleInSelection(_ ref: ShapeRef) {
+        toggleInSelection([ref])
+    }
+
+    /// Adds `toggled` to the selection, or removes them when they are all selected.
+    private mutating func toggleInSelection(_ toggled: Set<ShapeRef>) {
         var refs = Set(drawing.shapeRefs(in: selection))
-        if refs.contains(ref) { refs.remove(ref) } else { refs.insert(ref) }
+        if toggled.isSubset(of: refs) { refs.subtract(toggled) } else { refs.formUnion(toggled) }
         selection = .covering(refs)
     }
 
@@ -661,11 +702,13 @@ public struct DrawingEditor: Sendable {
             }
         }
         var refs: Set<ShapeRef> = []
-        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
             if let shape = drawing.shape(ref), marqueeTouches(shape, rect) { refs.insert(ref) }
         }
         if additive { refs.formUnion(baseShapes) }
         if tool == .select {
+            // A marquee touching a grouped shape takes its whole group.
+            for ref in refs { refs.formUnion(drawing.shapeRefs(in: tapTarget(ref))) }
             selection = promotedToPart(refs)
         } else {
             selection = Selection.covering(refs)
@@ -713,7 +756,7 @@ public struct DrawingEditor: Sendable {
         if let picked = pickAnchorOrCurve(at: p, among: refs, px: px) {
             return .pending(picked, start: p)
         }
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart) else {
+        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart, group: isolatedGroup) else {
             return .pending(.empty, start: p)
         }
         let ref = ShapeRef(part: hit.part, shape: hit.shape)
@@ -780,7 +823,7 @@ public struct DrawingEditor: Sendable {
     /// The nearest end of any open path other than `excluded`.
     private func openEndpoint(near p: Vec2, reach: Double, excluding excluded: ShapeRef?) -> (ref: ShapeRef, end: PathEnd)? {
         var best: (ref: ShapeRef, end: PathEnd, distance: Double)?
-        for ref in drawing.editableShapeRefs(within: isolatedPart) where ref != excluded {
+        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) where ref != excluded {
             guard let shape = drawing.shape(ref), !shape.path.closed, !shape.path.points.isEmpty else { continue }
             for end in [PathEnd.start, .end] {
                 guard let position = shape.path.endPoint(end) else { continue }
@@ -825,7 +868,7 @@ public struct DrawingEditor: Sendable {
         // Outlined while open so the path is visible; closing may drop the outline.
         shape.stroke = style.makeStroke()
         if autoJoinSelectedPart || isolatedPart != nil, let target = selectedPartID, let p = drawing.partIndex(target) {
-            drawing.parts[p].shapes.append(shape)
+            addToActiveLayer(&shape, part: p)
             penPath = PenPath(part: target, shape: shape.id, fromStart: false, createdPart: false)
             return ShapeRef(part: target, shape: shape.id)
         }
@@ -908,7 +951,7 @@ public struct DrawingEditor: Sendable {
             guard tool == .select || tool == .directSelect else { return .idle }
             if !drawing.shapeRefs(in: selection).contains(ref) {
                 if tool == .select {
-                    selection = .part(ref.part)
+                    selection = selectionIsInside(part: ref.part) ? tapTarget(ref) : .part(ref.part)
                 } else {
                     selection = .shape(part: ref.part, shape: ref.shape)
                 }
@@ -1155,7 +1198,8 @@ public struct DrawingEditor: Sendable {
     @discardableResult
     mutating func insertNewShape(_ shape: VectorShape, joinNeedsOverlap: Bool) -> ShapeRef {
         if let target = isolatedPart, let p = drawing.partIndex(target) {
-            drawing.parts[p].shapes.append(shape)
+            var shape = shape
+            addToActiveLayer(&shape, part: p)
             return ShapeRef(part: target, shape: shape.id)
         }
         if autoJoinSelectedPart, let target = selectedPartID, let p = drawing.partIndex(target),
@@ -1198,7 +1242,7 @@ public struct DrawingEditor: Sendable {
         let radius = EditorMetrics.eraserRadius / gestureZoom
         let steps = max(1, Int((a.distance(to: b) / (radius / 2)).rounded(.up)))
         var doomed: [ShapeRef] = []
-        for ref in drawing.editableShapeRefs(within: isolatedPart) {
+        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
             guard let shape = drawing.shape(ref) else { continue }
             for i in 0...steps where shape.contains(Vec2.lerp(a, b, Double(i) / Double(steps)), tolerance: radius) {
                 doomed.append(ref)
@@ -1396,7 +1440,8 @@ public struct DrawingEditor: Sendable {
     public mutating func selectPart(_ id: Int) {
         guard let i = drawing.partIndex(id), !drawing.parts[i].isHidden, !drawing.parts[i].isLocked else { return }
         cancelGesture()
-        if let isolated = isolatedPart, isolated != id { isolatedPart = nil }
+        if let isolated = isolatedPart, isolated != id { exitIsolation() }
+        isolatedGroup = nil
         selection = .part(id)
     }
 
@@ -1479,6 +1524,8 @@ public struct DrawingEditor: Sendable {
     mutating func commit(from before: Drawing, key: String? = nil) {
         // Any other edit ends a run of color changes.
         if key == nil { recentColorSource = nil }
+        // Groups stay whole: no empty groups, and each one's shapes together.
+        if !drawing.groupsAreValid { drawing.repairGroups() }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }

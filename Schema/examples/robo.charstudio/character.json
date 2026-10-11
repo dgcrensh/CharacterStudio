@@ -19,9 +19,13 @@
         "Torso": {
           "type": "vector",
           "pivot": [0, -40],
+          "groups": [
+            { "id": 1, "name": "Shell" }
+          ],
           "shapes": [
             {
               "closed": true,
+              "group": 1,
               "fill": "#5A8DEEFF",
               "fillGlobal": "Body",
               "gradient": {
@@ -44,6 +48,7 @@
             },
             {
               "closed": true,
+              "group": 1,
               "fill": "#1A2A5040",
               "clipped": true,
               "points": [

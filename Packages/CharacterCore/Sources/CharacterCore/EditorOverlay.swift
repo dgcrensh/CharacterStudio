@@ -117,7 +117,8 @@ public enum EditorOverlay {
             for part in (art ?? drawing).parts {
                 let away = editor.isolatedPart.map { $0 != part.id } ?? false
                 for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
-                    let dimmed = away || (focus.map { !$0.contains(shape.id) } ?? false)
+                    let outsideGroup = !away && editor.isolatedGroup.map { $0 != shape.group } ?? false
+                    let dimmed = away || outsideGroup || (focus.map { !$0.contains(shape.id) } ?? false)
                     let poly = shape.path.flattened(tolerance: 0.5 * px)
                     guard !poly.isEmpty else { continue }
                     CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,

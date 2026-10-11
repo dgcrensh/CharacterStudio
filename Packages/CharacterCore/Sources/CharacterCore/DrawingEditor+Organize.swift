@@ -20,11 +20,41 @@ extension DrawingEditor {
         cancelGesture()
         if let pen = penPath, pen.part != id { penFinish() }
         isolatedPart = id
+        isolatedGroup = nil
         if drawing.shapeRefs(in: selection).contains(where: { $0.part != id }) { selection = .none }
     }
 
+    /// Edits group `id` of part `part` on its own, one level in from isolating the part:
+    /// only the group's shapes can be picked (one at a time), and new shapes join the
+    /// group, until `stepOutOfIsolation`.
+    public mutating func isolate(group id: Int, inPart part: Int) {
+        guard let p = drawing.partIndex(part), drawing.parts[p].group(id) != nil else { return }
+        isolate(part: part)
+        isolatedGroup = id
+        let members = Set(drawing.parts[p].members(ofGroup: id).map { drawing.parts[p].shapes[$0].id })
+        if drawing.shapeRefs(in: selection).contains(where: { !members.contains($0.shape) }) { selection = .none }
+    }
+
+    /// Ends isolation altogether.
     public mutating func exitIsolation() {
         isolatedPart = nil
+        isolatedGroup = nil
+    }
+
+    /// Goes one level out (Escape): from a group to its part, selecting the group; from
+    /// an isolated part to the whole character; otherwise clears the selection.
+    public mutating func stepOutOfIsolation() {
+        cancelGesture()
+        if let group = isolatedGroup, let part = isolatedPart, let p = drawing.partIndex(part) {
+            isolatedGroup = nil
+            let refs = drawing.parts[p].members(ofGroup: group).filter(drawing.parts[p].isEditable)
+                .map { ShapeRef(part: part, shape: drawing.parts[p].shapes[$0].id) }
+            selection = .covering(Set(refs))
+        } else if isolatedPart != nil {
+            exitIsolation()
+        } else {
+            selection = .none
+        }
     }
 
     // MARK: Hide and lock
@@ -107,7 +137,7 @@ extension DrawingEditor {
 
     /// Isolation ends when its part is hidden.
     private mutating func dropUneditableIsolation() {
-        if let id = isolatedPart, let i = drawing.partIndex(id), drawing.parts[i].isHidden { isolatedPart = nil }
+        if let id = isolatedPart, let i = drawing.partIndex(id), drawing.parts[i].isHidden { exitIsolation() }
     }
 
     // MARK: Arrange
@@ -116,6 +146,9 @@ extension DrawingEditor {
     public var canArrange: Bool { !drawing.shapeIndices(in: selection).isEmpty }
 
     /// Moves a selected part among the parts, or selected shapes within their own parts.
+    /// A group moves as one unit among its part's shapes (with any of its shapes
+    /// selected); shapes picked inside one group, or inside the isolated group, move
+    /// among that group's shapes.
     public mutating func arrange(_ move: ArrangeMove) {
         guard canArrange else { return }
         cancelGesture()
@@ -126,12 +159,37 @@ extension DrawingEditor {
             let refs = Set(drawing.shapeRefs(in: selection))
             for p in drawing.parts.indices {
                 let partID = drawing.parts[p].id
-                drawing.parts[p].shapes = Self.arranged(drawing.parts[p].shapes, move) {
+                drawing.parts[p].shapes = arrangedShapes(drawing.parts[p], move) {
                     refs.contains(ShapeRef(part: partID, shape: $0.id))
                 }
             }
         }
         commit(from: before)
+    }
+
+    /// `part`'s shapes with the selected ones arranged, keeping each group together.
+    private func arrangedShapes(_ part: Part, _ move: ArrangeMove, isSelected: (VectorShape) -> Bool) -> [VectorShape] {
+        let selected = part.shapes.filter(isSelected)
+        guard !selected.isEmpty else { return part.shapes }
+        // Inside one group: arrange among its shapes only.
+        if let group = selected[0].group, selected.allSatisfy({ $0.group == group }) {
+            let members = part.members(ofGroup: group)
+            if isolatedGroup == group || members.count > selected.count, let first = members.first, let last = members.last {
+                var shapes = part.shapes
+                shapes.replaceSubrange(first...last, with: Self.arranged(Array(shapes[first...last]), move, isSelected: isSelected))
+                return shapes
+            }
+        }
+        // Otherwise each group is one unit, selected when any of its shapes is.
+        var units: [[VectorShape]] = []
+        for shape in part.shapes {
+            if let group = shape.group, units.last?.last?.group == group {
+                units[units.count - 1].append(shape)
+            } else {
+                units.append([shape])
+            }
+        }
+        return Self.arranged(units, move) { $0.contains(where: isSelected) }.flatMap { $0 }
     }
 
     /// `items` (back to front) with the selected ones moved; the rest keep their order.
@@ -181,6 +239,7 @@ extension DrawingEditor {
         let wasIsolated = isolatedPart == id
         let target = drawing.parts[i - 1].id
         drawing.parts[i - 1].shapes += drawing.parts[i].shapes
+        drawing.parts[i - 1].groups += drawing.parts[i].groups
         drawing.parts.remove(at: i)
         if wasIsolated { isolatedPart = target }
         selection = .part(target)
@@ -204,17 +263,21 @@ extension DrawingEditor {
         let topIndex = drawing.shapeIndices(in: selection).map(\.0).max() ?? 0
         var kept: [Part] = []
         var moved: [VectorShape] = []
+        var movedGroups: [ShapeGroup] = []
         var insertAt = 0
         for (i, part) in drawing.parts.enumerated() {
             var remaining = part
             remaining.shapes = part.shapes.filter { !refs.contains(ShapeRef(part: part.id, shape: $0.id)) }
-            moved += part.shapes.filter { refs.contains(ShapeRef(part: part.id, shape: $0.id)) }
+            let taken = Self.takeGroups(from: part, moving: part.shapes.filter { refs.contains(ShapeRef(part: part.id, shape: $0.id)) })
+            moved += taken.shapes
+            movedGroups += taken.groups
             if !remaining.shapes.isEmpty { kept.append(remaining) }
             if i == topIndex { insertAt = kept.count }
         }
         drawing.parts = kept
         let id = drawing.makeID()
         var part = Part(id: id, name: drawing.uniquePartName("Part \(kept.count + 1)"), shapes: moved)
+        part.groups = movedGroups
         part.pivot = part.bounds.center
         drawing.parts.insert(part, at: insertAt)
         selection = .part(id)
@@ -231,18 +294,42 @@ extension DrawingEditor {
         let before = drawing
         let wasIsolated = isolatedPart != nil
         var moved: [VectorShape] = []
+        var movedGroups: [ShapeGroup] = []
         for p in drawing.parts.indices where drawing.parts[p].id != id {
             let partID = drawing.parts[p].id
-            moved += drawing.parts[p].shapes.filter { refs.contains(ShapeRef(part: partID, shape: $0.id)) }
+            let taken = Self.takeGroups(from: drawing.parts[p],
+                                        moving: drawing.parts[p].shapes.filter { refs.contains(ShapeRef(part: partID, shape: $0.id)) })
+            moved += taken.shapes
+            movedGroups += taken.groups
             drawing.parts[p].shapes.removeAll { refs.contains(ShapeRef(part: partID, shape: $0.id)) }
         }
         drawing.parts.removeAll { $0.shapes.isEmpty && $0.id != id }
         guard let target = drawing.partIndex(id) else { return }
         drawing.parts[target].shapes += moved
+        drawing.parts[target].groups += movedGroups
         // Moving an isolated part's art into another part carries isolation along.
         if wasIsolated, isolatedPart == nil { isolatedPart = id }
         selection = .covering(Set(moved.map { ShapeRef(part: id, shape: $0.id) }))
         commit(from: before)
+    }
+
+    /// `moving` (shapes leaving `part`) ready for another part: groups that leave whole
+    /// go with them; shapes leaving part of a group leave the group. Groups left empty
+    /// behind are tidied by `commit`.
+    static func takeGroups(from part: Part, moving: [VectorShape]) -> (shapes: [VectorShape], groups: [ShapeGroup]) {
+        let ids = Set(moving.map(\.id))
+        var whole: [ShapeGroup] = []
+        for group in part.groups where part.shapes.contains(where: { $0.group == group.id }) &&
+            part.shapes.allSatisfy({ $0.group != group.id || ids.contains($0.id) }) {
+            whole.append(group)
+        }
+        let kept = Set(whole.map(\.id))
+        let shapes = moving.map { shape in
+            var copy = shape
+            if let g = copy.group, !kept.contains(g) { copy.group = nil }
+            return copy
+        }
+        return (shapes, whole)
     }
 
     // MARK: Duplicate
@@ -269,6 +356,7 @@ extension DrawingEditor {
                 copy.shapes[s].id = drawing.makeID()
                 copy.shapes[s].apply(shift)
             }
+            drawing.renewGroups(of: &copy)
             copy.pivot = shift.apply(copy.pivot)
             drawing.parts.insert(copy, at: i + 1)
             selection = .part(copy.id)
@@ -279,14 +367,30 @@ extension DrawingEditor {
         var copies: Set<ShapeRef> = []
         for p in Set(targets.map(\.0)) {
             let indices = targets.filter { $0.0 == p }.map(\.1).sorted()
+            let part = drawing.parts[p]
+            // Copies go above the topmost original, past the rest of its group.
             var insertAt = (indices.last ?? 0) + 1
+            if let group = part.shapes[insertAt - 1].group {
+                while insertAt < part.shapes.count, part.shapes[insertAt].group == group { insertAt += 1 }
+            }
+            // A wholly copied group is copied as a new group; a copy of part of a group
+            // stays in that group.
+            let selectedIDs = Set(indices.map { part.shapes[$0].id })
+            var fresh: [Int: Int] = [:]
+            for group in part.groups where part.shapes.contains(where: { $0.group == group.id }) &&
+                part.shapes.allSatisfy({ $0.group != group.id || selectedIDs.contains($0.id) }) {
+                let id = drawing.makeID()
+                fresh[group.id] = id
+                drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name))
+            }
             for s in indices {
-                var copy = drawing.parts[p].shapes[s]
+                var copy = part.shapes[s]
                 copy.id = drawing.makeID()
                 copy.apply(shift)
+                if let g = copy.group, let id = fresh[g] { copy.group = id }
                 drawing.parts[p].shapes.insert(copy, at: insertAt)
                 insertAt += 1
-                copies.insert(ShapeRef(part: drawing.parts[p].id, shape: copy.id))
+                copies.insert(ShapeRef(part: part.id, shape: copy.id))
             }
         }
         let saved = style
@@ -353,9 +457,19 @@ extension DrawingEditor {
         var refs: Set<ShapeRef> = []
         if let target = shapesOnly ? selectedPartID : isolatedPart, let p = drawing.partIndex(target) {
             for part in parts {
+                // Pasted groups come along as new groups of the target part.
+                var groups: [Int: Int] = [:]
+                if isolatedGroup == nil || isolatedPart != target {
+                    for group in part.groups {
+                        let id = drawing.makeID()
+                        groups[group.id] = id
+                        drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name))
+                    }
+                }
                 for shape in part.shapes {
-                    let copy = pastedCopy(of: shape, moved: shift, globals: globals)
-                    drawing.parts[p].shapes.append(copy)
+                    var copy = pastedCopy(of: shape, moved: shift, globals: globals)
+                    copy.group = copy.group.flatMap { groups[$0] }
+                    addToActiveLayer(&copy, part: p)
                     refs.insert(ShapeRef(part: target, shape: copy.id))
                 }
             }
@@ -365,6 +479,8 @@ extension DrawingEditor {
             for part in parts {
                 var copy = Part(id: drawing.makeID(), name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
                 for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift, globals: globals)) }
+                copy.groups = part.groups
+                drawing.renewGroups(of: &copy)
                 drawing.parts.append(copy)
                 added.append(copy.id)
                 for shape in copy.shapes { refs.insert(ShapeRef(part: copy.id, shape: shape.id)) }
