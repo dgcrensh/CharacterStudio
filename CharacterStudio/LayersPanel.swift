@@ -283,6 +283,12 @@ struct LayersPanel: View {
                     Label(group.name, systemImage: "square.on.square.squareshape.controlhandles")
                         .lineLimit(1)
                         .foregroundStyle(group.isHidden ? Color.secondary : Color.primary)
+                    if group.isClipped {
+                        Image(systemName: "arrow.turn.left.down")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Clipped to the shape below")
+                    }
                     Spacer()
                     Text(shapeCount(group.shapeCount))
                         .font(.footnote)
@@ -301,6 +307,10 @@ struct LayersPanel: View {
                 newName = group.name
                 renamingGroup = group
             }
+            Toggle(isOn: Binding(get: { group.isClipped }, set: { store.setGroupClipped(group.id, inPart: group.part, $0) })) {
+                Label("Clip to Shape Below", systemImage: "arrow.turn.left.down")
+            }
+            .disabled(!group.canClip && !group.isClipped)
         }
     }
 

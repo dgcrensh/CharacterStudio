@@ -407,7 +407,7 @@ extension DrawingEditor {
                 part.shapes.allSatisfy({ $0.group != group.id || selectedIDs.contains($0.id) }) {
                 let id = drawing.makeID()
                 fresh[group.id] = id
-                drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name))
+                drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name, isClipped: group.isClipped))
             }
             for s in indices {
                 var copy = part.shapes[s]
@@ -515,7 +515,7 @@ extension DrawingEditor {
                     for group in part.groups {
                         let id = drawing.makeID()
                         groups[group.id] = id
-                        drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name))
+                        drawing.parts[p].groups.append(ShapeGroup(id: id, name: group.name, isClipped: group.isClipped))
                     }
                 }
                 for shape in part.shapes {

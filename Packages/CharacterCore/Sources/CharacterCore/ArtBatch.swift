@@ -33,16 +33,19 @@ public struct StencilState: Hashable, Sendable {
 
 /// How the art uses the 8-bit stencil buffer:
 ///
-/// - bits 0-5: the fill's winding number while a fill is being drawn;
+/// - bits 0-4: the fill's winding number (modulo 32) while a fill is being drawn;
+/// - bit 5: the group mask, where a clipped group's base drew, while the group draws;
 /// - bit 6: "the outline covers this sample" while an outline is being drawn;
 /// - bit 7: the clip, where the current clip base drew.
 ///
-/// Every paint step leaves bits 0-6 clear again, so the next shape starts clean.
+/// Every paint step leaves bits 0-4 and 6 clear again, so the next shape starts clean,
+/// and the group mask is cleared when its group ends.
 public enum ArtStencil {
-    public static let windingBits: UInt8 = 0x3F
+    public static let windingBits: UInt8 = 0x1F
+    public static let maskBit: UInt8 = 0x20
     public static let outlineBit: UInt8 = 0x40
     public static let clipBit: UInt8 = 0x80
-    static let workBits: UInt8 = 0x7F
+    static let workBits: UInt8 = 0x5F
 
     /// Fan triangles add their winding into bits 0-5.
     public static let winding = StencilState(compare: .always, writeMask: windingBits,
@@ -51,8 +54,17 @@ public enum ArtStencil {
     public static let outline = StencilState(compare: .always, writeMask: outlineBit, pass: .replace)
     /// Clears the clip bit everywhere before a new clip base.
     public static let clearClip = StencilState(compare: .always, writeMask: clipBit, pass: .zero)
-    /// Clears bits 0-6 after a clip base's inside or outside outline.
+    /// Clears the winding and outline bits after a clip base's outline when it can leave
+    /// them set.
     public static let cleanUp = StencilState(compare: .always, writeMask: workBits, pass: .zero)
+    /// At the start of a clipped group: the group mask becomes the clip its base drew
+    /// (reference `clipBit | maskBit`), so clip bases inside the group can reuse the clip.
+    public static let copyClipToMask = StencilState(compare: .equal, readMask: clipBit, writeMask: maskBit,
+                                                    pass: .replace, fail: .zero)
+    /// At the end of a clipped group: the clip becomes the group's base again, for the
+    /// clipped shapes above the group, and the mask is cleared (reference `clipBit`).
+    public static let restoreClip = StencilState(compare: .notEqual, readMask: maskBit, writeMask: clipBit | maskBit,
+                                                 pass: .replace, fail: .zero)
 }
 
 /// How a shape takes part in clipping.
@@ -115,7 +127,9 @@ public struct ArtBatch: Hashable, Sendable {
 /// stroker's triangles, then paints the marked area once. Inside and outside outlines
 /// are stroked twice as wide and then kept only where the path's own winding is
 /// non-zero (inside) or zero (outside). A clip base also sets the clip bit where it
-/// paints; clipped shapes paint only where that bit is set.
+/// paints; clipped shapes paint only where that bit is set. A clipped group copies its
+/// base's clip into the mask bit as it starts, and its shapes paint only where that bit
+/// is set; clipped shapes inside it then clip to bases that only drew within the mask.
 public struct ArtBuilder: Sendable {
     struct Tessellation: Sendable {
         var shape: VectorShape
@@ -142,7 +156,7 @@ public struct ArtBuilder: Sendable {
                                ghostFocus: Set<Int>? = nil) -> ArtBatch {
         var batch = ArtBatch()
         var live: Set<Int> = []
-        var parts = drawing.parts
+        var parts = drawing.drawStack
         if let isolatedPart {
             parts = parts.filter { $0.id != isolatedPart } + parts.filter { $0.id == isolatedPart }
         }
@@ -164,14 +178,31 @@ public struct ArtBuilder: Sendable {
         return batch
     }
 
-    /// Adds the shapes at `indices` of `part`, leaving out clipped shapes whose base is
-    /// in `skippingBases` (drawn in another pass, so there is nothing to clip to here).
+    /// Adds the shapes at `indices` of `part`, leaving out clipped shapes and clipped
+    /// groups whose base is in `skippingBases` (drawn in another pass, so there is nothing
+    /// to clip to here). A clipped group whose base isn't in `indices` draws unclipped.
     private mutating func appendShapes(_ indices: [Int], of part: Part, skippingBases: Set<Int>, tolerance: Double,
                                        ghostFocus: Set<Int>?, to batch: inout ArtBatch) {
         let drawn = Set(indices)
+        // The clipped group whose mask is up.
+        var masking: Int?
         for index in indices {
             let shape = part.shapes[index]
             guard part.isShown(index) else { continue }
+            var mask = part.groupClipBase(of: index)
+            if let base = mask {
+                guard part.isShown(base), !skippingBases.contains(base) else { continue }
+                if !drawn.contains(base) { mask = nil }
+            }
+            let group = mask == nil ? nil : shape.group
+            if group != masking {
+                if masking != nil { batch.steps.append(.stencilView(state: ArtStencil.restoreClip, reference: ArtStencil.clipBit)) }
+                if group != nil {
+                    batch.steps.append(.stencilView(state: ArtStencil.copyClipToMask,
+                                                    reference: ArtStencil.clipBit | ArtStencil.maskBit))
+                }
+                masking = group
+            }
             let role: ClipRole
             if let base = part.clipBase(of: index) {
                 // Nothing to clip to when the base is hidden.
@@ -183,8 +214,10 @@ public struct ArtBuilder: Sendable {
             }
             let geometry = tessellation(of: shape, tolerance: tolerance)
             let fade = ghostFocus.map { $0.contains(shape.id) ? 1 : Self.ghostOpacity } ?? 1
-            append(shape, geometry, role: role, fade: fade, to: &batch)
+            // A clipped shape in the group needs no mask: its base only drew inside it.
+            append(shape, geometry, role: role, masked: mask != nil && role != .clipped, fade: fade, to: &batch)
         }
+        if masking != nil { batch.steps.append(.stencilView(state: ArtStencil.restoreClip, reference: ArtStencil.clipBit)) }
     }
 
     private mutating func tessellation(of shape: VectorShape, tolerance: Double) -> Tessellation {
@@ -205,7 +238,7 @@ public struct ArtBuilder: Sendable {
         return result
     }
 
-    private func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, fade: Double,
+    private func append(_ shape: VectorShape, _ geometry: Tessellation, role: ClipRole, masked: Bool, fade: Double,
                         to batch: inout ArtBatch) {
         if role == .base { batch.steps.append(.stencilView(state: ArtStencil.clearClip, reference: 0)) }
 
@@ -213,7 +246,7 @@ public struct ArtBuilder: Sendable {
             let fan = batch.add(geometry.fan)
             batch.steps.append(.stencil(vertices: fan, state: ArtStencil.winding, reference: 0))
             let cover = batch.addRect(geometry.fanBounds)
-            let (state, reference) = Self.fillCover(role)
+            let (state, reference) = Self.fillCover(role, masked: masked)
             let paint = ArtPaint(color: fill, gradient: shape.gradient, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
         }
@@ -227,61 +260,84 @@ public struct ArtBuilder: Sendable {
                 batch.steps.append(.stencil(vertices: fan, state: ArtStencil.winding, reference: 0))
             }
             let cover = batch.addRect(geometry.outlineBounds)
-            let (state, reference) = Self.outlineCover(role, alignment)
+            let (state, reference) = Self.outlineCover(role, alignment, masked: masked)
             let paint = ArtPaint(color: stroke.color, opacity: shape.opacity * fade)
             batch.steps.append(.cover(vertices: cover, paint: paint, state: state, reference: reference))
-            if role == .base, alignment != .center {
+            if role == .base, alignment != .center || masked {
                 batch.steps.append(.stencil(vertices: cover, state: ArtStencil.cleanUp, reference: 0))
             }
         }
     }
 
-    /// The cover state for a fill: paint where the winding is non-zero.
-    static func fillCover(_ role: ClipRole) -> (StencilState, UInt8) {
-        let clip = ArtStencil.clipBit, work = ArtStencil.workBits
-        switch role {
-        case .none:
-            return (StencilState(compare: .notEqual, readMask: ArtStencil.windingBits, writeMask: work,
-                                 pass: .zero, fail: .zero), 0)
-        case .clipped:
-            // (stored & 0xBF) > 0x80: the clip bit and a non-zero winding.
-            return (StencilState(compare: .less, readMask: clip | ArtStencil.windingBits, writeMask: work,
+    /// The cover state for a fill: paint where the winding is non-zero, and with
+    /// `masked`, only where the group mask is set.
+    static func fillCover(_ role: ClipRole, masked: Bool = false) -> (StencilState, UInt8) {
+        let clip = ArtStencil.clipBit, mask = ArtStencil.maskBit, winding = ArtStencil.windingBits
+        let work = ArtStencil.workBits
+        switch (role, masked) {
+        case (.none, false):
+            return (StencilState(compare: .notEqual, readMask: winding, writeMask: work, pass: .zero, fail: .zero), 0)
+        case (.none, true):
+            // (stored & 0x3F) > 0x20: the mask and a non-zero winding.
+            return (StencilState(compare: .less, readMask: mask | winding, writeMask: work, pass: .zero, fail: .zero), mask)
+        case (.clipped, _):
+            // (stored & 0x9F) > 0x80: the clip bit and a non-zero winding.
+            return (StencilState(compare: .less, readMask: clip | winding, writeMask: work,
                                  pass: .zero, fail: .zero), clip)
-        case .base:
-            // Replace writes the clip bit and clears the rest.
-            return (StencilState(compare: .notEqual, readMask: ArtStencil.windingBits, writeMask: 0xFF,
+        case (.base, false):
+            // Replace writes the clip bit and clears the winding.
+            return (StencilState(compare: .notEqual, readMask: winding, writeMask: clip | work,
                                  pass: .replace, fail: .keep), clip)
+        case (.base, true):
+            // The clip was just cleared, so failing samples can be zeroed too.
+            return (StencilState(compare: .less, readMask: mask | winding, writeMask: clip | work,
+                                 pass: .replace, fail: .zero), clip | mask)
         }
     }
 
     /// The cover state for an outline: paint where it is marked, and for inside or
-    /// outside outlines, only where the path's winding is non-zero or zero.
-    static func outlineCover(_ role: ClipRole, _ alignment: StrokeAlignment) -> (StencilState, UInt8) {
+    /// outside outlines, only where the path's winding is non-zero or zero. With
+    /// `masked`, only where the group mask is set.
+    static func outlineCover(_ role: ClipRole, _ alignment: StrokeAlignment,
+                             masked: Bool = false) -> (StencilState, UInt8) {
         let clip = ArtStencil.clipBit, mark = ArtStencil.outlineBit, work = ArtStencil.workBits
+        let mask = masked ? ArtStencil.maskBit : 0
         switch (role, alignment) {
         case (.none, .center):
-            return (StencilState(compare: .notEqual, readMask: mark, writeMask: work, pass: .zero, fail: .zero), 0)
+            return masked
+                ? (StencilState(compare: .equal, readMask: mask | mark, writeMask: work, pass: .zero, fail: .zero), mask | mark)
+                : (StencilState(compare: .notEqual, readMask: mark, writeMask: work, pass: .zero, fail: .zero), 0)
         case (.none, .inside):
-            // (stored & 0x7F) > 0x40: marked, with a non-zero winding.
-            return (StencilState(compare: .less, readMask: work, writeMask: work, pass: .zero, fail: .zero), mark)
+            // (stored & 0x5F) > 0x40: marked, with a non-zero winding (and the mask).
+            return (StencilState(compare: .less, readMask: mask | work, writeMask: work, pass: .zero, fail: .zero),
+                    mask | mark)
         case (.none, .outside):
-            return (StencilState(compare: .equal, readMask: work, writeMask: work, pass: .zero, fail: .zero), mark)
+            return (StencilState(compare: .equal, readMask: mask | work, writeMask: work, pass: .zero, fail: .zero),
+                    mask | mark)
         case (.clipped, .center):
             return (StencilState(compare: .equal, readMask: clip | mark, writeMask: work, pass: .zero, fail: .zero),
                     clip | mark)
         case (.clipped, .inside):
-            return (StencilState(compare: .less, readMask: 0xFF, writeMask: work, pass: .zero, fail: .zero), clip | mark)
+            return (StencilState(compare: .less, readMask: clip | work, writeMask: work, pass: .zero, fail: .zero),
+                    clip | mark)
         case (.clipped, .outside):
-            return (StencilState(compare: .equal, readMask: 0xFF, writeMask: work, pass: .zero, fail: .zero), clip | mark)
+            return (StencilState(compare: .equal, readMask: clip | work, writeMask: work, pass: .zero, fail: .zero),
+                    clip | mark)
         case (.base, .center):
-            return (StencilState(compare: .notEqual, readMask: mark, writeMask: 0xFF, pass: .replace, fail: .keep), clip)
+            if masked {
+                // Writes the clip bit; the mark is cleared by a clean-up pass after.
+                return (StencilState(compare: .equal, readMask: mask | mark, writeMask: clip | ArtStencil.windingBits,
+                                     pass: .replace, fail: .keep), clip | mask | mark)
+            }
+            return (StencilState(compare: .notEqual, readMask: mark, writeMask: clip | work, pass: .replace, fail: .keep),
+                    clip)
         case (.base, .inside):
             // Writes the clip bit; the mark and winding are cleared by a clean-up pass after.
-            return (StencilState(compare: .less, readMask: work, writeMask: clip | ArtStencil.windingBits,
-                                 pass: .replace, fail: .keep), clip | mark)
+            return (StencilState(compare: .less, readMask: mask | work, writeMask: clip | ArtStencil.windingBits,
+                                 pass: .replace, fail: .keep), clip | mask | mark)
         case (.base, .outside):
-            return (StencilState(compare: .equal, readMask: work, writeMask: clip | ArtStencil.windingBits,
-                                 pass: .replace, fail: .keep), clip | mark)
+            return (StencilState(compare: .equal, readMask: mask | work, writeMask: clip | ArtStencil.windingBits,
+                                 pass: .replace, fail: .keep), clip | mask | mark)
         }
     }
 }
