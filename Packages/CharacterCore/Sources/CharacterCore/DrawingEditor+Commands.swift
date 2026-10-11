@@ -199,7 +199,7 @@ extension DrawingEditor {
     /// Resets a dragged pivot: a part's goes back to the middle of its art.
     public mutating func resetPivot() {
         customPivot = nil
-        guard case .part(let id) = selection, let i = drawing.partIndex(id), let frame = drawing.frame(of: selection) else { return }
+        guard case .layer(let id) = selection, let i = drawing.partIndex(id), let frame = drawing.frame(of: selection) else { return }
         let before = drawing
         drawing.parts[i].pivot = frame.center
         commit(from: before)

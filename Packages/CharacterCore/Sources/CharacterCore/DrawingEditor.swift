@@ -260,7 +260,7 @@ public struct DrawingEditor: Sendable {
     var selectedPartID: Int? {
         if let isolatedPart { return isolatedPart }
         return switch selection {
-        case .part(let id), .shape(let id, _): id
+        case .layer(let id), .shape(let id, _): id
         case .shapes(let refs): refs.min()?.part
         case .none, .reference: nil
         }
@@ -270,7 +270,7 @@ public struct DrawingEditor: Sendable {
     /// middle of the selection.
     public var pivot: Vec2? {
         if let customPivot { return customPivot }
-        if case .part(let id) = selection, let i = drawing.partIndex(id), !drawing.parts[i].shapes.isEmpty {
+        if case .layer(let id) = selection, let i = drawing.partIndex(id), !drawing.parts[i].shapes.isEmpty {
             return drawing.parts[i].pivot
         }
         return drawing.frame(of: selection)?.center
@@ -436,9 +436,9 @@ public struct DrawingEditor: Sendable {
 
         case .pivot(let target, _, let grab, _):
             var part: Int?
-            if case .part(let id) = target { part = id }
+            if case .layer(let id) = target { part = id }
             let q = pivotSnapped(p + grab, part: part)
-            if case .part(let id) = target, let i = drawing.partIndex(id) {
+            if case .layer(let id) = target, let i = drawing.partIndex(id) {
                 drawing.parts[i].pivot = q
             } else {
                 customPivot = q
@@ -657,7 +657,7 @@ public struct DrawingEditor: Sendable {
     private func selectionIsInside(part id: Int) -> Bool {
         if isolatedGroup != nil { return true }
         return switch selection {
-        case .part(let p), .shape(let p, _): p == id
+        case .layer(let p), .shape(let p, _): p == id
         case .shapes(let refs): refs.allSatisfy { $0.part == id } && drawing.selectedGroup(selection) != nil
         case .none, .reference: false
         }
@@ -677,7 +677,7 @@ public struct DrawingEditor: Sendable {
             toggleInSelection(Set(drawing.shapeRefs(in: tapTarget(ref))))
             return
         }
-        selection = selectionIsInside(part: hit.part) ? tapTarget(ref) : .part(hit.part)
+        selection = selectionIsInside(part: hit.part) ? tapTarget(ref) : .layer(hit.part)
     }
 
     private mutating func toggleInSelection(_ ref: ShapeRef) {
@@ -715,12 +715,12 @@ public struct DrawingEditor: Sendable {
         }
     }
 
-    /// `.part` when `refs` is every shape of exactly one part, so a marquee around a
+    /// `.layer` when `refs` is every shape of exactly one part, so a marquee around a
     /// whole part selects the part the way tapping it does.
     private func promotedToPart(_ refs: Set<ShapeRef>) -> Selection {
         let parts = Set(refs.map(\.part))
         if parts.count == 1, let id = parts.first, let i = drawing.partIndex(id), drawing.parts[i].shapes.count == refs.count {
-            return .part(id)
+            return .layer(id)
         }
         return .covering(refs)
     }
@@ -951,7 +951,7 @@ public struct DrawingEditor: Sendable {
             guard tool == .select || tool == .directSelect else { return .idle }
             if !drawing.shapeRefs(in: selection).contains(ref) {
                 if tool == .select {
-                    selection = selectionIsInside(part: ref.part) ? tapTarget(ref) : .part(ref.part)
+                    selection = selectionIsInside(part: ref.part) ? tapTarget(ref) : .layer(ref.part)
                 } else {
                     selection = .shape(part: ref.part, shape: ref.shape)
                 }
@@ -1289,7 +1289,7 @@ public struct DrawingEditor: Sendable {
         switch selection {
         case .none:
             return
-        case .part(let id):
+        case .layer(let id):
             // A part's accessories go with it.
             drawing.parts.removeAll { $0.id == id || $0.accessoryOf == id }
         case .shape(let pid, let sid):
@@ -1443,13 +1443,13 @@ public struct DrawingEditor: Sendable {
         cancelGesture()
         if let isolated = isolatedPart, isolated != id { exitIsolation() }
         isolatedGroup = nil
-        selection = .part(id)
+        selection = .layer(id)
     }
 
     public mutating func deletePart(_ id: Int) {
         guard drawing.partIndex(id) != nil else { return }
         cancelGesture()
-        selection = .part(id)
+        selection = .layer(id)
         deleteSelection()
     }
 

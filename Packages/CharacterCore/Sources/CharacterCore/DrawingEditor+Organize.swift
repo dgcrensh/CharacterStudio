@@ -103,7 +103,7 @@ extension DrawingEditor {
         guard !targets.isEmpty else { return }
         cancelGesture()
         let before = drawing
-        if case .part(let id) = selection {
+        if case .layer(let id) = selection {
             // A part's accessories hide and lock with it.
             for i in drawing.family(of: id) { partChange(&drawing.parts[i]) }
         } else {
@@ -157,7 +157,7 @@ extension DrawingEditor {
         guard canArrange else { return }
         cancelGesture()
         let before = drawing
-        if case .part(let id) = selection {
+        if case .layer(let id) = selection {
             let family = Set(drawing.family(of: id).map { drawing.parts[$0].id })
             if family.count > 1 {
                 let moved = Self.arranged(drawing.parts.filter { !family.contains($0.id) || $0.id == id }, move) { $0.id == id }
@@ -257,7 +257,7 @@ extension DrawingEditor {
         drawing.handOverAccessories(of: id, to: target)
         drawing.parts.remove(at: i)
         if wasIsolated { isolatedPart = target }
-        selection = .part(target)
+        selection = .layer(target)
         commit(from: before)
     }
 
@@ -296,7 +296,7 @@ extension DrawingEditor {
         part.groups = movedGroups
         part.pivot = part.bounds.center
         drawing.parts.insert(part, at: insertAt)
-        selection = .part(id)
+        selection = .layer(id)
         commit(from: before)
     }
 
@@ -371,7 +371,7 @@ extension DrawingEditor {
     @discardableResult
     mutating func duplicateInPlace(offset: Vec2) -> Bool {
         let shift = Affine2D.translation(offset)
-        if case .part(let id) = selection, isolatedPart == nil, let i = drawing.partIndex(id) {
+        if case .layer(let id) = selection, isolatedPart == nil, let i = drawing.partIndex(id) {
             var copy = drawing.parts[i]
             copy.id = drawing.makeID()
             copy.name = drawing.uniquePartName(copy.name)
@@ -387,7 +387,7 @@ extension DrawingEditor {
                 for s in part.shapes.indices { part.shapes[s].apply(shift) }
                 part.pivot = shift.apply(part.pivot)
             }
-            selection = .part(copy.id)
+            selection = .layer(copy.id)
             return true
         }
         let targets = drawing.shapeIndices(in: selection)
@@ -438,7 +438,7 @@ extension DrawingEditor {
         var clip = Drawing()
         clip.name = drawing.name
         let kind: String
-        if case .part(let id) = selection, isolatedPart == nil {
+        if case .layer(let id) = selection, isolatedPart == nil {
             guard drawing.partIndex(id) != nil else { return nil }
             // A part's accessories are copied (and cut) with it.
             clip.parts = drawing.family(of: id).map { drawing.parts[$0] }
@@ -520,7 +520,7 @@ extension DrawingEditor {
             }
             // One part pasted with its accessories is selected as that part.
             let owners = added.filter { drawing.part($0)?.accessoryOf == nil }
-            selection = owners.count == 1 ? .part(owners[0]) : .covering(refs)
+            selection = owners.count == 1 ? .layer(owners[0]) : .covering(refs)
         }
         commit(from: before)
         return true

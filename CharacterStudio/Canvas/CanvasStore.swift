@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 @Observable
 final class EditorUIState {
     enum SelectionKind: Equatable {
-        case none, part, shape, reference
+        case none, layer, shape, reference
     }
 
     var tool: Tool = .pencil
@@ -207,7 +207,7 @@ final class CanvasStore {
         update(\.canRedo, editor.canRedo)
         let kind: EditorUIState.SelectionKind = switch editor.selection {
         case .none: .none
-        case .part: .part
+        case .layer: .layer
         case .shape, .shapes: .shape
         case .reference: .reference
         }
@@ -282,7 +282,7 @@ final class CanvasStore {
         update(\.frame, editor.drawing.frame)
         update(\.canExport, editor.drawing.exportArea() != nil)
         update(\.layers, LayerTree(drawing: editor.drawing))
-        if case .part(let id) = editor.selection {
+        if case .layer(let id) = editor.selection {
             update(\.selectedPart, id)
         } else if case .shape(let id, _) = editor.selection {
             update(\.selectedPart, id)

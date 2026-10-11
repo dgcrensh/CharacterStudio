@@ -5,7 +5,7 @@ extension Drawing {
     /// The group a selection is, when its shapes are all in one group of one part and
     /// cover every editable shape of it.
     public func selectedGroup(_ selection: Selection) -> (part: Int, group: ShapeGroup)? {
-        if case .part = selection { return nil }
+        if case .layer = selection { return nil }
         let indices = shapeIndices(in: selection)
         guard let first = indices.first, let id = parts[first.0].shapes[first.1].group,
               indices.allSatisfy({ $0.0 == first.0 && parts[$0.0].shapes[$0.1].group == id }) else { return nil }

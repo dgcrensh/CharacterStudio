@@ -267,7 +267,7 @@ public struct ShapeRef: Hashable, Sendable, Comparable {
 /// What the Pencil has selected.
 public enum Selection: Hashable, Sendable {
     case none
-    case part(Int)
+    case layer(Int)
     case shape(part: Int, shape: Int)
     /// Several shapes picked one by one or with a marquee. Use `covering` to build
     /// one, so a single shape is always `.shape`.
@@ -423,7 +423,7 @@ public struct Drawing: Hashable, Sendable, Codable {
     public func exists(_ selection: Selection) -> Bool {
         switch selection {
         case .none: true
-        case .part(let id): partIndex(id) != nil
+        case .layer(let id): partIndex(id) != nil
         case .shape(let p, let s): indices(part: p, shape: s) != nil
         case .shapes(let refs): !refs.isEmpty && refs.allSatisfy { indices($0) != nil }
         case .reference(let id): referenceIndex(id) != nil
@@ -434,7 +434,7 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             return nil
-        case .part(let id):
+        case .layer(let id):
             // A part carries its accessories, so the frame takes them in.
             let bounds = family(of: id).reduce(Rect.null) { $0.union(parts[$1].bounds) }
             return bounds.isNull ? nil : SelectionFrame(rect: bounds)
@@ -451,7 +451,7 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// The shapes a selection covers, as (part index, shape index).
     public func shapeIndices(in selection: Selection) -> [(Int, Int)] {
         switch selection {
-        case .part(let id):
+        case .layer(let id):
             guard let p = partIndex(id) else { return [] }
             return parts[p].shapes.indices.map { (p, $0) }
         case .shape(let p, let s):
@@ -488,7 +488,7 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             break
-        case .part(let id):
+        case .layer(let id):
             // Accessories move with their part.
             for p in family(of: id) {
                 for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }

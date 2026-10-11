@@ -522,7 +522,7 @@ final class AppearanceEditingTests: XCTestCase {
         e.renameGlobalColor(ink, to: "  ")
         XCTAssertEqual(e.drawing.globalColor(ink)?.name, "Ink")
 
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         e.applyGlobalFill(skin)
         e.undo()
         XCTAssertEqual(e.drawing.parts[0].shapes.map(\.fill), [red, blue], "applying a global color is one undo step")

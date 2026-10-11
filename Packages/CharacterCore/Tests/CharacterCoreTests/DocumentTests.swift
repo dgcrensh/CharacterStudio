@@ -35,7 +35,7 @@ private func editorDrawing() -> Drawing {
     e.style.outlineWidth = 5.5
     e.addStroke((0...20).map { Vec2(Double($0) * 7.3, sin(Double($0) / 3) * 20 + 140) }, zoom: 1)
     e.addToPalette(RGBAColor(hex: "#12345680")!)
-    e.selection = .part(e.drawing.parts[0].id)
+    e.selection = .layer(e.drawing.parts[0].id)
     e.renamePart(e.drawing.parts[0].id, to: "Head \"big\" ✨")
     e.renameCharacter("Tést")
     var d = e.drawing
@@ -343,7 +343,7 @@ final class LayerTests: XCTestCase {
         e.addStroke(ring(center: Vec2(0, 0), radius: 30), zoom: 1)
         let id = e.drawing.parts[0].id
         e.selectPart(id)
-        XCTAssertEqual(e.selection, .part(id))
+        XCTAssertEqual(e.selection, .layer(id))
         e.renameCharacter("Robo")
         XCTAssertEqual(e.drawing.name, "Robo")
         e.deletePart(id)
@@ -367,7 +367,7 @@ final class LayerTests: XCTestCase {
         var e = DrawingEditor(drawing: editorDrawing())
         XCTAssertFalse(e.canUndo)
         let original = e.drawing
-        e.selection = .part(original.parts[0].id)
+        e.selection = .layer(original.parts[0].id)
         e.replaceDrawing(Drawing())
         XCTAssertEqual(e.selection, .none)
         e.undo()
