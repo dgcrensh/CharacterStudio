@@ -78,6 +78,13 @@ final class EditorUIState {
     var selectedGroupName = ""
     /// The other groups of the selected shapes' part, for Add to Group.
     var groupsToAddTo: [ShapeGroup] = []
+    /// The levels around the selection (layer, group, shapes), outermost first, and what
+    /// the Select menu can do with it.
+    var selectionCrumbs: [SelectionCrumb] = []
+    var canSelectParent = false
+    var canSelectAllInLayer = false
+    var canInvertSelection = false
+    var canSelectSame = false
     /// The part a new accessory would go on (the selected part, or its owner), and its name.
     var accessoryOwner: Int?
     var accessoryOwnerName = ""
@@ -261,6 +268,11 @@ final class CanvasStore {
         update(\.selectedGroupPart, group?.part)
         update(\.selectedGroupName, group?.group.name ?? "")
         update(\.groupsToAddTo, editor.groupsToAddSelectionTo)
+        update(\.selectionCrumbs, editor.selectionCrumbs)
+        update(\.canSelectParent, editor.canSelectParent)
+        update(\.canSelectAllInLayer, editor.canSelectAllInLayer)
+        update(\.canInvertSelection, editor.canInvertSelection)
+        update(\.canSelectSame, editor.canSelectSame)
         update(\.canArrange, editor.canArrange)
         update(\.canHideOrLock, editor.canHideOrLockSelection)
         update(\.canMoveShapes, editor.canMoveSelectedShapes)
@@ -403,6 +415,12 @@ final class CanvasStore {
         edit { $0.editor.renameGroup(id, inPart: part, to: name) }
     }
     func addSelection(toGroup id: Int) { edit { $0.editor.addSelection(toGroup: id) } }
+    func selectParent() { edit { $0.editor.selectParent() } }
+    func selectCrumb(_ level: SelectionCrumb.Level) { edit { $0.editor.selectCrumb(level) } }
+    func selectAllInLayer() { edit { $0.editor.selectAllInLayer() } }
+    func invertSelection() { edit { $0.editor.invertSelection() } }
+    func selectSameFill() { edit { $0.editor.selectSameFill() } }
+    func selectSameOutline() { edit { $0.editor.selectSameOutline() } }
     func mergePartDown(_ id: Int) { edit { $0.editor.mergePartDown(id) } }
     func moveSelectionToNewPart() { edit { $0.editor.moveSelectionToNewPart() } }
     func moveSelection(toPart id: Int) { edit { $0.editor.moveSelection(toPart: id) } }

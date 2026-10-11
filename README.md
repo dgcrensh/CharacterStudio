@@ -252,3 +252,18 @@ Phase 3 of the layers plan: the Layers panel shows the tree of ownership. Nothin
 **How it works**
 
 - **Model** (CharacterCore): the selection `.part` is now `.layer`, and `.layers(Set<Int>)` is several whole layers (`Selection.coveringLayers` builds one). `DrawingEditor.targetLayer` is the layer chosen in the panel and `activeLayer` is where new art goes (isolation, then the chosen layer, then with auto-join the selected one); it is editor state, not an undo step, and is forgotten when its layer goes. `LayerTree` now has `parts` (each part with its accessories, flagged `isBehind` and `isDetached`, and its `groups`) and `treeRows(expanded:)`, which flattens the tree into the rows the panel lists. `DrawingEditor.moveTreeRow(from:to:in:)` turns a drag of those rows into a new draw order. Commands are in `DrawingEditor+LayersPanel`, tests in `LayersPanelTests`.
+
+## Selection extras notes
+
+Phase 4 of the layers plan: commands for picking what you mean among layers, groups and shapes. Nothing in the file format changes, and none of these commands is an undo step.
+
+**Using it**
+
+- **Select menu** (in the Edit menu, and on a hardware keyboard): **Select Layer** (Cmd-Up) goes one level out from the selection: from shapes to their group or layer, from a group to its layer, from an accessory to its part. With nothing selected inside an isolated group or layer, it selects that group or layer. **Select All in Layer** (Cmd-A) selects every shape of the isolated layer, else of the layer the selection is in, else of the active layer; inside a group it selects the group's shapes. **Invert Selection** swaps selected and unselected shapes within that same layer or group.
+- **Same Fill** and **Same Outline** select every shape whose fill (same global color, gradient or color) or outline (same width and color) matches a selected shape's, across the whole character or only inside the isolated layer or group. Shapes with no fill, or no outline, match each other. Hidden and locked shapes are skipped.
+- **Breadcrumbs:** with Select or Direct Select, the context bar shows where the selection sits, such as Head › Hair › Bangs › Shape. Tap an outer level to select it.
+- **Keyboard:** Cmd-G and Shift-Cmd-G group and ungroup (from phase 1); Cmd-Up and Cmd-A are new.
+
+**How it works**
+
+- **Model** (CharacterCore): `DrawingEditor.selectionCrumbs` lists the levels around the selection as `SelectionCrumb`s (`.layer`, `.group` or `.shapes`, one flagged current), `selectCrumb` selects one, and `selectParent` selects the one outside the current level. `selectionScopeLayer` is the layer Select All in Layer and Invert work in. Commands are in `DrawingEditor+Select`, tests in `SelectMenuTests`.
