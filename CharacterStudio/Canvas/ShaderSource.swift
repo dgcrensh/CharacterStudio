@@ -11,18 +11,20 @@ enum ShaderSource {
         float3x3 pixelToWorld;
         float worldPerPixel;
         float gridSpacing;
-        float2 padding;
+        float worldPerPoint;
+        float padding;
         float4 background;
         float4 gridColor;
     };
 
-    // 12 floats per vertex, see CapsuleTessellator.
+    // 12 floats per vertex, see CapsuleTessellator. `flags` is 1 when `radius` is in
+    // screen points (the editing overlay) and 0 when it is in world units (ink).
     struct StrokeVertex {
         packed_float2 a;
         packed_float2 b;
         packed_float2 corner;
         float radius;
-        float padding;
+        float flags;
         packed_float4 color;
     };
 
@@ -46,8 +48,11 @@ enum ShaderSource {
         float len = length(d);
         float2 dir = len > 1e-6 ? d / len : float2(1.0, 0.0);
         float2 normal = float2(-dir.y, dir.x);
+        // A screen-space radius follows the zoom, so it is the same size on screen at
+        // any zoom. The fragment shader gets the scaled radius.
+        float radius = v.flags != 0.0 ? v.radius * u.worldPerPoint : v.radius;
         // Grow the quad past the capsule by a pixel and a half for anti-aliasing.
-        float extent = v.radius + u.worldPerPixel * 1.5;
+        float extent = radius + u.worldPerPixel * 1.5;
         float2 end = corner.x < 0.0 ? a - dir * extent : b + dir * extent;
         float2 world = end + normal * (corner.y * extent);
 
@@ -56,7 +61,7 @@ enum ShaderSource {
         out.world = world;
         out.a = a;
         out.b = b;
-        out.radius = v.radius;
+        out.radius = radius;
         out.color = float4(v.color);
         return out;
     }

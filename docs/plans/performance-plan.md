@@ -207,6 +207,15 @@ and can't be tested on Linux; say so in the PR.
 
 ## Step 4: a pinch in outline view keeps the wireframe (S-M)
 
+**Done** (bullets 1 and 2). Every overlay capsule is screen-space: `CapsuleTessellator.append(screenSpace:)`
+sets the `StrokeVertex` flag (the old padding float) and the vertex shader scales the radius by a new
+`worldPerPoint` uniform (in the `Uniforms` padding slot) rather than `worldPerPixel`, since the overlay's
+widths are in points and the core doesn't know the screen scale. The live stroke and the bones' fill leave
+the flag clear. The wireframe and selection layers key on `EditorOverlay.zoomBucket` and flatten and dash
+at the bucket's `px`. `overlayWireframeAtNewZoom` now changes zoom inside a bucket (1 to 0.99); the new
+`overlayWireframeAcrossZoomBucket` (1 to 1.01) times a rebuild. Bullet 3 is deferred: it needs step 1's
+`TessellationCache`. The shader is checked by eye only (outline view, pinch 0.25x to 8x).
+
 **Today.** `OverlayCache.WireframeKey` and `SelectionKey` include the exact `zoom` (`EditorOverlay.swift:115-130`)
 because capsule widths are baked in world units (`width * px`) when the vertices are built, so every pinch frame
 rebuilds the wireframe (16 ms at 2,400 shapes) and, in direct select, the selection's anchors and outlines.

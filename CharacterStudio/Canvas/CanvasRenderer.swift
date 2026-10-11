@@ -10,7 +10,9 @@ private struct CanvasUniforms {
     var pixelToWorld: simd_float3x3
     var worldPerPixel: Float
     var gridSpacing: Float
-    var padding: SIMD2<Float> = .zero
+    /// One screen point in world units, for screen-space capsules (the overlay).
+    var worldPerPoint: Float
+    var padding: Float = 0
     var background: SIMD4<Float>
     var gridColor: SIMD4<Float>
 }
@@ -591,6 +593,7 @@ final class CanvasRenderer {
             pixelToWorld: pixelToWorld.matrix3x3,
             worldPerPixel: Float(1 / (zoom * s)),
             gridSpacing: Float(spacing),
+            worldPerPoint: Float(1 / zoom),
             background: background,
             gridColor: gridColor
         )

@@ -717,6 +717,20 @@ Open is 2.8x faster (parsing 4.1x, decoding 1.6x) and misses the plan's 100 ms t
 decoding is now the larger half, at 76 ms. SVG import is 18x faster, most of it from `XMLReader` no
 longer building arrays per tag, and it now runs off the main thread as well.
 
+#### Step 4: outline-view pinch
+
+Same Mac, `-c release`, `STRESS_DRAWING=full`, median of 9, milliseconds. Before is step 0 (`a542905`), after is this branch; the runs for all five steps went back to back with nothing else running.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Outline view, overlay at a new zoom (inside a bucket) | before | 1.45 | 3.09 | 6.59 | 13.1 | 27.1 |
+| | after | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| Outline view, overlay across a zoom bucket | after | 1.46 | 3.08 | 6.43 | 12.7 | 30.0 |
+
+A pinch inside a power of two keeps the wireframe and selection layers (under a microsecond); crossing a
+bucket rebuilds them at the old cost, once per doubling instead of every frame. The screen-space widths
+are a shader change that needs checking by eye in the Simulator.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and
