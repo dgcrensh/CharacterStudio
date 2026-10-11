@@ -652,6 +652,8 @@ What they say (on a Mac; an iPad will be slower, so read them against a 120 Hz f
 - Opening, saving and SVG import are linear and in the hundreds of milliseconds at 2,400 shapes;
   saves run off the main thread, but SVG import runs on it, inside one `Edit`.
 
+The plan for these is [performance-plan.md](performance-plan.md).
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and
