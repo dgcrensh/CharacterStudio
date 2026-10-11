@@ -348,14 +348,14 @@ extension DrawingEditor {
         guard canDuplicateMirrored else { return }
         cancelGesture()
         let before = drawing
-        if case .part(let id) = selection, isolatedPart == nil, let part = drawing.part(id) {
+        if case .layer(let id) = selection, isolatedPart == nil, let part = drawing.part(id) {
             let side = SideName.side(ofX: part.bounds.center.x, axis: symmetry.axis)
             guard let copy = mirroredCopy(ofPart: id, side: side) else { return }
             if let p = drawing.partIndex(copy), let bone = drawing.bone(ofPart: id),
                let other = SideName.flipped(bone.name), let match = drawing.bone(named: other) {
                 drawing.parts[p].bone = match.id
             }
-            selection = .part(copy)
+            selection = .layer(copy)
         } else {
             var copies: Set<ShapeRef> = []
             for p in Set(drawing.shapeIndices(in: selection).map(\.0)) {
@@ -371,7 +371,8 @@ extension DrawingEditor {
                 for group in whole {
                     let id = drawing.makeID()
                     fresh[group.id] = id
-                    drawing.parts[p].groups.append(ShapeGroup(id: id, name: SideName.flipped(group.name) ?? group.name))
+                    drawing.parts[p].groups.append(ShapeGroup(id: id, name: SideName.flipped(group.name) ?? group.name,
+                                                                isClipped: group.isClipped))
                 }
                 var shapes: [VectorShape] = []
                 var pending: [VectorShape] = []

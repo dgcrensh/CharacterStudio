@@ -134,6 +134,7 @@ public struct DrawingEditor: Sendable {
             if let id = isolatedGroup, isolatedPart.flatMap({ drawing.part($0)?.group(id) }) == nil { isolatedGroup = nil }
             if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
             if let id = wigglePart, drawing.partIndex(id) == nil { wigglePart = nil }
+            if let id = targetLayer, drawing.partIndex(id) == nil { targetLayer = nil }
         }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
@@ -194,6 +195,10 @@ public struct DrawingEditor: Sendable {
     /// The group of `isolatedPart` being edited on its own, one level further in: only
     /// its shapes can be picked, and new shapes join it.
     public internal(set) var isolatedGroup: Int?
+    /// The layer made active in the layers panel: new strokes, pen paths, shapes and
+    /// pasted shapes go into it (see `activeLayer`). Nil means each new piece of art
+    /// starts a new part, unless isolation or auto-join says otherwise.
+    public internal(set) var targetLayer: Int?
     /// Fill and outline colors used lately, newest first, for the squeeze palette.
     public internal(set) var recentColors: [RGBAColor] = []
     /// Set by a run of color changes from one control, so a picker drag adds one recent color.
@@ -263,13 +268,14 @@ public struct DrawingEditor: Sendable {
         return refs.count == 1 ? refs[0] : nil
     }
 
-    /// The part new shapes would join: the selected part, or the first selected shape's.
+    /// The part new shapes would join: the isolated part, the active layer, the
+    /// selected part, or the first selected shape's.
     var selectedPartID: Int? {
-        if let isolatedPart { return isolatedPart }
+        if let id = isolatedPart ?? usableTargetLayer { return id }
         return switch selection {
-        case .part(let id), .shape(let id, _): id
+        case .layer(let id), .shape(let id, _): id
         case .shapes(let refs): refs.min()?.part
-        case .none, .reference: nil
+        case .none, .layers, .reference: nil
         }
     }
 
@@ -277,7 +283,7 @@ public struct DrawingEditor: Sendable {
     /// middle of the selection.
     public var pivot: Vec2? {
         if let customPivot { return customPivot }
-        if case .part(let id) = selection, let i = drawing.partIndex(id), !drawing.parts[i].shapes.isEmpty {
+        if case .layer(let id) = selection, let i = drawing.partIndex(id), !drawing.parts[i].shapes.isEmpty {
             return drawing.parts[i].pivot
         }
         return drawing.frame(of: selection)?.center
@@ -453,9 +459,9 @@ public struct DrawingEditor: Sendable {
 
         case .pivot(let target, _, let grab, _):
             var part: Int?
-            if case .part(let id) = target { part = id }
+            if case .layer(let id) = target { part = id }
             let q = pivotSnapped(p + grab, part: part)
-            if case .part(let id) = target, let i = drawing.partIndex(id) {
+            if case .layer(let id) = target, let i = drawing.partIndex(id) {
                 drawing.parts[i].pivot = q
             } else {
                 customPivot = q
@@ -674,9 +680,9 @@ public struct DrawingEditor: Sendable {
     private func selectionIsInside(part id: Int) -> Bool {
         if isolatedGroup != nil { return true }
         return switch selection {
-        case .part(let p), .shape(let p, _): p == id
+        case .layer(let p), .shape(let p, _): p == id
         case .shapes(let refs): refs.allSatisfy { $0.part == id } && drawing.selectedGroup(selection) != nil
-        case .none, .reference: false
+        case .none, .layers, .reference: false
         }
     }
 
@@ -694,7 +700,7 @@ public struct DrawingEditor: Sendable {
             toggleInSelection(Set(drawing.shapeRefs(in: tapTarget(ref))))
             return
         }
-        selection = selectionIsInside(part: hit.part) ? tapTarget(ref) : .part(hit.part)
+        selection = selectionIsInside(part: hit.part) ? tapTarget(ref) : .layer(hit.part)
     }
 
     private mutating func toggleInSelection(_ ref: ShapeRef) {
@@ -732,12 +738,12 @@ public struct DrawingEditor: Sendable {
         }
     }
 
-    /// `.part` when `refs` is every shape of exactly one part, so a marquee around a
+    /// `.layer` when `refs` is every shape of exactly one part, so a marquee around a
     /// whole part selects the part the way tapping it does.
     private func promotedToPart(_ refs: Set<ShapeRef>) -> Selection {
         let parts = Set(refs.map(\.part))
         if parts.count == 1, let id = parts.first, let i = drawing.partIndex(id), drawing.parts[i].shapes.count == refs.count {
-            return .part(id)
+            return .layer(id)
         }
         return .covering(refs)
     }
@@ -884,7 +890,7 @@ public struct DrawingEditor: Sendable {
         shape.fill = style.fillEnabled ? style.fill : nil
         // Outlined while open so the path is visible; closing may drop the outline.
         shape.stroke = style.makeStroke()
-        if autoJoinSelectedPart || isolatedPart != nil, let target = selectedPartID, let p = drawing.partIndex(target) {
+        if let target = activeLayer, let p = drawing.partIndex(target) {
             addToActiveLayer(&shape, part: p)
             penPath = PenPath(part: target, shape: shape.id, fromStart: false, createdPart: false)
             return ShapeRef(part: target, shape: shape.id)
@@ -968,7 +974,7 @@ public struct DrawingEditor: Sendable {
             guard tool == .select || tool == .directSelect else { return .idle }
             if !drawing.shapeRefs(in: selection).contains(ref) {
                 if tool == .select {
-                    selection = selectionIsInside(part: ref.part) ? tapTarget(ref) : .part(ref.part)
+                    selection = selectionIsInside(part: ref.part) ? tapTarget(ref) : .layer(ref.part)
                 } else {
                     selection = .shape(part: ref.part, shape: ref.shape)
                 }
@@ -1209,12 +1215,12 @@ public struct DrawingEditor: Sendable {
         return shape
     }
 
-    /// Adds `shape` to the isolated part, or with auto-join to the selected part (when
-    /// `joinNeedsOverlap`, only if it overlaps it), or else to a new part on top. Does
-    /// not record undo.
+    /// Adds `shape` to the isolated part or the active layer, or with auto-join to the
+    /// selected part (when `joinNeedsOverlap`, only if it overlaps it), or else to a new
+    /// part on top. Does not record undo.
     @discardableResult
     mutating func insertNewShape(_ shape: VectorShape, joinNeedsOverlap: Bool) -> ShapeRef {
-        if let target = isolatedPart, let p = drawing.partIndex(target) {
+        if let target = isolatedPart ?? usableTargetLayer, let p = drawing.partIndex(target) {
             var shape = shape
             addToActiveLayer(&shape, part: p)
             return ShapeRef(part: target, shape: shape.id)
@@ -1306,9 +1312,11 @@ public struct DrawingEditor: Sendable {
         switch selection {
         case .none:
             return
-        case .part(let id):
+        case .layer(let id):
             // A part's accessories go with it.
             drawing.parts.removeAll { $0.id == id || $0.accessoryOf == id }
+        case .layers(let ids):
+            drawing.parts.removeAll { ids.contains($0.id) || $0.accessoryOf.map(ids.contains) == true }
         case .shape(let pid, let sid):
             guard drawing.indices(part: pid, shape: sid) != nil else { return }
             removeShape(ShapeRef(part: pid, shape: sid))
@@ -1460,13 +1468,13 @@ public struct DrawingEditor: Sendable {
         cancelGesture()
         if let isolated = isolatedPart, isolated != id { exitIsolation() }
         isolatedGroup = nil
-        selection = .part(id)
+        selection = .layer(id)
     }
 
     public mutating func deletePart(_ id: Int) {
         guard drawing.partIndex(id) != nil else { return }
         cancelGesture()
-        selection = .part(id)
+        selection = .layer(id)
         deleteSelection()
     }
 

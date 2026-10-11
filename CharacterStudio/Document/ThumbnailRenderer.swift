@@ -49,21 +49,21 @@ enum ThumbnailRenderer {
 
     /// Draws every part back to front. Hidden art is left out when `skipHidden` is set.
     private static func drawArt(_ drawing: Drawing, in context: CGContext, tolerance: Double, skipHidden: Bool) {
-        for part in drawing.parts {
+        for part in drawing.drawStack {
             let clips = part.clipPlan()
             for (index, shape) in part.shapes.enumerated() {
                 if skipHidden, !part.isShown(index) { continue }
-                if let base = clips.base(of: index) {
-                    if skipHidden, !part.isShown(base) { continue }
-                    // Clipped shapes draw only where their base draws.
-                    context.saveGState()
+                // Clipped shapes draw only where their base draws, and shapes in a clipped
+                // group only where the group's base draws.
+                let bases = [clips.groupBase(of: index), clips.base(of: index)].compactMap { $0 }
+                if skipHidden, bases.contains(where: { !part.isShown($0) }) { continue }
+                context.saveGState()
+                for base in bases {
                     context.addPath(clipMask(part.shapes[base], tolerance: tolerance))
                     context.clip(using: .winding)
-                    draw(shape, in: context, tolerance: tolerance)
-                    context.restoreGState()
-                } else {
-                    draw(shape, in: context, tolerance: tolerance)
                 }
+                draw(shape, in: context, tolerance: tolerance)
+                context.restoreGState()
             }
         }
     }

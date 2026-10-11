@@ -216,7 +216,10 @@ public enum CharacterFormat {
         for (i, run) in runs.enumerated() { groupNumbers[run.group.id] = i + 1 }
         if !runs.isEmpty {
             let groups: [JSONValue] = runs.enumerated().map { i, run in
-                obj(["id": .number(Double(i + 1)), "name": .string(run.group.name)])
+                var group: [(key: String, value: JSONValue)] = [(key: "id", value: .number(Double(i + 1))),
+                                                                 (key: "name", value: .string(run.group.name))]
+                if run.group.isClipped { group.append((key: "clipped", value: .bool(true))) }
+                return .object(group)
             }
             members.append((key: "groups", value: .array(groups)))
         }
@@ -253,6 +256,7 @@ public enum CharacterFormat {
         }
         if shape.opacity != 1 { members.append((key: "opacity", value: num(shape.opacity))) }
         if shape.isClipped { members.append((key: "clipped", value: .bool(true))) }
+        if shape.isBehindOwner { members.append((key: "behindOwner", value: .bool(true))) }
         members += editorHints(hidden: shape.isHidden, locked: shape.isLocked)
         members.append((key: "points", value: .array(shape.path.points.map(point))))
         return .object(members)
@@ -393,7 +397,8 @@ public enum CharacterFormat {
                 guard groups[number] == nil else {
                     throw CharacterFileError.invalid(path: groupNode.path + ".id", problem: "repeats group \(number)")
                 }
-                let group = ShapeGroup(id: drawing.makeID(), name: try groupNode.field("name")?.string() ?? "Group")
+                let group = ShapeGroup(id: drawing.makeID(), name: try groupNode.field("name")?.string() ?? "Group",
+                                       isClipped: try groupNode.field("clipped")?.bool() ?? false)
                 groups[number] = group.id
                 part.groups.append(group)
             }
@@ -552,6 +557,7 @@ public enum CharacterFormat {
         }
         if let opacity = try node.field("opacity")?.number() { shape.opacity = min(max(opacity, 0), 1) }
         shape.isClipped = try node.field("clipped")?.bool() ?? false
+        shape.isBehindOwner = try node.field("behindOwner")?.bool() ?? false
         shape.isHidden = try node.field("hidden")?.bool() ?? false
         shape.isLocked = try node.field("locked")?.bool() ?? false
         return shape
