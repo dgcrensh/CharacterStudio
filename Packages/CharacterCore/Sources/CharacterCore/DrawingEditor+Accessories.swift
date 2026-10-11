@@ -11,6 +11,11 @@ extension Drawing {
         parts.indices.filter { parts[$0].id == id || parts[$0].accessoryOf == id }
     }
 
+    /// The indices of the layers `ids` and their accessories, in draw order, each once.
+    public func families(of ids: Set<Int>) -> [Int] {
+        parts.indices.filter { ids.contains(parts[$0].id) || parts[$0].accessoryOf.map(ids.contains) == true }
+    }
+
     /// Part `id`'s accessories, back to front.
     public func accessories(of id: Int) -> [Part] {
         parts.filter { $0.accessoryOf == id }

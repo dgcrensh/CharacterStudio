@@ -134,6 +134,7 @@ public struct DrawingEditor: Sendable {
             if let id = isolatedGroup, isolatedPart.flatMap({ drawing.part($0)?.group(id) }) == nil { isolatedGroup = nil }
             if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
             if let id = wigglePart, drawing.partIndex(id) == nil { wigglePart = nil }
+            if let id = targetLayer, drawing.partIndex(id) == nil { targetLayer = nil }
         }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
@@ -194,6 +195,10 @@ public struct DrawingEditor: Sendable {
     /// The group of `isolatedPart` being edited on its own, one level further in: only
     /// its shapes can be picked, and new shapes join it.
     public internal(set) var isolatedGroup: Int?
+    /// The layer made active in the layers panel: new strokes, pen paths, shapes and
+    /// pasted shapes go into it (see `activeLayer`). Nil means each new piece of art
+    /// starts a new part, unless isolation or auto-join says otherwise.
+    public internal(set) var targetLayer: Int?
     /// Fill and outline colors used lately, newest first, for the squeeze palette.
     public internal(set) var recentColors: [RGBAColor] = []
     /// Set by a run of color changes from one control, so a picker drag adds one recent color.
@@ -256,13 +261,14 @@ public struct DrawingEditor: Sendable {
         return refs.count == 1 ? refs[0] : nil
     }
 
-    /// The part new shapes would join: the selected part, or the first selected shape's.
+    /// The part new shapes would join: the isolated part, the active layer, the
+    /// selected part, or the first selected shape's.
     var selectedPartID: Int? {
-        if let isolatedPart { return isolatedPart }
+        if let id = isolatedPart ?? usableTargetLayer { return id }
         return switch selection {
         case .layer(let id), .shape(let id, _): id
         case .shapes(let refs): refs.min()?.part
-        case .none, .reference: nil
+        case .none, .layers, .reference: nil
         }
     }
 
@@ -659,7 +665,7 @@ public struct DrawingEditor: Sendable {
         return switch selection {
         case .layer(let p), .shape(let p, _): p == id
         case .shapes(let refs): refs.allSatisfy { $0.part == id } && drawing.selectedGroup(selection) != nil
-        case .none, .reference: false
+        case .none, .layers, .reference: false
         }
     }
 
@@ -867,7 +873,7 @@ public struct DrawingEditor: Sendable {
         shape.fill = style.fillEnabled ? style.fill : nil
         // Outlined while open so the path is visible; closing may drop the outline.
         shape.stroke = style.makeStroke()
-        if autoJoinSelectedPart || isolatedPart != nil, let target = selectedPartID, let p = drawing.partIndex(target) {
+        if let target = activeLayer, let p = drawing.partIndex(target) {
             addToActiveLayer(&shape, part: p)
             penPath = PenPath(part: target, shape: shape.id, fromStart: false, createdPart: false)
             return ShapeRef(part: target, shape: shape.id)
@@ -1192,12 +1198,12 @@ public struct DrawingEditor: Sendable {
         return shape
     }
 
-    /// Adds `shape` to the isolated part, or with auto-join to the selected part (when
-    /// `joinNeedsOverlap`, only if it overlaps it), or else to a new part on top. Does
-    /// not record undo.
+    /// Adds `shape` to the isolated part or the active layer, or with auto-join to the
+    /// selected part (when `joinNeedsOverlap`, only if it overlaps it), or else to a new
+    /// part on top. Does not record undo.
     @discardableResult
     mutating func insertNewShape(_ shape: VectorShape, joinNeedsOverlap: Bool) -> ShapeRef {
-        if let target = isolatedPart, let p = drawing.partIndex(target) {
+        if let target = isolatedPart ?? usableTargetLayer, let p = drawing.partIndex(target) {
             var shape = shape
             addToActiveLayer(&shape, part: p)
             return ShapeRef(part: target, shape: shape.id)
@@ -1292,6 +1298,8 @@ public struct DrawingEditor: Sendable {
         case .layer(let id):
             // A part's accessories go with it.
             drawing.parts.removeAll { $0.id == id || $0.accessoryOf == id }
+        case .layers(let ids):
+            drawing.parts.removeAll { ids.contains($0.id) || $0.accessoryOf.map(ids.contains) == true }
         case .shape(let pid, let sid):
             guard drawing.indices(part: pid, shape: sid) != nil else { return }
             removeShape(ShapeRef(part: pid, shape: sid))

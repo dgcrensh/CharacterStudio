@@ -50,6 +50,14 @@ final class EditorUIState {
     /// Parts under their bones, then reference images.
     var layers = LayerTree(drawing: Drawing())
     var selectedPart: Int?
+    /// The whole layers selected (one or several), for the panel's multi-select.
+    var selectedLayers: Set<Int> = []
+    /// The layer new art goes into, and its name; nil when new art starts a new part.
+    var activeLayer: Int?
+    var activeLayerName = ""
+    /// True when the active layer is the one chosen in the layers panel (rather than
+    /// isolation or auto-join), so it can be cleared from the canvas.
+    var activeLayerIsChosen = false
     var selectedReference: Int?
     /// A short message such as "Undo" after a multi-finger tap, with a counter so
     /// repeats re-show it.
@@ -207,7 +215,7 @@ final class CanvasStore {
         update(\.canRedo, editor.canRedo)
         let kind: EditorUIState.SelectionKind = switch editor.selection {
         case .none: .none
-        case .layer: .layer
+        case .layer, .layers: .layer
         case .shape, .shapes: .shape
         case .reference: .reference
         }
@@ -282,6 +290,11 @@ final class CanvasStore {
         update(\.frame, editor.drawing.frame)
         update(\.canExport, editor.drawing.exportArea() != nil)
         update(\.layers, LayerTree(drawing: editor.drawing))
+        update(\.selectedLayers, editor.selectedLayers)
+        update(\.activeLayer, editor.activeLayer)
+        update(\.activeLayerName, editor.activeLayer.flatMap { editor.drawing.part($0)?.name } ?? "")
+        update(\.activeLayerIsChosen, editor.activeLayer != nil && editor.activeLayer == editor.targetLayer &&
+            editor.isolatedPart == nil)
         if case .layer(let id) = editor.selection {
             update(\.selectedPart, id)
         } else if case .shape(let id, _) = editor.selection {
@@ -615,6 +628,30 @@ final class CanvasStore {
     // MARK: Layers
 
     func selectPart(_ id: Int) { edit { $0.editor.selectPart(id) } }
+
+    /// Selects layer `id` and makes it the one new art goes into, as tapping its name in
+    /// the layers panel does.
+    func activateLayer(_ id: Int) {
+        edit {
+            $0.editor.selectPart(id)
+            $0.editor.setActiveLayer(id)
+        }
+    }
+
+    /// Back to starting a new part for each new piece of art.
+    func clearActiveLayer() { edit { $0.editor.setActiveLayer(nil) } }
+    func selectLayers(_ ids: Set<Int>) { edit { $0.editor.selectLayers(ids) } }
+    func moveSelectedLayers(toBone bone: Int?) { edit { $0.editor.moveSelectedLayers(toBone: bone) } }
+    func moveTreeRow(from source: Int, to destination: Int, in rows: [LayerTree.Row]) {
+        edit { $0.editor.moveTreeRow(from: source, to: destination, in: rows) }
+    }
+    func selectGroup(_ id: Int, inPart part: Int) { edit { $0.editor.selectGroup(id, inPart: part) } }
+    func setGroupHidden(_ id: Int, inPart part: Int, _ hidden: Bool) {
+        edit { $0.editor.setGroupHidden(id, inPart: part, hidden) }
+    }
+    func setGroupLocked(_ id: Int, inPart part: Int, _ locked: Bool) {
+        edit { $0.editor.setGroupLocked(id, inPart: part, locked) }
+    }
     func renamePart(_ id: Int, to name: String) { edit { $0.editor.renamePart(id, to: name) } }
     func deletePart(_ id: Int) { edit { $0.editor.deletePart(id) } }
     func renameCharacter(_ name: String) { edit { $0.editor.renameCharacter(name) } }
