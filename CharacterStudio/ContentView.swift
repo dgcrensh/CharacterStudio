@@ -127,13 +127,20 @@ private struct ToolBar: View {
     }
 
     private func importSVG(from url: URL) {
+        // One import at a time.
+        guard !ui.isImporting else { return }
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let data: Data
         do {
-            let data = try Data(contentsOf: url)
-            importError = store.importSVG(data, name: url.deletingPathExtension().lastPathComponent)
+            data = try Data(contentsOf: url)
         } catch {
             importError = error.localizedDescription
+            return
+        }
+        let name = url.deletingPathExtension().lastPathComponent
+        Task {
+            if let message = await store.importSVG(data, name: name) { importError = message }
         }
     }
 
@@ -165,6 +172,7 @@ private struct ToolBar: View {
             ViewMenu(store: store, ui: ui, showingFrame: $showingFrame)
             Menu {
                 Button("Import SVG", systemImage: "square.and.arrow.down") { importingSVG = true }
+                    .disabled(ui.isImporting)
                 Button("Export SVG", systemImage: "square.and.arrow.up") { export(store.svgData(), type: .svg) }
                     .disabled(!ui.canExport)
                 Menu("Export PNG", systemImage: "photo") {
@@ -926,20 +934,18 @@ private struct PencilPalette: View {
     }
 }
 
-/// Briefly confirms an undo or redo made with a multi-finger tap.
+/// Briefly confirms an undo or redo made with a multi-finger tap, and shows
+/// "Importing..." for as long as an SVG import reads its file.
 private struct ToastView: View {
     let ui: EditorUIState
     @State private var visible = false
 
     var body: some View {
         Group {
-            if visible, let toast = ui.toast {
-                Text(toast.text)
-                    .font(.headline)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial, in: Capsule())
-                    .transition(.opacity)
+            if ui.isImporting {
+                label("Importing...")
+            } else if visible, let toast = ui.toast {
+                label(toast.text)
             }
         }
         .allowsHitTesting(false)
@@ -950,6 +956,15 @@ private struct ToastView: View {
             try? await Task.sleep(for: .milliseconds(toast.text.count > 12 ? 2500 : 700))
             withAnimation(.easeIn(duration: 0.3)) { visible = false }
         }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.headline)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .transition(.opacity)
     }
 }
 

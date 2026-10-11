@@ -243,6 +243,9 @@ public struct DrawingEditor: Sendable {
     /// The state to undo back to when the gesture's own `before` is not it: an
     /// Option-drag copies the selection first, and undo removes the copy too.
     private var undoBase: Drawing?
+    /// The editable shapes in a grid, for hover, taps, the eraser, the scissors and the
+    /// marquee. Used only while its revision is `revision` (see `freshShapeIndex`).
+    var shapeIndex: ShapeIndex?
 
     public init() {}
 
@@ -345,6 +348,7 @@ public struct DrawingEditor: Sendable {
     public mutating func pencilBegan(at p: Vec2, zoom: Double) {
         gestureZoom = max(zoom, 1e-9)
         hoverPoint = nil
+        if tool.usesShapeIndex { refreshShapeIndex() }
         let px = 1 / gestureZoom
         switch tool {
         case .pencil:
@@ -392,6 +396,7 @@ public struct DrawingEditor: Sendable {
         penCursor = tool == .pen ? p : nil
         hoverPoint = p
         hoverZoom = max(zoom, 1e-9)
+        if p != nil, gesture == nil, tool.usesShapeIndex { refreshShapeIndex() }
     }
 
     /// The shape a Pencil touch at the hover point would select, erase or cut.
@@ -400,7 +405,7 @@ public struct DrawingEditor: Sendable {
         switch tool {
         case .select, .directSelect, .eraser:
             let reach = (tool == .eraser ? EditorMetrics.eraserRadius : EditorMetrics.shapeHit) / hoverZoom
-            return drawing.hitTest(p, tolerance: reach, within: isolatedPart, group: isolatedGroup).map { ShapeRef(part: $0.part, shape: $0.shape) }
+            return hitShape(at: p, tolerance: reach)
         case .scissors:
             return hoverCut?.ref
         case .pencil, .pen, .shape, .bone:
@@ -420,23 +425,9 @@ public struct DrawingEditor: Sendable {
     /// The outline the scissors would cut at the hover point, and where, from one search
     /// (the overlay needs both).
     public var hoverCut: (ref: ShapeRef, point: Vec2)? {
-        guard tool == .scissors, gesture == nil, let p = hoverPoint, let cut = cutTarget(at: p, zoom: hoverZoom),
-              let path = drawing.shape(cut.ref)?.path else { return nil }
-        return (cut.ref, path.segment(cut.segment).point(at: cut.t))
-    }
-
-    /// The outline nearest `p` that the scissors can cut, within reach.
-    func cutTarget(at p: Vec2, zoom: Double) -> (ref: ShapeRef, segment: Int, t: Double)? {
-        var best: (ref: ShapeRef, segment: Int, t: Double, distance: Double)?
-        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
-            guard let shape = drawing.shape(ref) else { continue }
-            let reach = EditorMetrics.curveHit / zoom + (shape.stroke?.width ?? 0) / 2
-            guard shape.path.controlBounds.outset(by: reach).contains(p),
-                  let near = shape.path.nearestSegment(to: p), near.distance <= reach,
-                  near.distance < (best?.distance ?? .infinity) else { continue }
-            best = (ref, near.segment, near.t, near.distance)
-        }
-        return best.map { (ref: $0.ref, segment: $0.segment, t: $0.t) }
+        guard tool == .scissors, gesture == nil, let p = hoverPoint, let cut = cutTarget(at: p, zoom: hoverZoom)
+        else { return nil }
+        return (cut.ref, cut.path.segment(cut.segment).point(at: cut.t))
     }
 
     public mutating func pencilMoved(to p: Vec2) {
@@ -631,7 +622,7 @@ public struct DrawingEditor: Sendable {
                 return .pending(.selectionBody, start: p)
             }
         }
-        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart, group: isolatedGroup) {
+        if let hit = hitShape(at: p, tolerance: EditorMetrics.shapeHit * px) {
             return .pending(.shape(ShapeRef(part: hit.part, shape: hit.shape)), start: p)
         }
         return .pending(.empty, start: p)
@@ -648,7 +639,7 @@ public struct DrawingEditor: Sendable {
     /// goes one level out.
     private mutating func doubleTap(at p: Vec2) {
         guard tool == .select else { return }
-        if let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart, group: isolatedGroup) {
+        if let hit = hitShape(at: p, tolerance: EditorMetrics.shapeHit / gestureZoom) {
             let ref = ShapeRef(part: hit.part, shape: hit.shape)
             if let group = tapGroup(of: ref) {
                 isolate(group: group, inPart: hit.part)
@@ -695,7 +686,7 @@ public struct DrawingEditor: Sendable {
     /// clears the selection. With `addToSelection`, tapping toggles the shape (or its
     /// whole group) in and out of the selection.
     private mutating func tapSelect(at p: Vec2) {
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit / gestureZoom, within: isolatedPart, group: isolatedGroup) else {
+        guard let hit = hitShape(at: p, tolerance: EditorMetrics.shapeHit / gestureZoom) else {
             if !addToSelection { selection = .none }
             return
         }
@@ -728,10 +719,8 @@ public struct DrawingEditor: Sendable {
                 return
             }
         }
-        var refs: Set<ShapeRef> = []
-        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
-            if let shape = drawing.shape(ref), marqueeTouches(shape, rect) { refs.insert(ref) }
-        }
+        refreshShapeIndex(forHitTest: false)
+        var refs = Set(shapes(meeting: rect) { Self.marqueeTouches($0, rect) })
         if additive { refs.formUnion(baseShapes) }
         if tool == .select {
             // A marquee touching a grouped shape takes its whole group.
@@ -752,7 +741,7 @@ public struct DrawingEditor: Sendable {
         return .covering(refs)
     }
 
-    private func marqueeTouches(_ shape: VectorShape, _ rect: Rect) -> Bool {
+    static func marqueeTouches(_ shape: VectorShape, _ rect: Rect) -> Bool {
         guard shape.hitBounds.intersects(rect) else { return false }
         let poly = shape.path.flattened(tolerance: 0.5)
         if poly.contains(where: { rect.contains($0) }) { return true }
@@ -783,7 +772,7 @@ public struct DrawingEditor: Sendable {
         if let picked = pickAnchorOrCurve(at: p, among: refs, px: px) {
             return .pending(picked, start: p)
         }
-        guard let hit = drawing.hitTest(p, tolerance: EditorMetrics.shapeHit * px, within: isolatedPart, group: isolatedGroup) else {
+        guard let hit = hitShape(at: p, tolerance: EditorMetrics.shapeHit * px) else {
             return .pending(.empty, start: p)
         }
         let ref = ShapeRef(part: hit.part, shape: hit.shape)
@@ -1270,14 +1259,12 @@ public struct DrawingEditor: Sendable {
         let steps = max(1, Int((a.distance(to: b) / (radius / 2)).rounded(.up)))
         let samples = (0...steps).map { Vec2.lerp(a, b, Double($0) / Double(steps)) }
         let swept = Rect(points: [a, b]).outset(by: radius)
-        var doomed: [ShapeRef] = []
-        for ref in drawing.editableShapeRefs(within: isolatedPart, group: isolatedGroup) {
-            guard let shape = drawing.shape(ref), shape.hitBounds.intersects(swept),
-                  shape.containsAny(of: samples, tolerance: radius) else { continue }
-            doomed.append(ref)
-        }
+        refreshShapeIndex(forHitTest: false)
+        let doomed = shapes(meeting: swept) { $0.hitBounds.intersects(swept) && $0.containsAny(of: samples, tolerance: radius) }
         guard !doomed.isEmpty else { return }
         for ref in doomed { removeShape(ref) }
+        // The rest of the stroke keeps the index: only the erased shapes left it.
+        shapeIndex = shapeIndex?.removing(doomed, revision: revision)
         validateSelection()
         if let pen = penPath, drawing.indices(part: pen.part, shape: pen.shape) == nil { penPath = nil }
     }
