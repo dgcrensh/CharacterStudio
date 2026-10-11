@@ -99,7 +99,7 @@ final class GroupTests: XCTestCase {
         let group = part.groups[0].id
 
         tap(&e, middle(100))
-        XCTAssertEqual(e.selection, .part(part.id))
+        XCTAssertEqual(e.selection, .layer(part.id))
         tap(&e, middle(100))
         XCTAssertEqual(Set(e.drawing.shapeRefs(in: e.selection)), refs(e, [1, 2]), "the whole group")
         tap(&e, middle(0))
@@ -145,7 +145,7 @@ final class GroupTests: XCTestCase {
         e.pencilMoved(to: Vec2(60, 30))
         e.pencilMoved(to: Vec2(130, 60))
         e.pencilEnded(at: Vec2(130, 60))
-        XCTAssertEqual(e.selection, .part(e.drawing.parts[0].id), "touching the group took all three")
+        XCTAssertEqual(e.selection, .layer(e.drawing.parts[0].id), "touching the group took all three")
     }
 
     func testNewArtInsideAGroupJoinsIt() {
@@ -374,7 +374,7 @@ final class GroupTests: XCTestCase {
         e.groupSelection(name: "Bangs")
         let original = e.drawing.parts[0].groups[0].id
         let text = try XCTUnwrap(e.copySelection())
-        e.selection = .part(e.drawing.parts[0].id)
+        e.selection = .layer(e.drawing.parts[0].id)
         XCTAssertTrue(e.paste(text))
         let part = e.drawing.parts[0]
         XCTAssertTrue(e.drawing.groupsAreValid)

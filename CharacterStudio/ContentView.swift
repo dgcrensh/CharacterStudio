@@ -364,6 +364,20 @@ private struct ContextBar: View {
                 .accessibilityLabel("Exit isolation")
                 Divider().frame(height: 24)
             }
+            if ui.isolatedPart == nil, ui.activeLayer != nil, [Tool.pencil, .pen, .shape].contains(ui.tool) {
+                // Where new art goes, chosen in the layers panel (or by auto-join).
+                HStack(spacing: 6) {
+                    Image(systemName: "square.3.layers.3d")
+                    Text("Into \(ui.activeLayerName)").lineLimit(1)
+                    if ui.activeLayerIsChosen {
+                        Button("Draw New Parts", systemImage: "xmark.circle.fill") { store.clearActiveLayer() }
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.subheadline)
+                Divider().frame(height: 24)
+            }
             switch ui.tool {
             case .pencil:
                 Toggle(isOn: Binding(get: { ui.autoJoin }, set: { store.setAutoJoin($0) })) {

@@ -210,7 +210,7 @@ final class BoneToolTests: XCTestCase {
         drag(&e, Vec2(0, 0), Vec2(100, 0))
         let bone = e.drawing.bones[0].id
         let part = addRect(&e.drawing, "Arm", rect(0, -10, 100, 20))
-        e.selection = .part(part)
+        e.selection = .layer(part)
         e.selectedBone = bone
         XCTAssertTrue(e.canAttachSelectedPart)
         e.attachSelectedPartToSelectedBone()
@@ -377,7 +377,7 @@ final class SkeletonFormatTests: XCTestCase {
     func testCopiedPartsOnBonesPasteWhereTheyWere() {
         var e = DrawingEditor(drawing: skeletonDrawing())
         let arm = e.drawing.parts[1]
-        e.selection = .part(arm.id)
+        e.selection = .layer(arm.id)
         guard let text = e.copySelection() else { return XCTFail("nothing copied") }
         var other = DrawingEditor()
         XCTAssertTrue(other.paste(text))
@@ -481,14 +481,14 @@ final class SymmetryTests: XCTestCase {
         d.bones = [armL, armR]
         let part = addRect(&d, "Sleeve", rect(10, -10, 50, 20), bone: armL.id)
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(part)
+        e.selection = .layer(part)
         e.duplicateMirrored()
         XCTAssertEqual(e.drawing.parts.map(\.name), ["Sleeve.L", "Sleeve.R"])
         let copy = e.drawing.parts[1]
         XCTAssertEqual(copy.bone, armR.id)
         XCTAssertEqual(copy.bounds.center.x, -35, accuracy: 0.01)
         XCTAssertEqual(copy.pivot.x, -35, accuracy: 0.01)
-        XCTAssertEqual(e.selection, .part(copy.id))
+        XCTAssertEqual(e.selection, .layer(copy.id))
         e.undo()
         XCTAssertEqual(e.drawing.parts.map(\.name), ["Sleeve"])
     }
@@ -540,7 +540,7 @@ final class SymmetryTests: XCTestCase {
         var d = Drawing()
         let part = addRect(&d, "Body", rect(100, 0, 40, 40))
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(part)
+        e.selection = .layer(part)
         e.centerSymmetryAxis()
         XCTAssertEqual(e.symmetry.axis, 120, accuracy: 1e-9)
     }
@@ -557,7 +557,7 @@ final class JointToolsTests: XCTestCase {
         _ = addRect(&d, "Lower", rect(100, -10, 100, 20), bone: lower.id)
         _ = addRect(&d, "Body", rect(-50, -50, 40, 100))
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(arm)
+        e.selection = .layer(arm)
         XCTAssertEqual(e.wiggleCandidate, arm)
         e.toggleWiggle(time: 10)
         XCTAssertEqual(e.wigglePart, arm)
@@ -582,7 +582,7 @@ final class JointToolsTests: XCTestCase {
         var d = Drawing()
         let part = addRect(&d, "Arm", rect(0, 0, 10, 10))
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(part)
+        e.selection = .layer(part)
         e.toggleWiggle(time: 0)
         e.deleteSelection()
         XCTAssertNil(e.wigglePart)
@@ -594,7 +594,7 @@ final class JointToolsTests: XCTestCase {
         let part = addRect(&d, "Forearm", rect(0, -15, 120, 30))
         d.parts[0].pivot = Vec2(10, 0)
         var e = DrawingEditor(drawing: d)
-        e.selection = .part(part)
+        e.selection = .layer(part)
         XCTAssertTrue(e.canAddJointCap)
         e.addJointCap()
         let shapes = e.drawing.parts[0].shapes
@@ -622,7 +622,7 @@ final class JointToolsTests: XCTestCase {
         _ = addRect(&d, "Other", rect(400, 400, 20, 20))
         var e = DrawingEditor(drawing: d)
         e.tool = .select
-        e.selection = .part(part)
+        e.selection = .layer(part)
         XCTAssertFalse(e.snap.isEnabled)
         // Drag the pivot (at the part's middle) to just off the bone's head.
         drag(&e, Vec2(50, 50), Vec2(204, 197))

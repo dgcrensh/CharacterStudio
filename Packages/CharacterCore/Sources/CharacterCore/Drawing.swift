@@ -267,7 +267,11 @@ public struct ShapeRef: Hashable, Sendable, Comparable {
 /// What the Pencil has selected.
 public enum Selection: Hashable, Sendable {
     case none
-    case part(Int)
+    /// A whole part or accessory (a layer), with any accessories it owns.
+    case layer(Int)
+    /// Several whole layers, picked in the layers panel. Use `coveringLayers` to build
+    /// one, so a single layer is always `.layer`.
+    case layers(Set<Int>)
     case shape(part: Int, shape: Int)
     /// Several shapes picked one by one or with a marquee. Use `covering` to build
     /// one, so a single shape is always `.shape`.
@@ -280,6 +284,15 @@ public enum Selection: Hashable, Sendable {
         case 0: .none
         case 1: .shape(part: refs.first!.part, shape: refs.first!.shape)
         default: .shapes(refs)
+        }
+    }
+
+    /// The smallest selection holding exactly the layers `ids`: none, one layer, or several.
+    public static func coveringLayers(_ ids: Set<Int>) -> Selection {
+        switch ids.count {
+        case 0: .none
+        case 1: .layer(ids.first!)
+        default: .layers(ids)
         }
     }
 }
@@ -423,7 +436,8 @@ public struct Drawing: Hashable, Sendable, Codable {
     public func exists(_ selection: Selection) -> Bool {
         switch selection {
         case .none: true
-        case .part(let id): partIndex(id) != nil
+        case .layer(let id): partIndex(id) != nil
+        case .layers(let ids): !ids.isEmpty && ids.allSatisfy { partIndex($0) != nil }
         case .shape(let p, let s): indices(part: p, shape: s) != nil
         case .shapes(let refs): !refs.isEmpty && refs.allSatisfy { indices($0) != nil }
         case .reference(let id): referenceIndex(id) != nil
@@ -434,9 +448,12 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             return nil
-        case .part(let id):
+        case .layer(let id):
             // A part carries its accessories, so the frame takes them in.
             let bounds = family(of: id).reduce(Rect.null) { $0.union(parts[$1].bounds) }
+            return bounds.isNull ? nil : SelectionFrame(rect: bounds)
+        case .layers(let ids):
+            let bounds = families(of: ids).reduce(Rect.null) { $0.union(parts[$1].bounds) }
             return bounds.isNull ? nil : SelectionFrame(rect: bounds)
         case .shape(let p, let s):
             return shape(part: p, shape: s).map { SelectionFrame(rect: $0.bounds) }
@@ -451,9 +468,11 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// The shapes a selection covers, as (part index, shape index).
     public func shapeIndices(in selection: Selection) -> [(Int, Int)] {
         switch selection {
-        case .part(let id):
+        case .layer(let id):
             guard let p = partIndex(id) else { return [] }
             return parts[p].shapes.indices.map { (p, $0) }
+        case .layers(let ids):
+            return parts.indices.filter { ids.contains(parts[$0].id) }.flatMap { p in parts[p].shapes.indices.map { (p, $0) } }
         case .shape(let p, let s):
             return indices(part: p, shape: s).map { [$0] } ?? []
         case .shapes(let refs):
@@ -488,9 +507,14 @@ public struct Drawing: Hashable, Sendable, Codable {
         switch selection {
         case .none:
             break
-        case .part(let id):
+        case .layer(let id):
             // Accessories move with their part.
             for p in family(of: id) {
+                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            }
+        case .layers(let ids):
+            for p in families(of: ids) {
                 for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
                 parts[p].pivot = t.apply(parts[p].pivot)
             }

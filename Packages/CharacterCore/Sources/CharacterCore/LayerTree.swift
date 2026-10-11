@@ -1,9 +1,9 @@
 import Foundation
 
-/// What the layers panel shows: the skeleton as a tree with each part under the
-/// bone it is bound to and each accessory under its part, the draw order, then the
-/// reference images. Parts are listed
-/// front to back (the reverse of draw order), like most drawing apps.
+/// What the layers panel shows: the character's layers as a tree of ownership (each
+/// part with its accessories and groups), the skeleton with each part under the bone it
+/// is bound to, the flat draw order, then the reference images. Layers are listed front
+/// to back (the reverse of draw order), like most drawing apps.
 public struct LayerTree: Hashable, Sendable {
     public struct PartLayer: Hashable, Sendable, Identifiable {
         public var id: Int
@@ -16,8 +16,32 @@ public struct LayerTree: Hashable, Sendable {
         /// The part this one is an accessory of, and its name.
         public var accessoryOf: Int?
         public var ownerName: String?
-        /// The part's accessories, front to back (only filled in the skeleton tree).
+        /// For an accessory: drawn behind its part's own art.
+        public var isBehind = false
+        /// For an accessory: moved away from its part in the draw order (long back hair
+        /// behind the torso), so other layers draw between them.
+        public var isDetached = false
+        /// The part's accessories, front to back (filled in the tree and the skeleton).
         public var accessories: [PartLayer] = []
+        /// The layer's groups of shapes, front to back.
+        public var groups: [GroupLayer] = []
+
+        /// The accessories drawn in front of the part's own art, front to back.
+        public var frontAccessories: [PartLayer] { accessories.filter { !$0.isBehind } }
+        /// The accessories drawn behind it, front to back.
+        public var behindAccessories: [PartLayer] { accessories.filter(\.isBehind) }
+    }
+
+    /// A group of shapes inside one layer.
+    public struct GroupLayer: Hashable, Sendable, Identifiable {
+        public var id: Int
+        /// The layer the group is in.
+        public var part: Int
+        public var name: String
+        public var shapeCount: Int
+        /// True when every shape of the group is hidden, or locked.
+        public var isHidden: Bool
+        public var isLocked: Bool
     }
 
     public struct BoneLayer: Hashable, Sendable, Identifiable {
@@ -30,20 +54,70 @@ public struct LayerTree: Hashable, Sendable {
         public var children: [BoneLayer]
     }
 
+    /// One row of the tree as the panel lists it.
+    public struct Row: Hashable, Sendable, Identifiable {
+        public enum Kind: Hashable, Sendable {
+            /// A part or an accessory.
+            case layer
+            /// A part's own art, between the accessories in front of it and those behind.
+            case art
+            /// A group of shapes in `layer`.
+            case group
+        }
+
+        public var kind: Kind
+        /// The layer the row is, or (for art and groups) is in.
+        public var layer: PartLayer
+        public var group: GroupLayer?
+        /// 0 for parts, 1 for accessories and a part's art, then groups one further in.
+        public var depth: Int
+        /// True when the row has rows under it to show, and they are shown.
+        public var canExpand: Bool
+        public var isExpanded: Bool
+
+        public var id: String {
+            switch kind {
+            case .layer: "layer-\(layer.id)"
+            case .art: "art-\(layer.id)"
+            case .group: "group-\(group?.id ?? 0)"
+            }
+        }
+    }
+
+    /// The character's name, shown on the root row.
+    public var name: String
+    /// Every part that isn't an accessory, front to back, each holding its accessories
+    /// and groups: the ownership tree under the character.
+    public var parts: [PartLayer]
     /// The root bone, holding the parts on it and the bones below it.
     public var bones: [BoneLayer]
-    /// Every part, front to back: the draw order, which is independent of the skeleton.
+    /// Every part and accessory, front to back: the draw order, which is independent of
+    /// the skeleton and the ownership tree.
     public var drawOrder: [PartLayer]
     /// Top to bottom.
     public var references: [ReferenceImage]
 
     public init(drawing: Drawing) {
-        let layers = drawing.parts.reversed().map {
-            PartLayer(id: $0.id, name: $0.name, shapeCount: $0.shapes.count, isHidden: $0.isHidden, isLocked: $0.isLocked,
-                      hasHiddenOrLockedShapes: $0.shapes.contains { $0.isHidden || $0.isLocked },
-                      accessoryOf: $0.accessoryOf, ownerName: $0.accessoryOf.flatMap { drawing.part($0)?.name })
+        let parts = drawing.parts
+        let index = Dictionary(parts.indices.map { (parts[$0].id, $0) }, uniquingKeysWith: { a, _ in a })
+        let layers = parts.indices.reversed().map { i in
+            let part = parts[i]
+            var layer = PartLayer(id: part.id, name: part.name, shapeCount: part.shapes.count, isHidden: part.isHidden,
+                                  isLocked: part.isLocked,
+                                  hasHiddenOrLockedShapes: part.shapes.contains { $0.isHidden || $0.isLocked },
+                                  accessoryOf: part.accessoryOf, ownerName: part.accessoryOf.flatMap { drawing.part($0)?.name })
+            if let owner = part.accessoryOf, let o = index[owner] {
+                layer.isBehind = i < o
+                layer.isDetached = !Self.adjoins(i, owner: o, in: parts)
+            }
+            layer.groups = part.groupRuns.reversed().map { run in
+                GroupLayer(id: run.group.id, part: part.id, name: run.group.name, shapeCount: run.indices.count,
+                           isHidden: run.indices.allSatisfy { part.shapes[$0].isHidden },
+                           isLocked: run.indices.allSatisfy { part.shapes[$0].isLocked })
+            }
+            return layer
         }
-        let boneOf = Dictionary(drawing.parts.map { ($0.id, $0.bone) }, uniquingKeysWith: { a, _ in a })
+        let boneOf = Dictionary(parts.map { ($0.id, $0.bone) }, uniquingKeysWith: { a, _ in a })
         // Accessories sit under their owners rather than straight under the bone.
         let owners = layers.filter { $0.accessoryOf == nil }.map { owner in
             var layer = owner
@@ -54,8 +128,58 @@ public struct LayerTree: Hashable, Sendable {
             BoneLayer(id: name, bone: id, parts: owners.filter { boneOf[$0.id].flatMap { $0 } == id },
                       children: drawing.childBones(of: id).map { layer($0.id, name: $0.name) })
         }
+        name = drawing.name
+        self.parts = owners
         bones = [layer(nil, name: CharacterFormat.rootBone)]
         drawOrder = layers
         references = drawing.references.reversed()
+    }
+
+    /// True when the accessory at index `i` is in its owner's run: the owner at `o` and
+    /// the layers next to it that belong to it.
+    private static func adjoins(_ i: Int, owner o: Int, in parts: [Part]) -> Bool {
+        let owner = parts[o].id
+        let step = i < o ? -1 : 1
+        var k = o + step
+        while k != i {
+            guard parts[k].accessoryOf == owner else { return false }
+            k += step
+        }
+        return true
+    }
+
+    /// The tree as rows, front to back, with the rows whose ids are in `expanded` open:
+    /// a part opens to its front accessories, its own art, then its behind accessories
+    /// (or straight to its groups when it has no accessories); an accessory, and a
+    /// part's art, open to their groups.
+    public func treeRows(expanded: Set<String>) -> [Row] {
+        var rows: [Row] = []
+        func add(_ kind: Row.Kind, _ layer: PartLayer, depth: Int, children: Bool) -> Bool {
+            var row = Row(kind: kind, layer: layer, depth: depth, canExpand: children, isExpanded: false)
+            row.isExpanded = children && expanded.contains(row.id)
+            rows.append(row)
+            return row.isExpanded
+        }
+        func addGroups(of layer: PartLayer, depth: Int) {
+            for group in layer.groups {
+                rows.append(Row(kind: .group, layer: layer, group: group, depth: depth, canExpand: false, isExpanded: false))
+            }
+        }
+        for part in parts {
+            let hasAccessories = !part.accessories.isEmpty
+            guard add(.layer, part, depth: 0, children: hasAccessories || !part.groups.isEmpty) else { continue }
+            guard hasAccessories else {
+                addGroups(of: part, depth: 1)
+                continue
+            }
+            for accessory in part.frontAccessories where add(.layer, accessory, depth: 1, children: !accessory.groups.isEmpty) {
+                addGroups(of: accessory, depth: 2)
+            }
+            if add(.art, part, depth: 1, children: !part.groups.isEmpty) { addGroups(of: part, depth: 2) }
+            for accessory in part.behindAccessories where add(.layer, accessory, depth: 1, children: !accessory.groups.isEmpty) {
+                addGroups(of: accessory, depth: 2)
+            }
+        }
+        return rows
     }
 }
