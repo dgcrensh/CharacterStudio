@@ -62,6 +62,8 @@ final class EditorUIState {
     /// A short message such as "Undo" after a multi-finger tap, with a counter so
     /// repeats re-show it.
     var toast: (text: String, count: Int)?
+    /// An SVG import is reading its file; the toast says "Importing..." until it ends.
+    var isImporting = false
     var shapeKind: ShapeKind = .rectangle
     var shapeOptions = ShapeToolOptions()
     /// The on-screen modifier strip's latched keys.
@@ -583,15 +585,23 @@ final class CanvasStore {
     // MARK: Import and export
 
     /// Reads SVG art into new parts on top, selects them and fits them in the view.
-    /// Returns an error message when nothing could be imported.
-    func importSVG(_ data: Data, name: String) -> String? {
+    /// The file is parsed off the main thread, with "Importing..." showing meanwhile;
+    /// a second import while one runs is ignored. Returns an error message when nothing
+    /// could be imported.
+    func importSVG(_ data: Data, name: String) async -> String? {
+        guard !ui.isImporting else { return nil }
+        ui.isImporting = true
+        defer { ui.isImporting = false }
         let interval = Signposts.canvas.beginInterval("SVG import")
         defer { Signposts.canvas.endInterval("SVG import", interval) }
-        let text = String(decoding: data, as: UTF8.self)
+        let parsed = await Task.detached(priority: .userInitiated) { () -> Result<SVGImportResult, Error> in
+            Result { try SVGImporter.parse(String(decoding: data, as: UTF8.self), name: name) }
+        }.value
         let result: SVGImportResult
-        do {
-            result = try SVGImporter.parse(text, name: name)
-        } catch {
+        switch parsed {
+        case .success(let value):
+            result = value
+        case .failure(let error):
             return (error as? SVGImportError)?.description ?? error.localizedDescription
         }
         edit { _ = $0.editor.importParts(result.parts) }

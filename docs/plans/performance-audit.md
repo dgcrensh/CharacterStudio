@@ -698,6 +698,10 @@ What the split says:
   over every shape. Step 5's segment skip (its third bullet) matters more for the scissors than
   the grid; the grid still matters for `hitTest` and the eraser, which do scale.
 
+#### Step 3: open and import
+
+Numbers to follow.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and

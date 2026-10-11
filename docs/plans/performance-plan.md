@@ -143,6 +143,14 @@ from 300 to 4,800 shapes at 60 shapes per part, under 1 ms on the Mac.
 
 ## Step 3: open and import without the wait (M)
 
+**Done (except Open bullet 3).** Numbers are read from bytes (`FastDecimal`, shared by `JSONParser` and the
+SVG `NumberScanner`, with `Double(text)` as the fallback for exponents and more than 15 significant digits),
+whitespace is a `switch`, and strings without escapes skip the byte buffer. `Node` keeps a parent link and a key
+or index, so decoding builds no path strings unless it throws. Import parses in a detached task behind an
+"Importing..." toast and ignores a second import while one runs; `XMLReader` no longer allocates arrays per tag.
+`NumberParsingTests` checks every path against `Double(text)` bit for bit. Open bullet 3 (art after the first
+frame) is deferred: it needs step 1's background job. Numbers in the audit under "Step 3".
+
 ### Open
 
 **Today.** 390 ms at 2,400 shapes, all of it string work as far as the code shows:
