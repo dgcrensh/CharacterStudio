@@ -13,13 +13,21 @@ public struct Bone: Hashable, Sendable, Codable, Identifiable {
     public var parent: Int?
     public var head: Vec2
     public var tail: Vec2
+    /// How far the bone may turn from its rest pose; nil turns freely.
+    public var limit: RotationLimit?
+    /// A two-bone IK constraint: the bone and its parent bend so its tail reaches a
+    /// target dragged in Pose mode. Nil for a bone posed only by turning it.
+    public var ik: IKConstraint?
 
-    public init(id: Int, name: String, parent: Int? = nil, head: Vec2, tail: Vec2) {
+    public init(id: Int, name: String, parent: Int? = nil, head: Vec2, tail: Vec2,
+                limit: RotationLimit? = nil, ik: IKConstraint? = nil) {
         self.id = id
         self.name = name
         self.parent = parent
         self.head = head
         self.tail = tail
+        self.limit = limit
+        self.ik = ik
     }
 
     public var length: Double { head.distance(to: tail) }

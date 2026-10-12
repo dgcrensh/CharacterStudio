@@ -40,6 +40,24 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses (done; see the notes below).
 6. Variants and polish: variants per part, skins, sample characters (done; see the notes below). (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below; bounded undo came with the performance audit.)
+7. Limbs: two-bone IK, rotation limits, mirror pose and Clean for Rig (done; see the notes below).
+
+## Milestone 7 notes (limbs)
+
+Milestone 7 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.2: the limb constraints are new optional keys on bones.
+
+**Using it**
+
+- **IK targets** (Pose > Turn): select a limb's end bone (a forearm or shin, on a parent to bend with) and choose **Limb > Add IK Target**. An orange target appears at its tip; drag it and the bone and its parent bend so the tip follows the Pencil, the joint keeping the way it already bends. **Flip Bend** folds the joint the other way with the tip held still, and **Remove IK Target** turns the bone back into a plain FK bone. Dragging the middle of the bone still turns just that bone. Each drag is one undo step.
+- **Rotation limits** (Limb menu): **Set Minimum to Current Angle** and **Set Maximum to Current Angle** limit how far the selected bone turns from rest, taken from its turn in the pose; the menu shows the range, and **Clear Limits** frees it. For a knee, set the minimum with the leg straight and it can't bend backwards. Turning by drag, the angle field, IK, applying a saved pose and mirroring all stay inside the limits.
+- **Mirror Pose** (Pose, shown when bones have `.L`/`.R` partners): **Left to Right** copies the turns of the character's left bones (`.L`, on the right of the screen) to their right partners, mirrored, so a raised arm raises the other the same way; **Right to Left** goes back. Bones in the middle keep their turns. Mirror Bone in Setup also mirrors limits and IK bends.
+- **Clean for Rig** (More menu): lists outlines whose ends almost meet without joining, outlines that run the other way round from their layer's largest one, and segments too long to bend well on parts bound to two bones (longer than half the shorter bone). **Fix** one, or **Fix All** as one undo step: gaps close (touching ends merge), outlines turn round, and long segments get anchors at even steps that keep the curve and blend the weights. Hidden and locked art is left alone.
+
+**How it works**
+
+- **Model** (CharacterCore, `Limbs.swift`): `Bone.limit` (a `RotationLimit`, degrees from rest) and `Bone.ik` (an `IKConstraint` with its bend direction). `Drawing.solvingIK` solves the two-bone chain analytically in posed space (law of cosines for the joint, then the end bone aims at the target), clamping each turn to its limit and re-aiming the end bone from wherever its parent stopped. `Drawing.mirroringPose` copies turns to the partner named by `SideName`, negated. `DrawingEditor+Limbs` has the commands and the IK drag in `DrawingEditor`; tests are in `LimbTests`.
+- **Clean for Rig** (`RigCheck.swift`): `RigCheck.issues` and `RigCheck.fixing`; the editor's `rigIssues` and `cleanForRig(_:)`. The robot sample shows it: its chest panel and button run the other way from its torso.
+- **Format:** a bone may carry `limits` (`min`, `max`) and `ik` (`bend`: `clockwise` or `counterclockwise`), written only when set; see [Schema/README.md](Schema/README.md#skeleton). The robot's neck now has a ±30 degree limit as the example.
 
 ## Milestone 6 notes (variants and skins)
 

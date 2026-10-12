@@ -98,7 +98,7 @@ These bridge directly into milestones 4-5 and are where the app earns its purpos
     of work already done.
 22. **Clean for rig (M).** As in vector-workflow.md #12: close stray gaps, consistent winding, resample
     long segments so weighted deformation has anchors to work with. Run it as a check that lists problems
-    before applying fixes.
+    before applying fixes. *Shipped with milestone 7 (More > Clean for Rig).*
 
 ## Tier 5: workspace and interchange
 
