@@ -283,3 +283,18 @@ Two additions to clipping and accessories. The file format stays 0.2 with two ne
 - **Model** (CharacterCore): `ShapeGroup.isClipped` and `VectorShape.isBehindOwner`. `Part.clipBase(ofGroup:)` finds a clipped group's base (the nearest shape below the group that isn't clipped or in a clipped group), `groupClipBase(of:)` gives it for any member, and `clipBase(of:)` now skips clipped groups' shapes outside a group. `Drawing.drawStack` is the order things draw in: `parts`, with each accessory's behind shapes split off into a copy of the accessory placed just before its owner. The canvas, hit testing, PNG and SVG all draw from it. Commands are `setGroupClipped` (in `DrawingEditor+Layers`) and `setBehindOwner` (in `DrawingEditor+Appearance`), each one undo step. Tests are in `GroupClipAndBehindTests`.
 - **Rendering:** the stencil gives up one winding bit (fills wrap at 32 overlaps instead of 64) for a group mask bit. A clipped group copies its base's clip into the mask bit as it starts, its shapes paint only where that bit is set, and clip bases inside the group mark the clip only where they painted. When the group ends the clip goes back to the group's base for any clipped shapes above it, and the mask is cleared.
 - **Format:** the example robot's head has a Visor group clipped to it, with a glint clipped to the visor, and its antenna now draws in front of the head with the stalk behind it. See [Schema/README.md](Schema/README.md#groups).
+
+## Behind shapes anywhere in the stack notes
+
+Follow-up to Draw Behind Owner, from [draw-order.md](docs/plans/draw-order.md): an accessory's behind shapes can draw behind any layer, not only just behind its part, so long hair on the head can have its back sheet behind the neck while the neck stays behind the head. The file format stays 0.2 with one new optional key, `behindSlot` on a slot.
+
+**Using it**
+
+- **Stack view:** an accessory with Draw Behind Owner shapes gets a second row, "Hair (behind)", where those shapes draw, with "behind Head" under it. Drag that row: the shapes draw just behind the layer on the row above where you drop it (drop it under Neck and they go behind the neck). Dropped right under another accessory's behind row, they go behind the same layer. Dropping it at the very top does nothing. Tapping the row selects the accessory.
+- **Staying put:** the behind shapes stay just behind the layer you dropped them on when other layers move, and go back to just behind the part if that layer is deleted or the accessory is detached. Long-press the row and choose **Draw Just Behind Head** to put them back yourself.
+- Hair is still one accessory: it selects, hides, locks and recolours as one layer; only its stacking has two rows. The Tree view is unchanged.
+
+**How it works**
+
+- **Model** (CharacterCore): `Part.behindLayer` is the layer an accessory's behind shapes draw just behind, nil for its owner. `Drawing.drawStack` (and `drawStackPieces`, which flags the behind pieces) places each accessory's behind piece just before that layer. `Drawing.accessoriesAreValid` and `repairAccessories` clear a `behindLayer` that is gone, is the owner, or is on a plain part. `LayerTree.stack` is the Stack view's rows, behind pieces included, and `DrawingEditor.moveStackRow(from:to:in:)` turns a drag of them into `setPartOrder` for a layer or `setBehindLayer(of:to:)` for a behind piece, one undo step each. Pasting a copied accessory with the layer its shapes draw behind keeps the link. Tests are in `BehindLayerTests`.
+- **Format:** `behindSlot` on an accessory's slot names the slot its behind shapes draw behind, written only when that isn't the owner. See [Schema/README.md](Schema/README.md#accessories).

@@ -127,7 +127,8 @@
         "id": { "type": "string" },
         "bone": { "type": "string" },
         "attachment": { "description": "The attachment shown by default, or absent for an empty slot.", "type": "string" },
-        "accessoryOf": { "description": "The id of the slot this one is an accessory of (hair or a hat on the head). Written only for accessories. An accessory is on its owner's bone and has its own place in drawOrder.", "type": "string" }
+        "accessoryOf": { "description": "The id of the slot this one is an accessory of (hair or a hat on the head). Written only for accessories. An accessory is on its owner's bone and has its own place in drawOrder.", "type": "string" },
+        "behindSlot": { "description": "For an accessory with behindOwner shapes: the id of the slot those shapes draw just behind instead of the owner (the neck, for long back hair on the head). Written only when it isn't the owner. An unknown slot reads as the owner.", "type": "string" }
       }
     },
     "attachment": {

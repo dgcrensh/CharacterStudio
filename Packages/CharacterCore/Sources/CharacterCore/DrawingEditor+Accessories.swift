@@ -23,15 +23,21 @@ extension Drawing {
 
     /// The layers as they draw, back to front: `parts`, except that an accessory's
     /// shapes marked `isBehindOwner` are split off into a layer of their own (with the
-    /// accessory's id, name and flags) drawn just behind its owner's art, after any
-    /// accessories already behind it. Clipping and group clipping work within each side,
-    /// so a shape drawn behind clips only to shapes drawn behind with it.
-    public var drawStack: [Part] {
+    /// accessory's id, name and flags) drawn just behind its owner's art, or behind its
+    /// `behindLayer` when that is set, after any other behind shapes already there.
+    /// Clipping and group clipping work within each side, so a shape drawn behind clips
+    /// only to shapes drawn behind with it.
+    public var drawStack: [Part] { drawStackPieces.map(\.part) }
+
+    /// `drawStack`, with each entry flagged when it is an accessory's behind shapes
+    /// rather than a whole layer or the rest of a split accessory.
+    public var drawStackPieces: [(part: Part, isBehind: Bool)] {
+        let ids = Set(parts.map(\.id))
         let owners = Set(parts.filter { $0.accessoryOf == nil }.map(\.id))
         func splits(_ part: Part) -> Bool {
             part.accessoryOf.map(owners.contains) == true && part.shapes.contains(where: \.isBehindOwner)
         }
-        guard parts.contains(where: splits) else { return parts }
+        guard parts.contains(where: splits) else { return parts.map { ($0, false) } }
         var behind: [Int: [Part]] = [:]
         var stack: [Part] = []
         for part in parts {
@@ -42,28 +48,40 @@ extension Drawing {
             var back = part, front = part
             back.shapes = part.shapes.filter(\.isBehindOwner)
             front.shapes = part.shapes.filter { !$0.isBehindOwner }
-            behind[owner, default: []].append(back)
+            let target = part.behindLayer.flatMap { ids.contains($0) ? $0 : nil } ?? owner
+            behind[target, default: []].append(back)
             stack.append(front)
         }
         return stack.flatMap { part in
-            part.accessoryOf == nil ? (behind[part.id] ?? []) + [part] : [part]
+            (behind[part.id] ?? []).map { ($0, true) } + [(part, false)]
         }
     }
 
-    /// True when every accessory's owner exists and isn't an accessory itself, and every
-    /// accessory is on its owner's bone.
+    /// The layer accessory `id`'s behind shapes draw just behind: its `behindLayer`, else
+    /// its owner. Nil for a part that isn't an accessory.
+    public func behindTarget(of id: Int) -> Int? {
+        guard let part = part(id), let owner = part.accessoryOf else { return nil }
+        return part.behindLayer.flatMap { self.part($0) == nil ? nil : $0 } ?? owner
+    }
+
+    /// True when every accessory's owner exists and isn't an accessory itself, every
+    /// accessory is on its owner's bone, and every `behindLayer` is a layer other than the
+    /// owner, set only on an accessory.
     public var accessoriesAreValid: Bool {
         for part in parts {
             guard let id = part.accessoryOf else { continue }
             guard id != part.id, let owner = self.part(id), owner.accessoryOf == nil, owner.bone == part.bone
             else { return false }
         }
-        return true
+        return parts.allSatisfy { part in
+            part.behindLayer.map { $0 != part.accessoryOf && part.accessoryOf != nil && self.part($0) != nil } ?? true
+        }
     }
 
     /// Makes the accessories valid (see `accessoriesAreValid`): an accessory of an
     /// accessory belongs to that one's owner, an accessory whose owner is gone becomes a
-    /// plain part, and each accessory moves to its owner's bone.
+    /// plain part, each accessory moves to its owner's bone, and a `behindLayer` that is
+    /// gone, is the owner or is on a plain part is cleared (its shapes draw behind the owner).
     public mutating func repairAccessories() {
         let byID = Dictionary(parts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for p in parts.indices {
@@ -78,6 +96,9 @@ extension Drawing {
         }
         for p in parts.indices {
             if let owner = parts[p].accessoryOf { parts[p].bone = byID[owner]?.bone }
+            if let target = parts[p].behindLayer, target == parts[p].accessoryOf || parts[p].accessoryOf == nil || byID[target] == nil {
+                parts[p].behindLayer = nil
+            }
         }
     }
 
@@ -184,6 +205,20 @@ extension DrawingEditor {
         cancelGesture()
         let before = drawing
         drawing.parts[p].accessoryOf = owner
+        commit(from: before)
+    }
+
+    /// Makes accessory `id`'s behind shapes (`VectorShape.isBehindOwner`) draw just behind
+    /// layer `target` (any layer, the accessory itself included) instead of its owner, as
+    /// one undo step. Nil or the owner puts them back just behind the owner.
+    public mutating func setBehindLayer(of id: Int, to target: Int?) {
+        guard let p = drawing.partIndex(id), let owner = drawing.parts[p].accessoryOf else { return }
+        let value = target == owner ? nil : target
+        if let value { guard drawing.part(value) != nil else { return } }
+        guard drawing.parts[p].behindLayer != value else { return }
+        cancelGesture()
+        let before = drawing
+        drawing.parts[p].behindLayer = value
         commit(from: before)
     }
 

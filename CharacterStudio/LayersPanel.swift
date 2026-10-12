@@ -43,7 +43,7 @@ struct LayersPanel: View {
                     layersHeader
                 } footer: {
                     Text(showsStack
-                         ? "Every layer front to back, as it draws. Drag a layer anywhere in the stack; a part's accessories move along with it."
+                         ? "Every layer front to back, as it draws. Drag a layer anywhere in the stack; a part's accessories move along with it. An accessory's behind shapes have a row of their own: drag it to draw them just behind the layer above it."
                          : "Tap a layer's name to select it and draw into it; tap the character to go back to a new part for each stroke. Open a part to see its accessories and groups, and drag rows to reorder.")
                 }
 
@@ -317,19 +317,68 @@ struct LayersPanel: View {
     // MARK: Stack
 
     private var stackRows: some View {
-        let layers = ui.layers.drawOrder
-        return ForEach(layers) { layer in
-            layerRow(layer, depth: 0, disclosure: EmptyView(), inStack: true)
-                .tag(layer.id)
-                .id("stack-\(layer.id)")
-                .listRowBackground(revealed == layer.id ? Color.accentColor.opacity(0.15) : nil)
+        let rows = ui.layers.stack
+        return ForEach(rows) { row in
+            Group {
+                if row.isBehind {
+                    behindRow(row)
+                } else {
+                    layerRow(row.layer, depth: 0, disclosure: EmptyView(), inStack: true)
+                        .tag(row.layer.id)
+                }
+            }
+            .id(row.isBehind ? "stack-behind-\(row.layer.id)" : "stack-\(row.layer.id)")
+            .listRowBackground(revealed == row.layer.id && !row.isBehind ? Color.accentColor.opacity(0.15) : nil)
         }
-        // Drag a layer to change the draw order.
+        // Drag a layer to change the draw order, or an accessory's behind shapes to draw
+        // them just behind the layer above where they're dropped.
         .onMove { from, to in
-            var moved = layers
-            moved.move(fromOffsets: from, toOffset: to)
-            store.setPartOrder(frontToBack: moved.map(\.id))
+            guard let source = from.first else { return }
+            store.moveStackRow(from: source, to: to, in: rows)
         }
+    }
+
+    /// An accessory's shapes drawn behind its owner (or another layer), listed where
+    /// they draw. Not selectable on its own: tapping it selects the accessory.
+    private func behindRow(_ row: LayerTree.StackRow) -> some View {
+        let part = row.layer
+        return HStack(spacing: 10) {
+            ActiveBar(isActive: false)
+            Image(systemName: "arrow.turn.left.down")
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 52)
+                .accessibilityHidden(true)
+            Button { store.activateLayer(part.id) } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("\(part.name) (behind)")
+                            .lineLimit(1)
+                            .foregroundStyle(part.isHidden ? Color.secondary : Color.primary)
+                        if let target = row.behindLayerName {
+                            Text("behind \(target)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Text(shapeCount(part.shapeCount))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isEditing || part.isHidden || part.isLocked)
+        }
+        .contextMenu {
+            if let owner = part.accessoryOf, row.behindLayer != owner, let ownerName = part.ownerName {
+                Button("Draw Just Behind \(ownerName)", systemImage: "arrow.uturn.backward") {
+                    store.setBehindLayer(of: part.id, to: nil)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Drag to draw these shapes behind another layer")
     }
 
     // MARK: Layer rows

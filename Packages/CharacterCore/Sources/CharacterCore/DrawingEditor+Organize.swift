@@ -534,6 +534,7 @@ extension DrawingEditor {
             for part in parts {
                 var copy = Part(id: newIDs[part.id]!, name: drawing.uniquePartName(part.name), pivot: shift.apply(part.pivot))
                 copy.accessoryOf = part.accessoryOf.flatMap { newIDs[$0] }
+                copy.behindLayer = part.behindLayer.flatMap { newIDs[$0] }
                 for shape in part.shapes { copy.shapes.append(pastedCopy(of: shape, moved: shift, globals: globals)) }
                 copy.groups = part.groups
                 drawing.renewGroups(of: &copy)

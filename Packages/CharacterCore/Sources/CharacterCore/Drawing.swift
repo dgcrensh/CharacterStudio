@@ -24,8 +24,9 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public var isLocked: Bool
     /// The group (a `ShapeGroup` id in the same part) this shape belongs to, if any.
     public var group: Int?
-    /// In an accessory, draws just behind the owner part's art instead of with the rest
-    /// of the accessory (a hat's back brim behind the head). Ignored in a part's own art.
+    /// In an accessory, draws just behind the owner part's art (or the accessory's
+    /// `Part.behindLayer`) instead of with the rest of the accessory (a hat's back brim
+    /// behind the head). Ignored in a part's own art.
     public var isBehindOwner = false
 
     public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
@@ -173,6 +174,10 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// sits on its owner's bone and moves, hides and reorders with it, but has its own
     /// place in the draw order. Accessories don't own accessories.
     public var accessoryOf: Int?
+    /// For an accessory with shapes drawn behind its owner (`VectorShape.isBehindOwner`):
+    /// the layer those shapes draw just behind instead of the owner, such as the neck for
+    /// long back hair on the head. Nil draws them just behind the owner.
+    public var behindLayer: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {

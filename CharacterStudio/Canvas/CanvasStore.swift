@@ -500,6 +500,10 @@ final class CanvasStore {
     func moveSelectionToNewPart() { edit { $0.editor.moveSelectionToNewPart() } }
     func moveSelection(toPart id: Int) { edit { $0.editor.moveSelection(toPart: id) } }
     func setPartOrder(frontToBack ids: [Int]) { edit { $0.editor.setPartOrder(frontToBack: ids) } }
+    func moveStackRow(from source: Int, to destination: Int, in rows: [LayerTree.StackRow]) {
+        edit { $0.editor.moveStackRow(from: source, to: destination, in: rows) }
+    }
+    func setBehindLayer(of id: Int, to target: Int?) { edit { $0.editor.setBehindLayer(of: id, to: target) } }
     func canMergePartDown(_ id: Int) -> Bool { session.editor.canMergePartDown(id) }
 
     /// Adds an empty accessory to part `id` and isolates it, so drawing goes into it.

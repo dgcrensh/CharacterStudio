@@ -241,6 +241,9 @@ Not in the original plan; added on request after phase 4.
   while the rest of the accessory keeps its place (`Drawing.drawStack`). Saved as `"behindOwner": true` on the
   shape. For outfits this keeps a hat one accessory slot even when part of it goes behind the head; a Spine export
   would have to split such an accessory into two slots.
+- **Behind shapes anywhere.** `Part.behindLayer` lets an accessory's behind shapes draw just behind any layer, set
+  by dragging their own "(behind)" row in the Stack view, so long hair's back sheet can go behind the neck. Saved as
+  `"behindSlot"` on the slot. See [draw-order.md](draw-order.md).
 
 ## Phases
 
