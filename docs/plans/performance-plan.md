@@ -313,6 +313,10 @@ after undo) the getters fall back until the next hover rebuilds the index.
 
 ## Not in this plan
 
+All six steps have shipped. What is slow after them, profiled and ranked, is in
+[performance-next.md](performance-next.md).
+
+
 - MSAA and the double-drawn covers (audit finding 8): still unmeasured, and need a Metal System Trace on an iPad.
 - Save (153 ms at 2,400 shapes): it runs off the main thread on autosave, so nobody waits on it. The audit's
   `JSONValue.formatted()` note (each object formatted twice when it is too long for one line) is the fix if a trace
