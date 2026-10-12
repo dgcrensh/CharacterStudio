@@ -82,28 +82,49 @@ public enum RigCheck {
     /// run the same way as the rest, and long segments split evenly with new anchors
     /// that keep the curve's shape and blend their neighbours' weights.
     public static func fixing(_ issues: [RigIssue]? = nil, in drawing: Drawing) -> Drawing {
+        fixed(issues, in: drawing).drawing
+    }
+
+    /// `fixing`, and the shapes with keyforms it left as they were because their fixes
+    /// couldn't be made the same way at every key. A shape with keyforms gets each fix at
+    /// the rest and at every key, decided from what it shows: the same new anchors at the
+    /// same places along its curves, the same reversal and the same closing.
+    static func fixed(_ issues: [RigIssue]? = nil, in drawing: Drawing) -> (drawing: Drawing, skipped: [ShapeRef]) {
         let issues = issues ?? self.issues(in: drawing)
         var out = drawing
+        var skipped: [ShapeRef] = []
         // Shape by shape; within a shape, splits go last to first so indices hold, and
         // before a reversal, which renumbers the segments.
         let byShape = Dictionary(grouping: issues, by: \.shape)
         for (ref, found) in byShape {
             guard let (p, s) = out.indices(ref), out.parts[p].isEditable(s) else { continue }
-            var path = out.parts[p].shapes[s].path
+            let shown = out.parts[p].shapes[s].path
             let longest = longestSegment(for: out.parts[p], in: out)
             let splits = found.compactMap { issue -> Int? in
                 if case .longSegment(let segment, _) = issue.kind { return segment }
                 return nil
             }
+            // Where each long segment is cut at even lengths, measured on the shown path.
+            var cutsBySegment: [Int: [Double]] = [:]
             if let longest {
-                for segment in Set(splits).sorted(by: >) where segment < path.segmentCount {
-                    let curve = path.segment(segment)
+                for segment in Set(splits) where segment < shown.segmentCount {
+                    let curve = shown.segment(segment)
                     let n = Int((arcLength(curve) / longest).rounded(.up))
-                    guard n > 1 else { continue }
-                    // Cuts at even lengths along the segment, made from its end back, so
-                    // each one's parameter is along what is left of it (splitting keeps the
-                    // parameter of the piece before the cut in proportion).
-                    let cuts = evenCuts(curve, pieces: n)
+                    if n > 1 { cutsBySegment[segment] = evenCuts(curve, pieces: n) }
+                }
+            }
+            let reverses = found.contains { $0.kind == .winding }
+            let closes = found.contains { if case .gap = $0.kind { true } else { false } }
+            let ends = (shown.endPoint(.start), shown.endPoint(.end))
+            let merges = ends.0.flatMap { a in ends.1.map { a.distance(to: $0) <= gapTolerance / 4 } } ?? false
+            func fix(_ original: BezierPath) -> BezierPath {
+                var path = original
+                for segment in cutsBySegment.keys.sorted(by: >) {
+                    let cuts = cutsBySegment[segment]!
+                    let n = cuts.count + 1
+                    // Cut from the segment's end back, so each cut's parameter is along what
+                    // is left of it (splitting keeps the parameter of the piece before the
+                    // cut in proportion).
                     let start = path.points[segment], end = path.points[(segment + 1) % path.points.count]
                     for k in stride(from: cuts.count - 1, through: 0, by: -1) {
                         let rest = k + 1 < cuts.count ? cuts[k + 1] : 1
@@ -116,14 +137,25 @@ public enum RigCheck {
                         path.points[segment + k].width = start.width + (end.width - start.width) * f
                     }
                 }
+                if reverses { path = path.reversed() }
+                if closes, !path.closed {
+                    path = path.closedByJoiningEnds(mergeWithin: merges ? .infinity : -1) ?? path.closedWithStraightEdge() ?? path
+                }
+                return path
             }
-            if found.contains(where: { $0.kind == .winding }) { path = path.reversed() }
-            if found.contains(where: { if case .gap = $0.kind { true } else { false } }), !path.closed {
-                path = path.closedByJoiningEnds(mergeWithin: gapTolerance / 4) ?? path.closedWithStraightEdge() ?? path
+            let shape = out.parts[p].shapes[s]
+            guard shape.isKeyed else {
+                out.parts[p].shapes[s].path = fix(shown)
+                continue
             }
-            out.parts[p].shapes[s].path = path
+            guard let fixedShape = shape.changingPoints({ fix($0) }, values: out.parameterValues, parameters: out.parameters)
+            else {
+                skipped.append(ref)
+                continue
+            }
+            out.parts[p].shapes[s] = fixedShape
         }
-        return out
+        return (out, skipped)
     }
 
     // MARK: Checks
@@ -220,7 +252,9 @@ extension DrawingEditor {
     public mutating func cleanForRig(_ issues: [RigIssue]? = nil) {
         cancelGesture()
         let before = drawing
-        drawing = RigCheck.fixing(issues, in: drawing)
+        let fixed = RigCheck.fixed(issues, in: drawing)
+        drawing = fixed.drawing
+        if !fixed.skipped.isEmpty { notice = Self.cleanForRigRefusal }
         selectedAnchors = []
         commit(from: before)
     }

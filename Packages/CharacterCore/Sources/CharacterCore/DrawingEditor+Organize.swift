@@ -625,27 +625,29 @@ extension DrawingEditor {
     mutating func cut(_ ref: ShapeRef, segment: Int, t: Double) {
         guard let idx = drawing.indices(ref) else { return }
         let shape = drawing.parts[idx.0].shapes[idx.1]
-        var path = shape.path
-        guard segment >= 0, segment < path.segmentCount else { return }
-        let index: Int
-        if t < 0.02 {
-            index = segment
-        } else if t > 0.98 {
-            index = (segment + 1) % path.points.count
-        } else {
-            index = path.insertPoint(segment: segment, t: t)
-        }
-        guard let pieces = path.split(at: index) else { return }
+        guard segment >= 0, segment < shape.path.segmentCount else { return }
+        // A shape with keyforms is cut at the same place on its curve at every key.
+        guard let pieces = changingPoints(of: shape, refusal: Drawing.topologyMessage, { path -> [BezierPath]? in
+            var path = path
+            let index: Int
+            if t < 0.02 {
+                index = segment
+            } else if t > 0.98 {
+                index = (segment + 1) % path.points.count
+            } else {
+                index = path.insertPoint(segment: segment, t: t)
+            }
+            return path.split(at: index)
+        }) else { return }
         let before = drawing
-        var first = shape
-        first.path = pieces[0]
+        var first = pieces[0]
         if first.stroke == nil { first.stroke = style.makeStroke() }
         drawing.parts[idx.0].shapes[idx.1] = first
         var refs: Set<ShapeRef> = [ref]
         for (k, piece) in pieces.dropFirst().enumerated() {
-            var copy = first
+            var copy = piece
+            copy.stroke = first.stroke
             copy.id = drawing.makeID()
-            copy.path = piece
             drawing.parts[idx.0].shapes.insert(copy, at: idx.1 + 1 + k)
             refs.insert(ShapeRef(part: ref.part, shape: copy.id))
         }
