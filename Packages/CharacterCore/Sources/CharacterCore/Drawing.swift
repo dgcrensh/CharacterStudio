@@ -28,6 +28,9 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     /// `Part.behindLayer`) instead of with the rest of the accessory (a hat's back brim
     /// behind the head). Ignored in a part's own art.
     public var isBehindOwner = false
+    /// The shape's keyforms and its rest, when it has keyforms. `path` and `opacity` are
+    /// what the shape shows at the drawing's parameter values (see `ShapeKeyforms`).
+    public var keys: ShapeKeyforms?
 
     public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -66,6 +69,7 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public mutating func apply(_ t: Affine2D) {
         path.apply(t)
         gradient?.apply(t)
+        keys?.apply(t)
         if stroke != nil {
             let k = abs(t.determinant).squareRoot()
             stroke!.width *= k
@@ -477,6 +481,13 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// The skin the parts show (`Skin.defaultID` for the default). Kept with the drawing
     /// so switching is undoable, but not saved: the file opens on the default skin.
     public var activeSkin = Skin.defaultID
+    /// The character's parameters, in the order the parameter panel lists them.
+    public var parameters: [Parameter] = []
+    /// The parameter values the art shows, by parameter id; a parameter missing here is at
+    /// its default. Kept with the drawing because every keyed shape's `path` is drawn at
+    /// these values, but not saved: the file keeps the rest drawing. Set it with
+    /// `setParameterValues(_:)`.
+    public internal(set) var parameterValues: [Int: Double] = [:]
     public var nextID = 1
 
     public init() {}

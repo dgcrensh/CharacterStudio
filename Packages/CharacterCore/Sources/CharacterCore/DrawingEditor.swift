@@ -237,6 +237,10 @@ public struct DrawingEditor: Sendable {
     /// When on, tapping or marquee-dragging adds to (or removes from) the selection.
     public var addToSelection = false
     public var snap = SnapSettings()
+    /// A short message for the user about an edit that was refused, such as moving a
+    /// keyed shape's points while two parameters are away from their defaults. The app
+    /// shows it and clears it with `clearNotice()`.
+    public internal(set) var notice: String?
     public private(set) var undoStack = UndoStack<Drawing>()
 
     /// A pivot the user dragged for a selection that is not a part. Parts keep theirs in `Part.pivot`.
@@ -1373,6 +1377,9 @@ public struct DrawingEditor: Sendable {
 
     // MARK: Commands
 
+    /// Clears `notice` once the app has shown it.
+    public mutating func clearNotice() { notice = nil }
+
     public mutating func undo() {
         cancelGesture()
         guard let state = undoStack.undo(current: drawing) else { return }
@@ -1650,6 +1657,17 @@ public struct DrawingEditor: Sendable {
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // Every part shows the art its skin and variant call for.
         if !drawing.skinsAreValid { drawing.repairSkins() }
+        // Edits land in the rest drawing or in the keyform the parameters are at, and are
+        // refused when they can't.
+        if !drawing.parameters.isEmpty || !before.parameters.isEmpty,
+           let refusal = drawing.foldKeyformEdits(since: before) {
+            let nextID = drawing.nextID
+            drawing = before
+            drawing.nextID = max(before.nextID, nextID)
+            validateSelection()
+            notice = refusal
+            return
+        }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }
@@ -1658,7 +1676,10 @@ public struct DrawingEditor: Sendable {
     /// session, so the app can key cached pixels and textures by id.
     private mutating func restore(_ state: Drawing) {
         let nextID = drawing.nextID
+        // The parameter sliders stay where they are: the state is shown at their values.
+        let values = drawing.parameterValues
         drawing = state
+        drawing.setParameterValues(values)
         drawing.nextID = max(state.nextID, nextID)
         validateSelection()
         if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
