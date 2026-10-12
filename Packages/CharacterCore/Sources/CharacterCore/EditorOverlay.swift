@@ -427,7 +427,15 @@ private struct Builder {
                 }
             }
 
-        case .pencil, .shape, .eraser, .bone, .scissors, .directSelect:
+        case .directSelect:
+            // An end anchor dragged over the other end: the edge that will close the shape,
+            // and a ring on the end it closes to.
+            if let edge = editor.closingEdge {
+                line(edge.from, edge.to, width: 1.5)
+                ringDot(edge.to, radius: 9)
+            }
+
+        case .pencil, .shape, .eraser, .bone, .scissors:
             break
         }
 

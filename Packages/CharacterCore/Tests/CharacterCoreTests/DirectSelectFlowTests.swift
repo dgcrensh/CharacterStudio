@@ -194,6 +194,64 @@ final class DirectSelectFlowTests: XCTestCase {
         XCTAssertFalse(rig.s.isPencilActive)
     }
 
+    // MARK: Closing edge
+
+    func testDraggingAnEndAnchorOntoTheOtherEndClosesTheShapeWithAnEdge() {
+        var rig = Rig.withPath()
+        rig.tap(Vec2(0, 100))
+        let steps = rig.undoSteps
+        let placed = rig.path.points.map(\.position)
+        // A little off the target anchor, but within reach of it.
+        rig.drag(from: Vec2(0, 100), to: Vec2(4, 5))
+
+        XCTAssertTrue(rig.path.closed)
+        XCTAssertEqual(rig.path.points.map(\.position), placed, "no anchor moved; an edge was added")
+        XCTAssertTrue(rig.path.points[3].stroked, "the new edge is outlined")
+        XCTAssertNil(rig.editor.closingEdge)
+        XCTAssertEqual(rig.undoSteps, steps + 1)
+
+        rig.s.undo()
+        XCTAssertFalse(rig.path.closed)
+        XCTAssertEqual(rig.path.points.map(\.position), placed)
+    }
+
+    func testClosingEdgePreviewsOverTheOtherEndAndLetsGoWhenMovedAway() throws {
+        var rig = Rig.withPath()
+        let start = rig.screen(Vec2(0, 100))
+        rig.s.touchBegan(id: 91, kind: .pencil, location: start)
+        rig.s.touchMoved(id: 91, samples: [rig.screen(Vec2(0, 50))])
+        assertClose(rig.path.points[3].position, Vec2(0, 50))
+        XCTAssertNil(rig.editor.closingEdge)
+
+        rig.s.touchMoved(id: 91, samples: [rig.screen(Vec2(2, 3))])
+        let edge = try XCTUnwrap(rig.editor.closingEdge)
+        assertClose(edge.from, Vec2(0, 100))
+        assertClose(edge.to, Vec2(0, 0))
+        assertClose(rig.path.points[3].position, Vec2(0, 100), tolerance: 1e-6, "the anchor waits at its start")
+
+        // Moving away goes back to moving the anchor, and lifting there does not close.
+        rig.s.touchMoved(id: 91, samples: [rig.screen(Vec2(-30, 40))])
+        XCTAssertNil(rig.editor.closingEdge)
+        rig.s.touchEnded(id: 91, location: rig.screen(Vec2(-30, 40)))
+        XCTAssertFalse(rig.path.closed)
+        assertClose(rig.path.points[3].position, Vec2(-30, 40))
+    }
+
+    func testOnlyEndAnchorsOfOpenPathsDrawAClosingEdge() {
+        var rig = Rig.withPath()
+        // A middle anchor dropped on an end just moves.
+        rig.drag(from: Vec2(100, 100), to: Vec2(0, 100))
+        XCTAssertFalse(rig.path.closed)
+        assertClose(rig.path.points[2].position, Vec2(0, 100))
+
+        // Both ends moving together never close onto each other.
+        var both = Rig.withPath()
+        both.tap(Vec2(50, 0))
+        both.s.editor.selectedAnchors = [0, 3]
+        both.drag(from: Vec2(0, 100), to: Vec2(0, 0))
+        XCTAssertFalse(both.path.closed)
+    }
+
     func testAShortHandleDoesNotStealThePressFromItsAnchor() {
         var rig = Rig.withPath()
         rig.tap(Vec2(100, 0))
