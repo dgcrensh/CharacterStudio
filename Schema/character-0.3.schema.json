@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/dgcrensh/CharacterStudio/Schema/character-0.2.schema.json",
+  "$id": "https://github.com/dgcrensh/CharacterStudio/Schema/character-0.3.schema.json",
   "title": "Character Studio character",
-  "description": "character.json inside a .charstudio package, format 0.2 (0.1 files are valid too). Units are points with the y-axis down, angles are degrees (clockwise on screen), and colors are sRGB hex with alpha. Readers should ignore keys they do not know.",
+  "description": "character.json inside a .charstudio package, format 0.3 (0.1 and 0.2 files are valid too). Units are points with the y-axis down, angles are degrees (clockwise on screen), and colors are sRGB hex with alpha. Readers should ignore keys they do not know.",
   "type": "object",
   "required": ["formatVersion"],
   "properties": {
     "formatVersion": {
       "description": "Semantic version of the format. Readers refuse a newer major version (in 0.x, a newer minor version).",
       "type": "string",
-      "pattern": "^0\\.[12]\\.[0-9]+$"
+      "pattern": "^0\\.[123]\\.[0-9]+$"
     },
     "name": { "description": "The character's display name.", "type": "string" },
     "bones": {
@@ -55,6 +55,11 @@
           }
         }
       }
+    },
+    "parameters": {
+      "description": "Format 0.3: the values the art can change with, in the order the editor lists them. The shapes in skins are the rest drawing, with every parameter at its default; keyforms on shapes say how they change away from it. Absent means none.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/parameter" }
     },
     "animations": { "description": "Reserved for the animation system. Empty in 0.1.", "type": "object" },
     "palette": {
@@ -208,7 +213,45 @@
           "description": "Cubic Bézier anchors. Segment i runs from point i (p + out) to point i+1 (p + in); closed paths also join the last point to the first.",
           "type": "array",
           "items": { "$ref": "#/$defs/point" }
+        },
+        "keyforms": {
+          "description": "Format 0.3: the shape at chosen values of parameters, as offsets from points (the rest drawing), ordered by parameter (in parameters order) then value. Absent means none.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/keyform" }
         }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "description": "The parameter's name, unique among the parameters. Keyforms refer to it.", "type": "string" },
+        "min": { "description": "The lowest value. Defaults to 0; not more than max.", "type": "number" },
+        "max": { "description": "The highest value. Defaults to 1.", "type": "number" },
+        "default": { "description": "The value the rest drawing shows, brought into min to max. Defaults to min.", "type": "number" }
+      }
+    },
+    "keyform": {
+      "type": "object",
+      "required": ["parameter", "value"],
+      "properties": {
+        "parameter": { "description": "The id of a parameter. A keyform on an unknown parameter is ignored.", "type": "string" },
+        "value": { "description": "The parameter value the keyform is at, brought into its range. A keyform at the default is ignored (the rest drawing is the key there); of two at one value the first is used.", "type": "number" },
+        "offsets": {
+          "description": "How far each point moves from the rest drawing here, in the attachment's bone space like the points. Points that don't move are left out.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["point"],
+            "properties": {
+              "point": { "description": "The index of the point in points.", "type": "integer", "minimum": 0 },
+              "p": { "description": "Anchor offset. Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
+              "in": { "description": "Offset of the incoming handle (itself an offset from p). Defaults to [0, 0].", "$ref": "#/$defs/vec2" },
+              "out": { "description": "Offset of the outgoing handle. Defaults to [0, 0].", "$ref": "#/$defs/vec2" }
+            }
+          }
+        },
+        "opacity": { "description": "Added to the shape's opacity here; the sum is kept within 0 to 1. Defaults to 0.", "type": "number" }
       }
     },
     "point": {

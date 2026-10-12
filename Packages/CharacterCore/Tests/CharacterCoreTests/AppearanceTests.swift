@@ -697,7 +697,7 @@ final class AppearanceFormatTests: XCTestCase {
         }
     }
 
-    func testA01FileOpensAndSavesAs02() throws {
+    func testA01FileOpensAndSavesAsCurrent() throws {
         let old = try JSONValue(parsing: """
         { "formatVersion": "0.1.0", "name": "Old",
           "slots": [{ "id": "A", "bone": "root", "attachment": "A" }],
@@ -707,12 +707,12 @@ final class AppearanceFormatTests: XCTestCase {
           "palette": ["#FF0000FF"] }
         """)
         let migrated = try CharacterFormat.migrate(old)
-        XCTAssertEqual(migrated["formatVersion"], .string("0.2.0"))
+        XCTAssertEqual(migrated["formatVersion"], .string(CharacterFormat.version.description))
         let d = try CharacterFormat.decode(old).drawing
         XCTAssertEqual(d.parts[0].shapes[0].stroke, StrokeStyle(color: .black, width: 3))
         XCTAssertEqual(d.palette, [red])
         XCTAssertTrue(d.globalColors.isEmpty)
-        XCTAssertEqual(CharacterFormat.encode(d)["formatVersion"], .string("0.2.0"))
+        XCTAssertEqual(CharacterFormat.encode(d)["formatVersion"], .string(CharacterFormat.version.description))
     }
 
     func testBadAppearanceIsReportedWithItsPath() throws {

@@ -14,7 +14,7 @@ Character Studio is a personal iPad app (SwiftUI + Metal) for drawing 2D cutout 
 
 - **Logic goes in CharacterCore, not the app.** CharacterCore imports only Foundation (no UIKit, SwiftUI, Metal or CoreGraphics) because CI tests it on Linux. Editing behaviour, input routing and file I/O belong there with unit tests; the app should stay a thin layer that forwards touches and draws what the core produces.
 - **Swift 6 language mode** with strict concurrency, in both the package and the app.
-- **The file format is stable byte for byte.** `JSONValue` keeps key order and numbers are written with at most 4 decimals, and `DocumentTests` re-saves `Schema/examples/robo.charstudio` and expects identical bytes. When changing the format: update `character-0.2.schema.json`, `Schema/README.md` and the example together, keep new keys optional so older files still read, and add a step to `CharacterFormat.migrations` if the version changes.
+- **The file format is stable byte for byte.** `JSONValue` keeps key order and numbers are written with at most 4 decimals, and `DocumentTests` re-saves `Schema/examples/robo.charstudio` and expects identical bytes. When changing the format: update `character-0.3.schema.json`, `Schema/README.md` and the example together, keep new keys optional so older files still read, and add a step to `CharacterFormat.migrations` if the version changes.
 - **Undo** stores `Drawing` snapshots (copy-on-write); one user gesture or command is one undo step. Ids are never reused within a session.
 - Coordinates are points with y down; angles are degrees, clockwise on screen; colors are `#RRGGBBAA`.
 - When a change alters what the user sees, update the matching milestone notes in `README.md`.

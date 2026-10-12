@@ -63,8 +63,10 @@ public struct DecodedCharacter: Sendable {
 /// does not change. 0.2 adds appearance: outline caps, joins, dashes and
 /// alignment, per-point outline width, gradients, opacity, clipping and global colors.
 /// An accessory is a slot of its own whose `accessoryOf` names its owner's slot.
+/// 0.3 adds parameters and per-shape keyforms; the file holds the rest drawing (every
+/// parameter at its default), never the values the editor's sliders are at.
 public enum CharacterFormat {
-    public static let version = FormatVersion(0, 2, 0)
+    public static let version = FormatVersion(0, 3, 0)
     /// The oldest version this build can open.
     public static let oldestReadable = FormatVersion(0, 1, 0)
     public static let rootBone = "root"
@@ -74,7 +76,10 @@ public enum CharacterFormat {
 
     /// `referenceFiles` names the package file holding each reference image's pixels.
     public static func encode(_ drawing: Drawing, referenceFiles: [Int: String] = [:]) -> JSONValue {
+        // The file holds the rest drawing, whatever values the parameters are at.
+        let drawing = drawing.atRest()
         let names = slotNames(for: drawing.parts)
+        let parameters = fileParameters(drawing.parameters)
         let bones = boneNames(for: drawing.bones)
         let globals = Dictionary(drawing.globalColors.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         var slots: [JSONValue] = []
@@ -123,12 +128,14 @@ public enum CharacterFormat {
                 var piece = local
                 guard !art.variants.isEmpty else {
                     (piece.shapes, piece.groups) = (art.shapes, art.groups)
-                    return .object([(key: name, value: attachment(piece, globals: globals, weights: weights))])
+                    return .object([(key: name, value: attachment(piece, globals: globals, weights: weights,
+                                                                  parameters: parameters))])
                 }
                 return .object(art.variants.map { variant in
                     (piece.shapes, piece.groups) = variant.id == art.activeVariant ? (art.shapes, art.groups)
                         : (variant.shapes, variant.groups)
-                    return (key: variant.name, value: attachment(piece, globals: globals, weights: weights))
+                    return (key: variant.name, value: attachment(piece, globals: globals, weights: weights,
+                                                                 parameters: parameters))
                 })
             }
             if !onlyInSkins { skin.append((key: name, value: attachments(local.art(inSkin: Skin.defaultID)))) }
@@ -156,22 +163,47 @@ public enum CharacterFormat {
         let palette: [JSONValue] = drawing.palette.map { .string($0.hexString) } +
             drawing.globalColors.map { obj(["name": .string($0.name), "color": .string($0.color.hexString)]) }
 
-        let character = obj([
-            "formatVersion": .string(version.description),
-            "name": .string(drawing.name),
-            "bones": .array(boneValues),
-            "slots": .array(slots),
-            "drawOrder": .array(drawOrder),
-            "skins": .object(skins),
-            "poses": poses(drawing, names: bones),
-            "animations": .object([]),
-            "palette": .array(palette),
-            "references": .array(references),
-        ])
+        var members: [(key: String, value: JSONValue)] = [
+            (key: "formatVersion", value: .string(version.description)),
+            (key: "name", value: .string(drawing.name)),
+            (key: "bones", value: .array(boneValues)),
+            (key: "slots", value: .array(slots)),
+            (key: "drawOrder", value: .array(drawOrder)),
+            (key: "skins", value: .object(skins)),
+            (key: "poses", value: poses(drawing, names: bones)),
+        ]
+        // The parameters are written only when the character has some.
+        if !parameters.list.isEmpty {
+            members.append((key: "parameters", value: .array(parameters.list.map { parameter in
+                obj(["id": .string(parameter.name), "min": num(parameter.minimum), "max": num(parameter.maximum),
+                     "default": num(parameter.defaultValue)])
+            })))
+        }
+        members += [
+            (key: "animations", value: .object([])),
+            (key: "palette", value: .array(palette)),
+            (key: "references", value: .array(references)),
+        ]
         // The frame is an optional editor hint, written only when set.
-        guard let frame = drawing.frame, case .object(var members) = character else { return character }
-        members.append((key: "frame", value: self.frame(frame)))
+        if let frame = drawing.frame { members.append((key: "frame", value: self.frame(frame))) }
         return .object(members)
+    }
+
+    /// The parameters the file holds, in panel order, and each one's place in that order
+    /// by id. Names are kept unique by the editor; a repeat would be lost, so it is skipped.
+    struct FileParameters {
+        var list: [Parameter] = []
+        var order: [Int: Int] = [:]
+    }
+
+    private static func fileParameters(_ parameters: [Parameter]) -> FileParameters {
+        var out = FileParameters()
+        var used: Set<String> = []
+        for parameter in parameters where used.insert(parameter.name).inserted && out.order[parameter.id] == nil {
+            out.order[parameter.id] = out.list.count
+            out.list.append(parameter)
+        }
+        return out
     }
 
     private static func frame(_ frame: CharacterFrame) -> JSONValue {
@@ -273,7 +305,8 @@ public enum CharacterFormat {
     }
 
     /// `weights` names the part's own bone and its second bone, for a two-bone part.
-    private static func attachment(_ part: Part, globals: [Int: String], weights: (String, String)?) -> JSONValue {
+    private static func attachment(_ part: Part, globals: [Int: String], weights: (String, String)?,
+                                   parameters: FileParameters) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [
             (key: "type", value: .string("vector")),
             (key: "pivot", value: vec(part.pivot)),
@@ -294,7 +327,7 @@ public enum CharacterFormat {
             members.append((key: "groups", value: .array(groups)))
         }
         members.append((key: "shapes", value: .array(part.shapes.map {
-            shape($0, globals: globals, groups: groupNumbers, weights: weights)
+            shape($0, globals: globals, groups: groupNumbers, weights: weights, parameters: parameters)
         })))
         return .object(members)
     }
@@ -310,7 +343,7 @@ public enum CharacterFormat {
     /// Keys beyond 0.1's are written only when they differ from their defaults, so a
     /// shape that uses none of them is written as before.
     private static func shape(_ shape: VectorShape, globals: [Int: String], groups: [Int: Int],
-                              weights: (String, String)?) -> JSONValue {
+                              weights: (String, String)?, parameters: FileParameters) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [(key: "closed", value: .bool(shape.path.closed))]
         if let number = shape.group.flatMap({ groups[$0] }) {
             members.append((key: "group", value: .number(Double(number))))
@@ -332,7 +365,42 @@ public enum CharacterFormat {
         if shape.isBehindOwner { members.append((key: "behindOwner", value: .bool(true))) }
         members += editorHints(hidden: shape.isHidden, locked: shape.isLocked)
         members.append((key: "points", value: .array(shape.path.points.map { point($0, weights: weights) })))
+        let keyforms = self.keyforms(shape, parameters: parameters)
+        if !keyforms.isEmpty { members.append((key: "keyforms", value: .array(keyforms))) }
         return .object(members)
+    }
+
+    /// The shape's keyforms on the file's parameters, by parameter order then value. The
+    /// offsets are sparse: zero points, zero members and a zero opacity are left out.
+    /// Keyforms that don't match the shape's points can't be read back, so none are written.
+    private static func keyforms(_ shape: VectorShape, parameters: FileParameters) -> [JSONValue] {
+        guard let keys = shape.keys, keys.isConsistent, keys.restPoints.count == shape.path.points.count else { return [] }
+        let written = keys.keyforms.filter { key in
+            guard let i = parameters.order[key.parameter] else { return false }
+            return !Parameter.same(key.value, parameters.list[i].defaultValue)
+        }.sorted { a, b in
+            let pa = parameters.order[a.parameter]!, pb = parameters.order[b.parameter]!
+            return pa != pb ? pa < pb : a.value < b.value
+        }
+        return written.map { key in
+            var offsets: [JSONValue] = []
+            for (i, offset) in key.offsets.enumerated() {
+                var point: [(key: String, value: JSONValue)] = []
+                for (name, v) in [("p", offset.position), ("in", offset.inHandle), ("out", offset.outHandle)] {
+                    let pair = vec(v)
+                    if pair != vec(.zero) { point.append((key: name, value: pair)) }
+                }
+                guard !point.isEmpty else { continue }
+                offsets.append(.object([(key: "point", value: .number(Double(i)))] + point))
+            }
+            var members: [(key: String, value: JSONValue)] = [
+                (key: "parameter", value: .string(parameters.list[parameters.order[key.parameter]!].name)),
+                (key: "value", value: num(key.value)),
+                (key: "offsets", value: .array(offsets)),
+            ]
+            if num(key.opacity) != 0 { members.append((key: "opacity", value: num(key.opacity))) }
+            return .object(members)
+        }
     }
 
     private static func stroke(_ stroke: StrokeStyle, globals: [Int: String]) -> JSONValue {
@@ -416,6 +484,9 @@ public enum CharacterFormat {
         if let name = try root.field("name")?.string() { drawing.name = name }
 
         let skeleton = try bones(root.field("bones")?.array() ?? [])
+        // Parameters are read before the art, whose keyforms name them.
+        drawing.parameters = try parameters(root.field("parameters")?.array() ?? [], drawing: &drawing)
+        let parameters = Dictionary(drawing.parameters.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
 
         // Slots, in draw order.
         let slotNodes = try root.field("slots")?.array() ?? []
@@ -498,11 +569,13 @@ public enum CharacterFormat {
                 var art = PartArt()
                 // One attachment is the part's drawing; several are its variants.
                 if attachments.count == 1 {
-                    (art.shapes, art.groups) = try self.art(attachments[0].node, globals: globals, drawing: &drawing,
+                    (art.shapes, art.groups) = try self.art(attachments[0].node, globals: globals,
+                                                            parameters: parameters, drawing: &drawing,
                                                             weights: &shapeWeights)
                 } else {
                     for (name, node) in attachments {
-                        let read = try self.art(node, globals: globals, drawing: &drawing, weights: &shapeWeights)
+                        let read = try self.art(node, globals: globals, parameters: parameters, drawing: &drawing,
+                                                weights: &shapeWeights)
                         art.variants.append(PartVariant(id: drawing.makeID(), name: name, shapes: read.shapes,
                                                         groups: read.groups))
                     }
@@ -517,7 +590,7 @@ public enum CharacterFormat {
             }
             part.art = arts.removeValue(forKey: Skin.defaultID) ?? PartArt()
             part.otherSkinArt = arts
-            // Attachments are in their bone's space; the editor works in world space.
+            // Attachments (keyform offsets too) are in their bone's space; the editor works in world space.
             let boneName = slot.bone ?? rootBone
             let world = skeleton.world[boneName] ?? skeleton.world[rootBone] ?? .identity
             if !world.isApproximately(.identity, tolerance: 0) {
@@ -597,7 +670,7 @@ public enum CharacterFormat {
 
     /// One vector attachment's shapes and groups, with each shape's per-point weights
     /// appended to `weights`.
-    private static func art(_ node: Node, globals: [String: Int], drawing: inout Drawing,
+    private static func art(_ node: Node, globals: [String: Int], parameters: [String: Parameter], drawing: inout Drawing,
                             weights: inout [(shape: Int, points: [[(bone: String, weight: Double)]])]) throws
         -> (shapes: [VectorShape], groups: [ShapeGroup]) {
         // Group ids in the file are local to the attachment.
@@ -616,7 +689,8 @@ public enum CharacterFormat {
         var shapes: [VectorShape] = []
         for shapeNode in try node.field("shapes")?.array() ?? [] {
             var pointWeights: [[(bone: String, weight: Double)]] = []
-            var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals, weights: &pointWeights)
+            var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals, parameters: parameters,
+                                    weights: &pointWeights)
             weights.append((decoded.id, pointWeights))
             // An unknown group leaves the shape ungrouped.
             decoded.group = try shapeNode.integer("group").flatMap { groupIDs[$0] }
@@ -651,6 +725,25 @@ public enum CharacterFormat {
         let total = pairs.reduce(0) { $0 + $1.weight }
         guard total > 1e-12 else { return 0 }
         return min(max(pairs.filter { $0.bone == second }.reduce(0) { $0 + $1.weight } / total, 0), 1)
+    }
+
+    /// The parameters, in panel order. A missing range is 0 to 1 and a missing default the
+    /// minimum; a default outside the range is brought into it.
+    private static func parameters(_ nodes: [Node], drawing: inout Drawing) throws -> [Parameter] {
+        var out: [Parameter] = []
+        for node in nodes {
+            let name = try node.require("id").string()
+            guard !out.contains(where: { $0.name == name }) else {
+                throw CharacterFileError.invalid(path: node.path + ".id", problem: "repeats parameter \"\(name)\"")
+            }
+            let minimum = try node.number("min") ?? 0, maximum = try node.number("max") ?? 1
+            guard minimum <= maximum else {
+                throw CharacterFileError.invalid(path: node.childPath("min"), problem: "is greater than max")
+            }
+            out.append(Parameter(id: drawing.makeID(), name: name, minimum: minimum, maximum: maximum,
+                                 defaultValue: try node.number("default") ?? minimum))
+        }
+        return out
     }
 
     /// The test poses: by name, each bone's turn. Unknown bones are skipped.
@@ -742,7 +835,7 @@ public enum CharacterFormat {
     }
 
     /// `weights` gets each point's `[bone, weight]` pairs, empty for a point without them.
-    private static func shape(_ node: Node, id: Int, globals: [String: Int],
+    private static func shape(_ node: Node, id: Int, globals: [String: Int], parameters: [String: Parameter],
                               weights: inout [[(bone: String, weight: Double)]]) throws -> VectorShape {
         var points: [PathPoint] = []
         weights = []
@@ -784,7 +877,45 @@ public enum CharacterFormat {
         shape.isBehindOwner = try node.bool("behindOwner") ?? false
         shape.isHidden = try node.bool("hidden") ?? false
         shape.isLocked = try node.bool("locked") ?? false
+        if let keyforms = try node.field("keyforms") {
+            let found = try self.keyforms(keyforms, pointCount: points.count, parameters: parameters)
+            if !found.isEmpty {
+                shape.keys = ShapeKeyforms(restPoints: shape.pointGeometry, restOpacity: shape.opacity, keyforms: found)
+            }
+        }
         return shape
+    }
+
+    /// A shape's keyforms, offsets from its points (the rest drawing). A keyform on an
+    /// unknown parameter, or at its parameter's default, is skipped; a value outside the
+    /// range is brought into it, and of two keyforms at one value the first is kept.
+    private static func keyforms(_ node: Node, pointCount: Int, parameters: [String: Parameter]) throws -> [Keyform] {
+        var out: [Keyform] = []
+        for keyNode in try node.array() {
+            let name = try keyNode.require("parameter").string()
+            let value = try keyNode.requireNumber("value")
+            var offsets = Array(repeating: PointGeometry.zero, count: pointCount)
+            var seen = Set<Int>()
+            for offsetNode in try keyNode.field("offsets")?.array() ?? [] {
+                let index = try offsetNode.require("point").integer()
+                guard index >= 0, index < pointCount else {
+                    throw CharacterFileError.invalid(path: offsetNode.childPath("point"), problem: "is not a point of the shape")
+                }
+                guard seen.insert(index).inserted else {
+                    throw CharacterFileError.invalid(path: offsetNode.childPath("point"), problem: "repeats point \(index)")
+                }
+                offsets[index] = PointGeometry(position: try offsetNode.vec2("p") ?? .zero,
+                                               inHandle: try offsetNode.vec2("in") ?? .zero,
+                                               outHandle: try offsetNode.vec2("out") ?? .zero)
+            }
+            let opacity = try keyNode.number("opacity") ?? 0
+            guard let parameter = parameters[name] else { continue }
+            let clamped = parameter.clamped(value)
+            guard !Parameter.same(clamped, parameter.defaultValue),
+                  !out.contains(where: { $0.parameter == parameter.id && Parameter.same($0.value, clamped) }) else { continue }
+            out.append(Keyform(parameter: parameter.id, value: clamped, offsets: offsets, opacity: opacity))
+        }
+        return out
     }
 
     private static func stroke(_ node: Node, globals: [String: Int]) throws -> StrokeStyle {
@@ -833,13 +964,18 @@ public enum CharacterFormat {
     /// older files need rewriting, and bump `version`.
     static let migrations: [Migration] = [
         // 0.2 only adds optional keys, so a 0.1 file reads as it is.
-        Migration(to: FormatVersion(0, 2, 0)) { json in
-            guard case .object(var members) = json, let i = members.firstIndex(where: { $0.key == "formatVersion" })
-            else { return json }
-            members[i].value = .string("0.2.0")
-            return .object(members)
-        },
+        Migration(to: FormatVersion(0, 2, 0)) { try setVersion($0, to: "0.2.0") },
+        // 0.3 only adds optional keys (parameters and keyforms) too.
+        Migration(to: FormatVersion(0, 3, 0)) { try setVersion($0, to: "0.3.0") },
     ]
+
+    /// `json` with its `formatVersion` set to `version`.
+    private static func setVersion(_ json: JSONValue, to version: String) throws -> JSONValue {
+        guard case .object(var members) = json, let i = members.firstIndex(where: { $0.key == "formatVersion" })
+        else { return json }
+        members[i].value = .string(version)
+        return .object(members)
+    }
 
     /// Checks `formatVersion` and upgrades an older file to the current format.
     public static func migrate(_ json: JSONValue) throws -> JSONValue {
