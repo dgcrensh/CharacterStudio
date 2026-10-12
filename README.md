@@ -41,6 +41,8 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
 6. Polish and export: slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below.)
 
+Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
+
 ## Milestone 1 notes
 
 - **Input routing** lives in `CanvasSession` (CharacterCore) so it is unit-tested: the Pencil draws, one finger does nothing, two fingers pan, pinch-zoom and rotate together, fingers are ignored while the Pencil is down, and wide contacts (major radius over 56 pt, above a firmly pressed fingertip) are treated as a palm. Over the canvas the system's own gestures (pinching a document closed, swiping back from the edge, and the three-finger undo, copy and paste gestures) are switched off so they cannot steal a pinch or undo the document behind the editor; use the back button to close the document.
