@@ -850,6 +850,25 @@ The overlay no longer turns a copy of the drawing every frame either; only the o
 reads `displayDrawing(at:)`. The renderer side (`CanvasRenderer.updateArt`) is checked only by the app build
 until a device trace (`Art rebuild` with reason `wiggle` once per wiggle, not per frame).
 
+#### Next 6: reserve the tessellation output
+
+Recommendation 6 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,
+median of 9, milliseconds. Before is `b9fb65e`, after is this branch, run back to back.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild, new zoom bucket | before | 6.75 | 13.6 | 26.6 | 53.6 | 107.6 |
+| | after | 6.08 | 11.9 | 23.7 | 47.0 | 99.2 |
+| Zoom-in refine, visible shapes | before | 4.66 | 6.07 | 9.68 | 12.7 | 10.6 |
+| | after | 4.12 | 5.25 | 8.44 | 11.4 | 9.66 |
+
+About 12% off every tessellation, the low end of the estimate. `flattened` and `flattenedWithWidths` reserve
+from Wang's bound per segment plus a quarter (no path of the stress drawing outgrew it at 0.25, 0.05 or 0.01),
+`Stroker.triangles` reserves a quad per segment, a triangle per joint and the caps, and `appendTriangles` uses
+its input arrays as they are when no two neighbouring points repeat. Only dashed outlines still grow the output.
+The vertex counts are identical and other rows are unchanged within noise. Writing the fill fan in
+`ArtBuilder.tessellate` without its three-point literal was tried and made no difference, so it is left as is.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and

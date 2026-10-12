@@ -18,29 +18,63 @@ public enum Stroker {
     /// `tolerance` is the flattening tolerance in points.
     public static func triangles(for path: BezierPath, style: StrokeStyle, widthScale: Double = 1,
                                  tolerance: Double) -> [Vec2] {
-        var out: [Vec2] = []
         // Bare segments are skipped: each outlined run is stroked as an open path with caps.
-        for run in path.strokedRuns() {
-            let flat = run.flattenedWithWidths(tolerance: tolerance)
-            let radii = flat.widths.map { max($0, 0) * style.width * widthScale / 2 }
-            appendTriangles(points: flat.points, radii: radii, closed: run.closed && flat.points.count > 2,
-                            style: style, tolerance: tolerance, into: &out)
+        let runs = path.strokedRuns().map { run in
+            var flat = run.flattenedWithWidths(tolerance: tolerance)
+            // The widths become radii in place, so no second array is made.
+            for i in flat.widths.indices { flat.widths[i] = max(flat.widths[i], 0) * style.width * widthScale / 2 }
+            return (points: flat.points, radii: flat.widths, closed: run.closed && flat.points.count > 2)
+        }
+        var out: [Vec2] = []
+        out.reserveCapacity(runs.reduce(0) { total, run in
+            total + vertexEstimate(points: run.points.count, closed: run.closed,
+                                   radius: run.radii.max() ?? 0, style: style, tolerance: tolerance)
+        })
+        for run in runs {
+            appendTriangles(points: run.points, radii: run.radii, closed: run.closed, style: style,
+                            tolerance: tolerance, into: &out)
         }
         return out
+    }
+
+    /// About how many vertices stroking a polyline of `points` points makes, for reserving the
+    /// output: a quad per segment, a triangle per joint (a round or miter joint at a sharp turn
+    /// makes more) and both caps. Dashes add caps per dash, and grow the array past it.
+    static func vertexEstimate(points n: Int, closed: Bool, radius: Double, style: StrokeStyle,
+                               tolerance: Double) -> Int {
+        guard n > 0 else { return 0 }
+        let segments = closed ? n : n - 1, joints = closed ? n : max(n - 2, 0)
+        var caps = 0
+        if !closed {
+            switch style.cap {
+            case .butt: caps = 0
+            case .square: caps = 2 * 6
+            case .round: caps = 2 * 3 * arcCount(sweep: .pi, radius: radius, tolerance: tolerance)
+            }
+        }
+        return segments * 6 + joints * 3 + caps
     }
 
     /// Triangles for a polyline with a half-width (radius) at each point.
     public static func appendTriangles(points: [Vec2], radii: [Double], closed: Bool, style: StrokeStyle,
                                        tolerance: Double, into out: inout [Vec2]) {
-        var p: [Vec2] = []
-        var r: [Double] = []
-        for (q, w) in zip(points, radii) {
-            if let last = p.last, last.distance(to: q) < 1e-9 {
-                r[r.count - 1] = max(r[r.count - 1], w)
-                continue
+        // Repeated points are merged, keeping the wider radius. Most polylines have none, and then
+        // `p` and `r` share the caller's arrays instead of copying them. Arrays of different
+        // lengths take the merging path from the start, which pairs them up as before.
+        var p = points, r = radii
+        let firstRepeat = points.count != radii.count ? 0
+            : (1..<max(points.count, 1)).first { points[$0 - 1].distance(to: points[$0]) < 1e-9 }
+        if let first = firstRepeat {
+            p = Array(points[..<first])
+            r = Array(radii[..<first])
+            for (q, w) in zip(points[first...], radii[first...]) {
+                if let last = p.last, last.distance(to: q) < 1e-9 {
+                    r[r.count - 1] = max(r[r.count - 1], w)
+                    continue
+                }
+                p.append(q)
+                r.append(w)
             }
-            p.append(q)
-            r.append(w)
         }
         var isClosed = closed
         if isClosed, p.count > 1, p[0].distance(to: p[p.count - 1]) < 1e-9 {
@@ -231,14 +265,19 @@ public enum Stroker {
     private static func arc(center: Vec2, from u: Vec2, sweep: Double, radius: Double, tolerance: Double,
                             into out: inout [Vec2]) {
         guard abs(sweep) > 1e-9 else { return }
-        let step = radius > tolerance ? 2 * acos(max(-1, 1 - tolerance / radius)) : .pi / 2
-        let count = min(max(Int((abs(sweep) / max(step, 1e-3)).rounded(.up)), 1), 128)
+        let count = arcCount(sweep: sweep, radius: radius, tolerance: tolerance)
         var previous = center + u * radius
         for k in 1...count {
             let next = center + rotate(u, by: sweep * Double(k) / Double(count)) * radius
             triangle(center, previous, next, into: &out)
             previous = next
         }
+    }
+
+    /// How many triangles `arc` makes for a turn of `sweep` radians.
+    private static func arcCount(sweep: Double, radius: Double, tolerance: Double) -> Int {
+        let step = radius > tolerance ? 2 * acos(max(-1, 1 - tolerance / radius)) : .pi / 2
+        return min(max(Int((abs(sweep) / max(step, 1e-3)).rounded(.up)), 1), 128)
     }
 
     private static func rotate(_ v: Vec2, by angle: Double) -> Vec2 {
