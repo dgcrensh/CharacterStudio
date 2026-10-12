@@ -262,9 +262,12 @@
     "keyform": {
       "type": "object",
       "required": ["parameter", "value"],
+      "dependentRequired": { "parameter2": ["value2"], "value2": ["parameter2"] },
       "properties": {
         "parameter": { "description": "The id of a parameter. A keyform on an unknown parameter is ignored.", "type": "string" },
         "value": { "description": "The parameter value the keyform is at, brought into its range. A keyform at the default is ignored (the rest drawing is the key there); of two at one value the first is used.", "type": "number" },
+        "parameter2": { "description": "For a keyform on a grid of two parameters (such as AngleX × AngleY): the id of the second parameter, which comes after parameter in parameters. Its offsets are the whole offset from the rest drawing at that point of the grid. A grid keyform on an unknown parameter, on parameter itself, or with either value at its default, is ignored.", "type": "string" },
+        "value2": { "description": "The second parameter's value, brought into its range. Required with parameter2.", "type": "number" },
         "offsets": {
           "description": "How far each point moves from the rest drawing here, in the attachment's bone space like the points. Points that don't move are left out.",
           "type": "array",

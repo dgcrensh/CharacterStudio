@@ -31,7 +31,8 @@ compares each changed shape with what its rest and keyforms should give:
 - one parameter away from its default: the difference goes into that parameter's keyform at the
   slider's value, made if the shape has none there (from what it showed, so nothing jumps);
 - two or more away: there is no one keyform to edit, so the edit is refused and the editor's `notice`
-  says why.
+  says why. (Milestone 9 lands edits with two away in a grid keyform and refuses only three or more; see
+  [head-turns.md](head-turns.md).)
 
 Undo snapshots hold the drawing as it was shown; undo and redo re-show the restored state at the
 current slider values, so the slider never jumps on undo and slider moves are not undo steps.
