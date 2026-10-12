@@ -38,8 +38,27 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 2. **Vector shapes**: curve fitting, filled shapes with outlines, point editing, selection, undo, solid colors, reference images.
 3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
-5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
+5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses (done; see the notes below).
 6. Polish and export: slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below.)
+
+## Milestone 5 notes (binding and posing)
+
+Milestone 5 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md), with the rendering plan it starts from in [deformation-rendering.md](docs/plans/deformation-rendering.md). The file format stays 0.2: poses and weights use keys it already reserved.
+
+**Using it**
+
+- **Setup and Pose** at the start of the Bones tool's context bar. Setup is milestone 4's Draw and Adjust, where moving bones never moves the art. Pose shows the character posed.
+- **Turn** (Pose): drag a bone to turn it about its head; its children and every part on them follow. Shift snaps the turn to 15 degrees. The selected bone's turn shows in degrees, with **Reset Bone**; **Reset Pose** puts every bone back. The rest pose never changes, and each drag is one undo step. Leaving Pose mode (Setup, or another tool) shows the rest pose again, where the art is edited; coming back shows the pose.
+- **Rigid binding:** a part follows its bone, and an accessory follows its owner.
+- **Bending:** select a part on a bone (in the Layers panel) and another bone, then **Bend [part] with [bone]**. The part stays on its own bone and blends toward the second one point by point, so an arm drawn as one shape on the upper arm bends at the elbow. Weights are set by distance to the two bones; **Weights > Auto Weights** sets them again and **Make Rigid** undoes the binding.
+- **Weights** (Pose): paint the selected two-bone part's weights with the Pencil while it shows posed. Pick which bone to paint toward in the bar; anchors are tinted from blue (the part's own bone) to orange (the second bone), and a ring shows the brush. Each stroke is one undo step.
+- **Poses** menu: **Save Pose** keeps the current pose as a test pose (named Pose, Pose 2...; rename it in the field next to the menu). Each saved pose can be applied, updated to the current pose or deleted. Test poses are saved with the character; the current pose is not.
+
+**How it works**
+
+- **Model** (CharacterCore, `Pose.swift`): `Drawing.pose` is the current pose (bone id to degrees), kept in the drawing so undo covers it but never written to the file; `Drawing.poses` are the saved test poses. `PosedSkeleton` gives each bone's transform from rest to posed world space: its parent's, then its own turn about its rest head. A rigid part moves through its bone's transform; a part with `Part.secondBone` blends both transforms per point by `PathPoint.weight`, anchor and both handles alike (linear blend skinning). `AutoWeights` sets weights from the distances to the two bones. `DrawingEditor+Pose` has the Pose and Weights gestures and the commands; tests are in `PoseTests`.
+- **Rendering:** in Pose mode the canvas builds the art from `PosedArt`: rigid parts stay at rest, so their cached triangles are reused, and each part's segment of the art batch draws through its bone's transform on the GPU. Only parts that bend are skinned and re-tessellated on the CPU. The overlay draws the posed bones and art. Timings and the reasoning are in [deformation-rendering.md](docs/plans/deformation-rendering.md).
+- **Format:** `poses` holds each test pose as bone id to `{ "rotation" }`; a two-bone part writes `weights` on every point as its own bone and its second bone with their shares. The example robot has two poses, Nod and Lean. See [Schema/README.md](Schema/README.md#poses-and-weights).
 
 ## Milestone 1 notes
 

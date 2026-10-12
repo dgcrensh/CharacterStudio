@@ -1081,7 +1081,9 @@ public struct DrawingEditor: Sendable {
             }
             guard let bone = drawing.bone(id) else { return .idle }
             selectedBone = id
+            // Pose mode turns bones; the weight brush never moves them.
             if boneMode == .pose { return beginPoseTurn(id, from: start) }
+            if boneMode == .weights { return .idle }
             // In draw mode only the middle is pressed here (joints start new bones): it moves the bone.
             let edit: BoneHandle = boneMode == .draw ? .body : handle
             let grabbed = edit == .tail ? bone.tail : bone.head

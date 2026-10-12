@@ -24,8 +24,8 @@ A character is a `.charstudio` package (a folder that Files shows as one documen
 - `drawOrder`: slot ids from back to front.
 - `skins.default[slot][attachment]`: a `vector` attachment with the part's `pivot` and its `shapes`, back to front. Attachment coordinates (points, handles, `pivot`, gradient points) are in the space of the slot's bone; on `root` that is world space.
 - Attachments and shapes may carry `hidden: true` and `locked: true`, editor hints written only when set: the editor doesn't draw hidden art and doesn't let taps reach locked art. Animation tools should draw both as usual.
-- A shape is `closed`, an optional `fill`, an optional `stroke` (`color`, `width`) and `points`. Each point has the anchor `p`, handles `in` and `out` as offsets from `p`, `smooth: false` on corner points, and `symmetric: true` on points whose handles are kept equally long (both optional editor hints). `weights` (`[bone, weight]` pairs) are reserved for two-bone binding.
-- `poses` and `animations` are reserved and empty so far.
+- A shape is `closed`, an optional `fill`, an optional `stroke` (`color`, `width`) and `points`. Each point has the anchor `p`, handles `in` and `out` as offsets from `p`, `smooth: false` on corner points, and `symmetric: true` on points whose handles are kept equally long (both optional editor hints). `weights` (`[bone, weight]` pairs) bind a point to two bones (see [Poses and weights](#poses-and-weights)).
+- `poses`: saved test poses (see [Poses and weights](#poses-and-weights)). `animations` is reserved and empty so far.
 - `palette`: the character's reusable colors. Plain `#RRGGBBAA` strings come first, then global colors as `{ "name", "color" }` (0.2).
 - `references`: editor-only reference images, bottom to top, with placement (`x`, `y` center, `rotation`, `scale`), `opacity` and `hidden`. Animation tools should ignore them.
 - `frame` (optional): the character frame, an editor hint written only when set. `x`, `y` (top-left), `width` and `height` give the target box in world space, `ground` the y of the line the character stands on (the box's bottom when missing), and `hidden: true` when the editor isn't showing it. The editor exports this box when it is shown. Added after 0.2 shipped, as an optional key, so the version stays 0.2.
@@ -39,6 +39,14 @@ Bones were always part of 0.1 and 0.2; the app now writes them. A file with only
 - A bone's tail is at (`length`, 0) in its own space. Children don't have to start at the tail: a sibling-style branch starts wherever its `x`, `y` says.
 - Readers should place a bone with an unknown parent on `root`, and a slot on an unknown bone on `root` too. Two bones with the same id are an error.
 - Names ending in `.L`/`.R` (also `_L`, `-L`, ` L` and `Left`/`Right` words) mark sides for mirroring. The character faces the viewer, so its left side (`.L`) is on the right of the screen.
+
+## Poses and weights
+
+Both use keys 0.1 already reserved, so the version stays 0.2.
+
+- `poses` maps a pose name to the bones it turns: bone id to `{ "rotation" }`, the bone's turn about its head in degrees (clockwise), added to its rest rotation after its parent's pose is applied (forward kinematics). Bones a pose doesn't name stay at rest. The app writes only `rotation`, in skeleton order, and leaves out bones at rest; readers should treat missing `x`, `y` as 0 and `scaleX`, `scaleY` as 1. Readers should skip bones they don't know.
+- **Weights:** a part that bends with two bones writes `weights` on every point of its attachment: `[[slot bone, 1 - w], [second bone, w]]`. Each point moves by the blend of the two bones' pose transforms (each bone's posed world transform after the inverse of its rest one), weighted by its shares, and its handles by the same blend. Coordinates stay in the slot bone's space. Points without `weights` in a weighted attachment follow the slot bone alone. Rigid attachments write no weights and follow their slot's bone.
+- The app reads one second bone per attachment: the bone other than the slot's that the most points name. A point's weight is that bone's share of the point's total.
 
 ## Appearance (0.2)
 

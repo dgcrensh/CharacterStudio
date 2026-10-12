@@ -118,10 +118,10 @@ public struct PosedSkeleton: Sendable {
     public func posed(_ part: Part) -> Part {
         var out = part
         guard bends(part), let second = part.secondBone else {
-            let skin = skin(part.bone)
-            guard !skin.isApproximately(.identity, tolerance: 0) else { return part }
-            for s in out.shapes.indices { out.shapes[s].apply(skin) }
-            out.pivot = skin.apply(out.pivot)
+            let rigid = skin(part.bone)
+            guard !rigid.isApproximately(.identity, tolerance: 0) else { return part }
+            for s in out.shapes.indices { out.shapes[s].apply(rigid) }
+            out.pivot = rigid.apply(out.pivot)
             return out
         }
         let first = skin(part.bone), other = skin(second)
