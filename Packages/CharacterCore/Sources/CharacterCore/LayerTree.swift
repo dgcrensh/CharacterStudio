@@ -88,6 +88,20 @@ public struct LayerTree: Hashable, Sendable {
         }
     }
 
+    /// One row of the Stack view: a layer, or an accessory's behind shapes, which draw
+    /// apart from the rest of it (see `Drawing.drawStack`).
+    public struct StackRow: Hashable, Sendable, Identifiable {
+        /// The layer, or for behind shapes their accessory (with `shapeCount` the number
+        /// of behind shapes).
+        public var layer: PartLayer
+        public var isBehind: Bool
+        /// For behind shapes: the layer they draw just behind, and its name.
+        public var behindLayer: Int?
+        public var behindLayerName: String?
+
+        public var id: String { isBehind ? "behind-\(layer.id)" : "layer-\(layer.id)" }
+    }
+
     /// The character's name, shown on the root row.
     public var name: String
     /// Every part that isn't an accessory, front to back, each holding its accessories
@@ -98,6 +112,9 @@ public struct LayerTree: Hashable, Sendable {
     /// Every part and accessory, front to back: the draw order, which is independent of
     /// the skeleton and the ownership tree.
     public var drawOrder: [PartLayer]
+    /// `drawOrder` with a row of its own for each accessory's behind shapes, front to
+    /// back as they draw.
+    public var stack: [StackRow]
     /// Top to bottom.
     public var references: [ReferenceImage]
 
@@ -137,6 +154,15 @@ public struct LayerTree: Hashable, Sendable {
         self.parts = owners
         bones = [layer(nil, name: CharacterFormat.rootBone)]
         drawOrder = layers
+        let byID = Dictionary(layers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        stack = drawing.drawStackPieces.reversed().compactMap { piece in
+            guard var layer = byID[piece.part.id] else { return nil }
+            guard piece.isBehind else { return StackRow(layer: layer, isBehind: false) }
+            layer.shapeCount = piece.part.shapes.count
+            let target = drawing.behindTarget(of: layer.id)
+            return StackRow(layer: layer, isBehind: true, behindLayer: target,
+                            behindLayerName: target.flatMap { drawing.part($0)?.name })
+        }
         references = drawing.references.reversed()
     }
 

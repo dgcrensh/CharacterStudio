@@ -133,6 +133,34 @@ extension DrawingEditor {
         commit(from: before)
     }
 
+    // MARK: Dragging stack rows
+
+    /// Moves Stack view row `source` to before row `destination` (offsets into `rows`, as
+    /// a list's drag reports them), as one undo step:
+    ///
+    /// - A layer moves in the draw order as `setPartOrder(frontToBack:)` does, carrying a
+    ///   part's accessories along; behind-shape rows don't count as places.
+    /// - An accessory's behind shapes go just behind the layer on the row above where they
+    ///   are dropped (`setBehindLayer(of:to:)`), or behind the same layer as the behind
+    ///   shapes on that row. Dropped at the very top, they stay put.
+    public mutating func moveStackRow(from source: Int, to destination: Int, in rows: [LayerTree.StackRow]) {
+        guard rows.indices.contains(source), destination >= 0, destination <= rows.count,
+              destination != source, destination != source + 1 else { return }
+        var others = rows
+        let moving = others.remove(at: source)
+        let drop = destination > source ? destination - 1 : destination
+        guard moving.isBehind else {
+            var order = others.filter { !$0.isBehind }.map(\.layer.id)
+            order.insert(moving.layer.id, at: others[..<drop].filter { !$0.isBehind }.count)
+            setPartOrder(frontToBack: order)
+            return
+        }
+        guard drop > 0 else { return }
+        let above = others[drop - 1]
+        guard let target = above.isBehind ? above.behindLayer : above.layer.id else { return }
+        setBehindLayer(of: moving.layer.id, to: target)
+    }
+
     /// The parts with part `id` (and its accessories) just in front of part `target`'s
     /// run of art and adjoining accessories, or at the very back when `target` is nil.
     private func partsMoving(_ id: Int, inFrontOf target: Int?) -> [Part]? {

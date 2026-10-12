@@ -91,6 +91,10 @@ public enum CharacterFormat {
             // An accessory names its owner's slot, only when the owner is in the file.
             if let owner = part.accessoryOf.flatMap({ slotOf[$0] }) {
                 slot.append((key: "accessoryOf", value: .string(owner)))
+                // Where its behind-owner shapes draw, when not just behind the owner.
+                if let behind = part.behindLayer.flatMap({ slotOf[$0] }) {
+                    slot.append((key: "behindSlot", value: .string(behind)))
+                }
             }
             slots.append(.object(slot))
             // Attachments are stored in their bone's space.
@@ -341,7 +345,7 @@ public enum CharacterFormat {
 
         // Slots, in draw order.
         let slotNodes = try root.field("slots")?.array() ?? []
-        typealias Slot = (id: String, attachment: String?, bone: String?, accessoryOf: String?)
+        typealias Slot = (id: String, attachment: String?, bone: String?, accessoryOf: String?, behindSlot: String?)
         var slots: [Slot] = []
         for node in slotNodes {
             let id = try node.require("id").string()
@@ -350,7 +354,8 @@ public enum CharacterFormat {
             }
             let attachment = try node.field("attachment")?.string()
             slots.append((id: id, attachment: attachment, bone: try node.field("bone")?.string(),
-                          accessoryOf: try node.field("accessoryOf")?.string()))
+                          accessoryOf: try node.field("accessoryOf")?.string(),
+                          behindSlot: try node.field("behindSlot")?.string()))
         }
         var ordered: [Slot] = []
         for node in try root.field("drawOrder")?.array() ?? [] {
@@ -381,6 +386,7 @@ public enum CharacterFormat {
         var partBones: [Int: String] = [:]
         var partIDs: [String: Int] = [:]
         var owners: [Int: String] = [:]
+        var behindSlots: [Int: String] = [:]
         for slot in ordered {
             guard let attachmentName = slot.attachment,
                   let node = try skin?.field(slot.id)?.field(attachmentName) else { continue }
@@ -418,6 +424,7 @@ public enum CharacterFormat {
             if boneName != rootBone, skeleton.world[boneName] != nil { partBones[part.id] = boneName }
             partIDs[slot.id] = part.id
             if let owner = slot.accessoryOf { owners[part.id] = owner }
+            if let behind = slot.behindSlot { behindSlots[part.id] = behind }
             drawing.parts.append(part)
         }
 
@@ -436,6 +443,8 @@ public enum CharacterFormat {
         // an accessory of an accessory belongs to that one's owner, on the owner's bone.
         for p in drawing.parts.indices {
             drawing.parts[p].accessoryOf = owners[drawing.parts[p].id].flatMap { partIDs[$0] }
+            // An unknown slot, or the owner's, draws the behind shapes just behind the owner.
+            drawing.parts[p].behindLayer = behindSlots[drawing.parts[p].id].flatMap { partIDs[$0] }
         }
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // A group whose shapes aren't together is read as one group per run; unused groups go.
