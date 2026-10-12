@@ -11,13 +11,17 @@ public struct Parameter: Hashable, Sendable, Codable, Identifiable {
     public var maximum: Double
     /// The value the rest drawing shows, between `minimum` and `maximum`.
     public var defaultValue: Double
+    /// The bone whose turn sets the value as the pose changes, if any (see `ParameterDriver`).
+    public var driver: ParameterDriver?
 
-    public init(id: Int, name: String, minimum: Double = 0, maximum: Double = 1, defaultValue: Double = 0) {
+    public init(id: Int, name: String, minimum: Double = 0, maximum: Double = 1, defaultValue: Double = 0,
+                driver: ParameterDriver? = nil) {
         self.id = id
         self.name = name
         self.minimum = min(minimum, maximum)
         self.maximum = max(minimum, maximum)
         self.defaultValue = min(max(defaultValue, self.minimum), self.maximum)
+        self.driver = driver
     }
 
     /// `value` brought into the parameter's range.
