@@ -221,6 +221,34 @@ final class PathEditingTests: XCTestCase {
         XCTAssertNil(BezierPath(points: Array(open.points.prefix(2))).closedByJoiningEnds())
     }
 
+    func testCloseWithStraightEdge() throws {
+        let open = BezierPath(points: [
+            PathPoint(Vec2(0, 0), in: Vec2(-5, 0), out: Vec2(5, 0)),
+            PathPoint(Vec2(10, 0)),
+            PathPoint(Vec2(10, 10), in: Vec2(0, -5), out: Vec2(0, 5)),
+        ])
+        let closed = try XCTUnwrap(open.closedWithStraightEdge())
+        XCTAssertTrue(closed.closed)
+        XCTAssertEqual(closed.points.map(\.position), open.points.map(\.position))
+        XCTAssertEqual(closed.points[0].inHandle, .zero)
+        XCTAssertEqual(closed.points[0].outHandle, Vec2(5, 0), "the other handle stays")
+        XCTAssertEqual(closed.points[2].outHandle, .zero)
+        XCTAssertEqual(closed.points[2].inHandle, Vec2(0, -5))
+        XCTAssertEqual(closed.points[0].mode, .corner)
+        XCTAssertEqual(closed.points[2].mode, .corner)
+        let edge = closed.segment(2)
+        XCTAssertEqual(edge.p1, edge.p0, "the closing edge is straight")
+        XCTAssertEqual(edge.p2, edge.p3)
+
+        XCTAssertNil(closed.closedWithStraightEdge(), "already closed")
+        let line = BezierPath(points: [PathPoint(Vec2(0, 0)), PathPoint(Vec2(10, 0))])
+        XCTAssertNil(line.closedWithStraightEdge(), "a straight line encloses nothing")
+        let arc = BezierPath(points: [PathPoint(Vec2(0, 0), out: Vec2(0, -5)), PathPoint(Vec2(10, 0), in: Vec2(0, -5))])
+        XCTAssertNotNil(arc.closedWithStraightEdge(), "a curved segment closes into a D")
+        let loop = BezierPath(points: [PathPoint(Vec2(0, 0)), PathPoint(Vec2(10, 0)), PathPoint(Vec2(0, 0))])
+        XCTAssertNil(loop.closedWithStraightEdge(), "ends that meet need no edge")
+    }
+
     func testReshapeSegmentMovesTheCurveUnderTheDrag() {
         var path = BezierPath(points: [PathPoint(Vec2(0, 0), smooth: false), PathPoint(Vec2(100, 0), smooth: false)])
         path.reshapeSegment(0, t: 0.5, by: Vec2(0, 40))

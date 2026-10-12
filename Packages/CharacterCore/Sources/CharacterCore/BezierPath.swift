@@ -547,6 +547,25 @@ public struct BezierPath: Hashable, Sendable, Codable {
         return result
     }
 
+    /// The open path closed by a straight edge from its last point back to its first,
+    /// both ends now corners with no handle on that edge. Nil when that would enclose
+    /// nothing: under two points, ends that coincide, or a single straight segment.
+    public func closedWithStraightEdge() -> BezierPath? {
+        guard !closed, points.count >= 2, let first = points.first, let last = points.last,
+              first.position.distance(to: last.position) > 1e-6 else { return nil }
+        if points.count == 2, first.outHandle == .zero, last.inHandle == .zero { return nil }
+        var result = self
+        result.closed = true
+        let n = points.count
+        result.points[0].inHandle = .zero
+        result.points[0].mode = .corner
+        result.points[n - 1].outHandle = .zero
+        result.points[n - 1].mode = .corner
+        // The new edge is outlined.
+        result.points[n - 1].stroked = true
+        return result
+    }
+
     /// Cuts the path at point `i`. An open path becomes two open paths that both keep
     /// point `i` (as a corner with no handle on the cut side); a closed path opens
     /// into one path that starts and ends at `i`. Nil when a piece would be too short.

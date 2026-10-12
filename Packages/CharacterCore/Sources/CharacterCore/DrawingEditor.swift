@@ -236,8 +236,12 @@ public struct DrawingEditor: Sendable {
     private var gesture: Gesture? {
         didSet {
             if case .transform = gesture {} else if liveTransform != nil { liveTransform = nil }
+            if case .anchors = gesture {} else if closingEdge != nil { closingEdge = nil }
         }
     }
+    /// While an end anchor of an open path is dragged over the path's other end: the
+    /// straight edge that lifting the Pencil adds to close the shape.
+    public private(set) var closingEdge: (from: Vec2, to: Vec2)?
     /// The transform drag in progress, if it moves shapes. See `LiveTransform`.
     public private(set) var liveTransform: LiveTransform?
     /// Numbers live transforms, the drags' and the wiggle's alike.
@@ -470,6 +474,13 @@ public struct DrawingEditor: Sendable {
         case .anchors(let ref, let primary, let before, let grab):
             guard let idx = drawing.indices(ref), let original = before.shape(ref)?.path,
                   original.points.indices.contains(primary) else { return }
+            if let edge = edgeClosing(original, dragging: primary, to: p) {
+                // Over the other end: the anchor stays put and the closing edge shows.
+                closingEdge = edge
+                drawing.parts[idx.0].shapes[idx.1].path = original
+                return
+            }
+            closingEdge = nil
             let target = snapped(p + grab, movingAnchors: (ref, selectedAnchors))
             let delta = target - original.points[primary].position
             var path = original
@@ -532,6 +543,7 @@ public struct DrawingEditor: Sendable {
     public mutating func pencilEnded(at p: Vec2, time: Double? = nil) {
         pencilMoved(to: p)
         guard let gesture else { return }
+        let closing = closingEdge
         self.gesture = nil
         if case .pending = gesture {} else { lastTap = nil }
         switch gesture {
@@ -551,7 +563,14 @@ public struct DrawingEditor: Sendable {
         case .boneDraw(_, _, let bone, let mirror, let before):
             if let bone { finishDrawnBone(bone, mirror: mirror) }
             commit(from: before)
-        case .transform(_, _, let before, _), .pivot(_, let before, _, _), .anchors(_, _, let before, _),
+        case .anchors(let ref, _, let before, _):
+            if closing != nil, let idx = drawing.indices(ref),
+               let closed = drawing.parts[idx.0].shapes[idx.1].path.closedWithStraightEdge() {
+                drawing.parts[idx.0].shapes[idx.1].path = closed
+            }
+            commit(from: undoBase ?? before)
+            undoBase = nil
+        case .transform(_, _, let before, _), .pivot(_, let before, _, _),
              .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _),
              .erase(let before, _), .boneEdit(_, _, let before, _, _):
             commit(from: undoBase ?? before)
@@ -819,6 +838,18 @@ public struct DrawingEditor: Sendable {
         }
         guard let c = bestCurve else { return nil }
         return Pending.curve(c.ref, segment: c.segment, t: c.t, insertsOnTap: true)
+    }
+
+    /// The straight edge that closes `path` when its end anchor `i` is dragged to `p`,
+    /// over the path's other end, or nil. The other end must not be moving with it.
+    private func edgeClosing(_ path: BezierPath, dragging i: Int, to p: Vec2) -> (from: Vec2, to: Vec2)? {
+        let last = path.points.count - 1
+        guard !path.closed, last >= 1, i == 0 || i == last else { return nil }
+        let other = i == 0 ? last : 0
+        guard !selectedAnchors.contains(other),
+              path.points[other].position.distance(to: p) <= EditorMetrics.anchorHit / gestureZoom,
+              path.closedWithStraightEdge() != nil else { return nil }
+        return (path.points[i].position, path.points[other].position)
     }
 
     // MARK: Pen
