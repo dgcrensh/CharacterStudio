@@ -133,7 +133,7 @@ private struct ParameterSlider: View {
         CGFloat(min(max((value - row.minimum) / (upper - row.minimum), 0), 1))
     }
 
-    private func tick<S: ShapeStyle>(height: CGFloat, _ style: S) -> some View {
+    private func tick<S: SwiftUI.ShapeStyle>(height: CGFloat, _ style: S) -> some View {
         Rectangle()
             .fill(style)
             .frame(width: 2, height: height)

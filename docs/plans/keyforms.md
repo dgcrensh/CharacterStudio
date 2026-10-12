@@ -74,3 +74,16 @@ Linux container this was written on (not an iPad), average seconds per `measure`
   much (the fold compares the changed shapes with their keyforms), still under a tenth of a
   millisecond. Snapshots stay copy-on-write: keyforms are arrays inside the shapes, so a step only
   copies the parts it touched.
+
+## Done-when status (milestone 8)
+
+- `EyeOpen` (0 to 1) can be defined, the closed eye drawn at 0 and the open eye at 1, and the slider
+  blends smoothly between them: `KeyformTests`, and the Pip example's eyes.
+- `MouthOpen` works at the same time: `testIndependentParametersCombine`, and Pip's mouth.
+- Inserting a point in a keyed shape keeps both keyforms: `KeyformTopologyTests` inserts through the
+  direct-select tap on a shape with keys at 0 and 1 and checks the shape at every key.
+- A 0.2 file opens and saves as 0.3: `KeyformFormatTests`.
+- The examples re-save byte for byte: `DocumentTests` and `KeyformFormatTests` (Pip, also when saved
+  with its sliders moved).
+- The parameters panel, banner and refusal messages need a check on the iPad: CI builds the app but
+  never runs it, and the cloud session that wrote them can't build the app at all.
