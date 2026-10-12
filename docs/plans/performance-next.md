@@ -195,7 +195,14 @@ which is most of the remaining 14 ms. The existing error tests are the guard and
 test per accessor that a wrong type (a string for a point, a three-element pair, `NaN` written as a huge number)
 still produces today's exact message.
 
-### 3. Lift after a drag reuses the moved tessellations (M)
+### 3. Lift after a drag reuses the moved tessellations (M): shipped
+
+Shipped as `ArtBuilder.carry(_:to:)`, called by the renderer on the first frame after a live drag: the frame
+after dragging everything went from 41.1 to 11.2 ms at 2,400 shapes, and after dragging one part from 3.8 to
+2.3 ms (the audit's "Next 3" table). Enlarged shapes are stored at their enlarged tolerance and the art goes
+mixed, so the background refine redoes them. A shape is flattened again after 8 carries in a row, so float
+rounding can't build up. Needs a device trace (`Art carry` then `Art rebuild` with reason `edit`) to confirm.
+
 
 Today the drag's art is drawn through `LiveTransform` without re-tessellating, but when the Pencil lifts, every
 moved shape is a changed shape, and the next build strokes them all again on the main thread: 57 ms for
