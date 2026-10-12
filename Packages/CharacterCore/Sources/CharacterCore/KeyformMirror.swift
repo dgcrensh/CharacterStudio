@@ -33,6 +33,8 @@ extension Drawing {
     /// when the parameter doesn't exist or nothing on that side is keyed.
     public func mirroringKeyforms(of id: Int, fromAbove: Bool, axis: Double) -> KeyformMirrorResult? {
         guard let parameter = parameter(id) else { return nil }
+        // Every part's own variant, whatever the switches show at the moment.
+        let parts = unswitched().parts
         let d = parameter.defaultValue
         func onSource(_ key: Keyform) -> Bool {
             guard let v = key.coordinate.value(of: id), !Parameter.same(v, d) else { return false }
@@ -80,7 +82,7 @@ extension Drawing {
                 }
             }
         }
-        var out = self
+        var out = unswitched()
         for (ref, keys) in writes {
             guard let (p, s) = out.indices(ref) else { continue }
             var shape = out.parts[p].shapes[s]
@@ -94,6 +96,7 @@ extension Drawing {
             out.parts[p].shapes[s] = shape
         }
         let switches = out.mirrorSwitches(of: parameter, fromAbove: fromAbove, mirror: mirror)
+        out.applySwitches()
         guard mirrored > 0 || unmatched > 0 || switches > 0 else { return nil }
         return KeyformMirrorResult(drawing: out, mirrored: mirrored, unmatched: unmatched, switches: switches)
     }
@@ -124,7 +127,7 @@ extension Drawing {
                     } else if q != p {
                         made.variant = name
                     } else if let variant = part.variants.first(where: { $0.name == name }) {
-                        made.variant = mirroredVariant(of: variant.id, inPart: p, mirror: mirror)
+                        made.variant = mirroredVariant(of: variant.id, inPart: p, mirror: mirror, parameter: parameter)
                     }
                 }
                 if let placement = source.placement, let target = snapshot.firstIndex(where: { $0.id == placement.target }) {
@@ -147,15 +150,26 @@ extension Drawing {
     }
 
     /// Makes (or redraws) variant `id` of part `p` mirrored as a variant named "… Mirrored",
-    /// and returns that name.
-    private mutating func mirroredVariant(of id: Int, inPart p: Int, mirror: Affine2D) -> String? {
+    /// with its keyforms on `parameter` moved to the mirrored values, and returns that name.
+    private mutating func mirroredVariant(of id: Int, inPart p: Int, mirror: Affine2D, parameter: Parameter) -> String? {
         guard let source = parts[p].variant(id), let art = parts[p].variantArt(id) else { return nil }
         let name = "\(source.name) Mirrored"
         var copy = Part(id: parts[p].id, name: "")
         copy.shapes = art.shapes
         copy.groups = art.groups
         renewArtIDs(of: &copy)
-        for s in copy.shapes.indices { copy.shapes[s].apply(mirror) }
+        for s in copy.shapes.indices {
+            copy.shapes[s].apply(mirror)
+            guard var keys = copy.shapes[s].keys else { continue }
+            for k in keys.keyforms.indices {
+                guard let v = keys.keyforms[k].coordinate.value(of: parameter.id) else { continue }
+                keys.keyforms[k].coordinate = keys.keyforms[k].coordinate.setting(parameter.id,
+                                                                                  to: parameter.clamped(2 * parameter.defaultValue - v))
+            }
+            keys.sortKeyforms()
+            copy.shapes[s].keys = keys
+            copy.shapes[s].evaluateKeyforms(at: parameterValues, parameters: parameters)
+        }
         if let existing = parts[p].variants.first(where: { $0.name == name }) {
             if existing.id == parts[p].activeVariant {
                 parts[p].shapes = copy.shapes

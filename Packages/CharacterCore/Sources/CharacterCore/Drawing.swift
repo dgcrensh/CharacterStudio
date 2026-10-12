@@ -651,16 +651,9 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             break
         case .layer(let id):
-            // Accessories move with their part, and every variant and skin's art with it.
-            for p in family(of: id) {
-                parts[p].updateAllShapes { $0.apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, family(of: id))
         case .layers(let ids):
-            for p in families(of: ids) {
-                parts[p].updateAllShapes { $0.apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, families(of: ids))
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
             applyToShown(t, &parts[idx.0].shapes[idx.1])
@@ -669,6 +662,20 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .reference(let id):
             guard let r = referenceIndex(id) else { return }
             references[r].apply(t)
+        }
+    }
+
+    /// Transforms whole layers (part indices). At the rest every variant and skin's art
+    /// and the pivot move with them. Away from the rest only the shown shapes move, so the
+    /// move folds into the keyform being edited and the rest drawing stays.
+    private mutating func applyToLayers(_ t: Affine2D, _ indices: [Int]) {
+        for p in indices {
+            if parameterValues.isEmpty {
+                parts[p].updateAllShapes { $0.apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            } else {
+                for s in parts[p].shapes.indices { applyToShown(t, &parts[p].shapes[s]) }
+            }
         }
     }
 

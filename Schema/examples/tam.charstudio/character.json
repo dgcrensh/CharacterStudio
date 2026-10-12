@@ -1,0 +1,817 @@
+{
+  "formatVersion": "0.3.0",
+  "name": "Tam",
+  "bones": [
+    { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 },
+    { "id": "Body", "parent": "root", "length": 60, "x": 0, "y": 0, "rotation": -90, "scaleX": 1, "scaleY": 1 },
+    { "id": "Head", "parent": "Body", "length": 100, "x": 60, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 }
+  ],
+  "slots": [
+    { "id": "Body", "bone": "Body", "attachment": "Body" },
+    { "id": "Head", "bone": "Head", "attachment": "Head" },
+    {
+      "id": "Ear.R",
+      "bone": "Head",
+      "attachment": "Ear.R",
+      "accessoryOf": "Head",
+      "switches": [
+        { "parameter": "AngleX", "min": -30, "max": -10, "drawBehind": "Head" }
+      ]
+    },
+    {
+      "id": "Ear.L",
+      "bone": "Head",
+      "attachment": "Ear.L",
+      "accessoryOf": "Head",
+      "switches": [
+        { "parameter": "AngleX", "min": 10, "max": 30, "drawBehind": "Head" }
+      ]
+    },
+    { "id": "Eyes", "bone": "Head", "attachment": "Eyes", "accessoryOf": "Head" },
+    {
+      "id": "Nose",
+      "bone": "Head",
+      "attachment": "Front",
+      "accessoryOf": "Head",
+      "switches": [
+        { "parameter": "AngleX", "min": 15, "max": 30, "attachment": "Side" },
+        { "parameter": "AngleX", "min": -30, "max": -15, "attachment": "Side Mirrored" }
+      ]
+    },
+    { "id": "Mouth", "bone": "Head", "attachment": "Mouth", "accessoryOf": "Head" },
+    { "id": "Hair", "bone": "Head", "attachment": "Hair", "accessoryOf": "Head" }
+  ],
+  "drawOrder": ["Body", "Head", "Ear.R", "Ear.L", "Eyes", "Nose", "Mouth", "Hair"],
+  "skins": {
+    "default": {
+      "Body": {
+        "Body": {
+          "type": "vector",
+          "pivot": [0, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#5C8DD6FF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [66, -14], "in": [0, -12.1503], "out": [0, 0] },
+                { "p": [66, 14], "in": [0, 0], "out": [0, 12.1503] },
+                { "p": [44, 36], "in": [12.1503, 0], "out": [0, 0] },
+                { "p": [2, 36], "in": [0, 0], "out": [-12.1503, 0] },
+                { "p": [-20, 14], "in": [0, 12.1503], "out": [0, 0] },
+                { "p": [-20, -14], "in": [0, 0], "out": [0, -12.1503] },
+                { "p": [2, -36], "in": [-12.1503, 0], "out": [0, 0] },
+                { "p": [44, -36], "in": [0, 0], "out": [12.1503, 0] }
+              ]
+            }
+          ]
+        }
+      },
+      "Head": {
+        "Head": {
+          "type": "vector",
+          "pivot": [0, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#E8B48AFF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [102, 0], "in": [0, -26.5097], "out": [0, 26.5097], "symmetric": true },
+                { "p": [50, 48], "in": [28.7188, 0], "out": [-28.7188, 0], "symmetric": true },
+                { "p": [-2, 0], "in": [0, 26.5097], "out": [0, -26.5097], "symmetric": true },
+                { "p": [50, -48], "in": [-28.7188, 0], "out": [28.7188, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -4] },
+                    { "point": 1, "p": [0, -4] },
+                    { "point": 2, "p": [0, -4] },
+                    { "point": 3, "p": [0, -4] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 4] },
+                    { "point": 1, "p": [0, 4] },
+                    { "point": 2, "p": [0, 4] },
+                    { "point": 3, "p": [0, 4] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [3, 0] },
+                    { "point": 1, "p": [3, 0] },
+                    { "point": 2, "p": [3, 0] },
+                    { "point": 3, "p": [3, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-3, 0] },
+                    { "point": 1, "p": [-3, 0] },
+                    { "point": 2, "p": [-3, 0] },
+                    { "point": 3, "p": [-3, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Ear.R": {
+        "Ear.R": {
+          "type": "vector",
+          "pivot": [48, -48],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#E8B48AFF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [62, -48], "in": [0, -4.9706], "out": [0, 4.9706], "symmetric": true },
+                { "p": [48, -39], "in": [7.732, 0], "out": [-7.732, 0], "symmetric": true },
+                { "p": [34, -48], "in": [0, 4.9706], "out": [0, -4.9706], "symmetric": true },
+                { "p": [48, -57], "in": [-7.732, 0], "out": [7.732, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 16] },
+                    { "point": 1, "p": [0, 16] },
+                    { "point": 2, "p": [0, 16] },
+                    { "point": 3, "p": [0, 16] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 8] },
+                    { "point": 1, "p": [0, 8] },
+                    { "point": 2, "p": [0, 8] },
+                    { "point": 3, "p": [0, 8] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [-6, 0] },
+                    { "point": 1, "p": [-6, 0] },
+                    { "point": 2, "p": [-6, 0] },
+                    { "point": 3, "p": [-6, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [6, 0] },
+                    { "point": 1, "p": [6, 0] },
+                    { "point": 2, "p": [6, 0] },
+                    { "point": 3, "p": [6, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Ear.L": {
+        "Ear.L": {
+          "type": "vector",
+          "pivot": [48, 48],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#E8B48AFF",
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [62, 48], "in": [0, -4.9706], "out": [0, 4.9706], "symmetric": true },
+                { "p": [48, 57], "in": [7.732, 0], "out": [-7.732, 0], "symmetric": true },
+                { "p": [34, 48], "in": [0, 4.9706], "out": [0, -4.9706], "symmetric": true },
+                { "p": [48, 39], "in": [-7.732, 0], "out": [7.732, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -8] },
+                    { "point": 1, "p": [0, -8] },
+                    { "point": 2, "p": [0, -8] },
+                    { "point": 3, "p": [0, -8] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -16] },
+                    { "point": 1, "p": [0, -16] },
+                    { "point": 2, "p": [0, -16] },
+                    { "point": 3, "p": [0, -16] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [-6, 0] },
+                    { "point": 1, "p": [-6, 0] },
+                    { "point": 2, "p": [-6, 0] },
+                    { "point": 3, "p": [-6, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [6, 0] },
+                    { "point": 1, "p": [6, 0] },
+                    { "point": 2, "p": [6, 0] },
+                    { "point": 3, "p": [6, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Eyes": {
+        "Eyes": {
+          "type": "vector",
+          "pivot": [56, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#222222FF",
+              "points": [
+                { "p": [63, -17], "in": [0, -2.7614], "out": [0, 2.7614], "symmetric": true },
+                { "p": [56, -12], "in": [3.866, 0], "out": [-3.866, 0], "symmetric": true },
+                { "p": [49, -17], "in": [0, 2.7614], "out": [0, -2.7614], "symmetric": true },
+                { "p": [56, -22], "in": [-3.866, 0], "out": [3.866, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -14], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [0, -14.9] },
+                    { "point": 2, "p": [0, -14], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [0, -13.1] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 14], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [0, 13.1] },
+                    { "point": 2, "p": [0, 14], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [0, 14.9] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.3, -12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [8, -12.9], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [8.7, -12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [8, -11.1], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.7, -12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [-8, -12.9], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [-7.3, -12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [-8, -11.1], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.3, 12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [8, 11.1], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [8.7, 12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [8, 12.9], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.7, 12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [-8, 11.1], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [-7.3, 12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [-8, 12.9], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] },
+                    { "point": 3, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] },
+                    { "point": 3, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            },
+            {
+              "closed": true,
+              "fill": "#222222FF",
+              "points": [
+                { "p": [63, 17], "in": [0, -2.7614], "out": [0, 2.7614], "symmetric": true },
+                { "p": [56, 22], "in": [3.866, 0], "out": [-3.866, 0], "symmetric": true },
+                { "p": [49, 17], "in": [0, 2.7614], "out": [0, -2.7614], "symmetric": true },
+                { "p": [56, 12], "in": [-3.866, 0], "out": [3.866, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -14], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [0, -14.9] },
+                    { "point": 2, "p": [0, -14], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [0, -13.1] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 14], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [0, 13.1] },
+                    { "point": 2, "p": [0, 14], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [0, 14.9] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.3, -12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [8, -12.9], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [8.7, -12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [8, -11.1], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.7, -12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [-8, -12.9], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [-7.3, -12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [-8, -11.1], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.3, 12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [8, 11.1], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [8.7, 12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [8, 12.9], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.7, 12], "in": [0, 0.4971], "out": [0, -0.4971] },
+                    { "point": 1, "p": [-8, 11.1], "in": [-0.3866, 0], "out": [0.3866, 0] },
+                    { "point": 2, "p": [-7.3, 12], "in": [0, -0.4971], "out": [0, 0.4971] },
+                    { "point": 3, "p": [-8, 12.9], "in": [0.3866, 0], "out": [-0.3866, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] },
+                    { "point": 3, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] },
+                    { "point": 3, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Nose": {
+        "Front": {
+          "type": "vector",
+          "pivot": [40, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [46, 0], "in": [0, -2.2091], "out": [0, 2.2091], "symmetric": true },
+                { "p": [40, 4], "in": [3.3137, 0], "out": [-3.3137, 0], "symmetric": true },
+                { "p": [34, 0], "in": [0, 2.2091], "out": [0, -2.2091], "symmetric": true },
+                { "p": [40, -4], "in": [-3.3137, 0], "out": [3.3137, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -14], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [0, -14.72] },
+                    { "point": 2, "p": [0, -14], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [0, -13.28] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 14], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [0, 13.28] },
+                    { "point": 2, "p": [0, 14], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [0, 14.72] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.4, -12], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [8, -12.72], "in": [-0.3314, 0], "out": [0.3314, 0] },
+                    { "point": 2, "p": [8.6, -12], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [8, -11.28], "in": [0.3314, 0], "out": [-0.3314, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.6, -12], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [-8, -12.72], "in": [-0.3314, 0], "out": [0.3314, 0] },
+                    { "point": 2, "p": [-7.4, -12], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [-8, -11.28], "in": [0.3314, 0], "out": [-0.3314, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.4, 12], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [8, 11.28], "in": [-0.3314, 0], "out": [0.3314, 0] },
+                    { "point": 2, "p": [8.6, 12], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [8, 12.72], "in": [0.3314, 0], "out": [-0.3314, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.6, 12], "in": [0, 0.3976], "out": [0, -0.3976] },
+                    { "point": 1, "p": [-8, 11.28], "in": [-0.3314, 0], "out": [0.3314, 0] },
+                    { "point": 2, "p": [-7.4, 12], "in": [0, -0.3976], "out": [0, 0.3976] },
+                    { "point": 3, "p": [-8, 12.72], "in": [0.3314, 0], "out": [-0.3314, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] },
+                    { "point": 3, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] },
+                    { "point": 3, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "Side": {
+          "type": "vector",
+          "pivot": [40, 0],
+          "shapes": [
+            {
+              "closed": false,
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [50, 10], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [36, 22], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [33, 12], "in": [0, 0], "out": [0, 0], "smooth": false }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "Side Mirrored": {
+          "type": "vector",
+          "pivot": [40, 0],
+          "shapes": [
+            {
+              "closed": false,
+              "stroke": { "color": "#222222FF", "width": 3 },
+              "points": [
+                { "p": [50, -10], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [36, -22], "in": [0, 0], "out": [0, 0], "smooth": false },
+                { "p": [33, -12], "in": [0, 0], "out": [0, 0], "smooth": false }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Mouth": {
+        "Mouth": {
+          "type": "vector",
+          "pivot": [24, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#A8453FFF",
+              "points": [
+                { "p": [27, 0], "in": [0, -6.0751], "out": [0, 6.0751], "symmetric": true },
+                { "p": [24, 11], "in": [1.6569, 0], "out": [-1.6569, 0], "symmetric": true },
+                { "p": [21, 0], "in": [0, 6.0751], "out": [0, -6.0751], "symmetric": true },
+                { "p": [24, -11], "in": [-1.6569, 0], "out": [1.6569, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -14], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [0, -15.98] },
+                    { "point": 2, "p": [0, -14], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [0, -12.02] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 14], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [0, 12.02] },
+                    { "point": 2, "p": [0, 14], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [0, 15.98] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.7, -12], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [8, -13.98], "in": [-0.1657, 0], "out": [0.1657, 0] },
+                    { "point": 2, "p": [8.3, -12], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [8, -10.02], "in": [0.1657, 0], "out": [-0.1657, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.3, -12], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [-8, -13.98], "in": [-0.1657, 0], "out": [0.1657, 0] },
+                    { "point": 2, "p": [-7.7, -12], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [-8, -10.02], "in": [0.1657, 0], "out": [-0.1657, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": -30,
+                  "offsets": [
+                    { "point": 0, "p": [7.7, 12], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [8, 10.02], "in": [-0.1657, 0], "out": [0.1657, 0] },
+                    { "point": 2, "p": [8.3, 12], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [8, 13.98], "in": [0.1657, 0], "out": [-0.1657, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "parameter2": "AngleY",
+                  "value2": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-8.3, 12], "in": [0, 1.0935], "out": [0, -1.0935] },
+                    { "point": 1, "p": [-8, 10.02], "in": [-0.1657, 0], "out": [0.1657, 0] },
+                    { "point": 2, "p": [-7.7, 12], "in": [0, -1.0935], "out": [0, 1.0935] },
+                    { "point": 3, "p": [-8, 13.98], "in": [0.1657, 0], "out": [-0.1657, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [9, 0] },
+                    { "point": 1, "p": [9, 0] },
+                    { "point": 2, "p": [9, 0] },
+                    { "point": 3, "p": [9, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-9, 0] },
+                    { "point": 1, "p": [-9, 0] },
+                    { "point": 2, "p": [-9, 0] },
+                    { "point": 3, "p": [-9, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Hair": {
+        "Hair": {
+          "type": "vector",
+          "pivot": [80, 0],
+          "shapes": [
+            {
+              "closed": true,
+              "fill": "#3B2A20FF",
+              "points": [
+                { "p": [64, -46], "in": [0, 0], "out": [26, 4] },
+                { "p": [103, 0], "in": [0, -30], "out": [0, 30] },
+                { "p": [64, 46], "in": [26, -4], "out": [0, 0] },
+                { "p": [76, 0], "in": [2, 24], "out": [2, -24] }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "AngleX",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [0, -9] },
+                    { "point": 1, "p": [0, -9] },
+                    { "point": 2, "p": [0, -9] },
+                    { "point": 3, "p": [0, -9] }
+                  ]
+                },
+                {
+                  "parameter": "AngleX",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [0, 9] },
+                    { "point": 1, "p": [0, 9] },
+                    { "point": 2, "p": [0, 9] },
+                    { "point": 3, "p": [0, 9] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": -30,
+                  "offsets": [
+                    { "point": 0, "p": [5, 0] },
+                    { "point": 1, "p": [5, 0] },
+                    { "point": 2, "p": [5, 0] },
+                    { "point": 3, "p": [5, 0] }
+                  ]
+                },
+                {
+                  "parameter": "AngleY",
+                  "value": 30,
+                  "offsets": [
+                    { "point": 0, "p": [-6, 0] },
+                    { "point": 1, "p": [-6, 0] },
+                    { "point": 2, "p": [-6, 0] },
+                    { "point": 3, "p": [-6, 0] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "poses": {},
+  "parameters": [
+    { "id": "AngleX", "min": -30, "max": 30, "default": 0 },
+    { "id": "AngleY", "min": -30, "max": 30, "default": 0 }
+  ],
+  "animations": {},
+  "palette": [],
+  "references": []
+}
