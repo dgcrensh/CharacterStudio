@@ -571,6 +571,7 @@ public struct DrawingEditor: Sendable {
 
         case .ikDrag(let id, _, let grab):
             drawing.pose = drawing.solvingIK(drawing.pose, bone: id, target: p + grab)
+            followPose()
 
         case .weightPaint(let part, let before, let last):
             // A dab every half radius along the stroke, however fast or slow it moves.
@@ -1675,6 +1676,9 @@ public struct DrawingEditor: Sendable {
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // Every part shows the art its skin and variant call for.
         if !drawing.skinsAreValid { drawing.repairSkins() }
+        // Parameter drivers name bones that exist, and driven parameters follow the pose.
+        if !drawing.parameterDriversAreValid { drawing.repairParameterDrivers() }
+        if drawing.pose != before.pose { followPose() }
         // Edits land in the rest drawing or in the keyform the parameters are at, and are
         // refused when they can't.
         if folding, !drawing.parameters.isEmpty || !before.parameters.isEmpty,
@@ -1695,8 +1699,15 @@ public struct DrawingEditor: Sendable {
     private mutating func restore(_ state: Drawing) {
         let nextID = drawing.nextID
         // The parameter sliders stay where they are: the state is shown at their values.
-        let values = drawing.parameterValues
+        // Bone-driven ones follow the state's pose instead, when it or their driver changes.
+        var values = drawing.parameterValues
+        let posed = drawing.pose != state.pose
+        let drivers = Dictionary(drawing.parameters.map { ($0.id, $0.driver) }, uniquingKeysWith: { a, _ in a })
         drawing = state
+        for (id, value) in drawing.drivenValues(for: drawing.pose)
+        where posed || drivers[id] != drawing.parameter(id)?.driver {
+            values[id] = value
+        }
         drawing.setParameterValues(values)
         drawing.nextID = max(state.nextID, nextID)
         validateSelection()

@@ -175,8 +175,16 @@ public enum CharacterFormat {
         // The parameters are written only when the character has some.
         if !parameters.list.isEmpty {
             members.append((key: "parameters", value: .array(parameters.list.map { parameter in
-                obj(["id": .string(parameter.name), "min": num(parameter.minimum), "max": num(parameter.maximum),
-                     "default": num(parameter.defaultValue)])
+                var fields: [(key: String, value: JSONValue)] = [
+                    (key: "id", value: .string(parameter.name)), (key: "min", value: num(parameter.minimum)),
+                    (key: "max", value: num(parameter.maximum)), (key: "default", value: num(parameter.defaultValue)),
+                ]
+                // A bone driver is written only when set, on a bone the file has.
+                if let driver = parameter.driver, let bone = bones[driver.bone] {
+                    fields.append((key: "driver", value: obj(["bone": .string(bone), "min": num(driver.minimumAngle),
+                                                               "max": num(driver.maximumAngle)])))
+                }
+                return .object(fields)
             })))
         }
         members += [
@@ -503,7 +511,8 @@ public enum CharacterFormat {
 
         let skeleton = try bones(root.field("bones")?.array() ?? [])
         // Parameters are read before the art, whose keyforms name them.
-        drawing.parameters = try parameters(root.field("parameters")?.array() ?? [], drawing: &drawing)
+        let readParameters = try parameters(root.field("parameters")?.array() ?? [], drawing: &drawing)
+        drawing.parameters = readParameters.parameters
         let parameters = Dictionary(drawing.parameters.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
 
         // Slots, in draw order.
@@ -645,6 +654,12 @@ public enum CharacterFormat {
             drawing.parts[p].secondBone = secondBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
         }
         drawing.poses = try poses(root.field("poses"), boneIDs: boneIDs, drawing: &drawing)
+        // Parameter drivers find their bones by name; an unknown bone drops the driver.
+        for (i, driver) in readParameters.drivers {
+            guard let bone = boneIDs[driver.bone] else { continue }
+            drawing.parameters[i].driver = ParameterDriver(bone: bone, minimumAngle: driver.minimum,
+                                                           maximumAngle: driver.maximum)
+        }
         // Accessories find their owners by slot id. An unknown owner leaves a plain part;
         // an accessory of an accessory belongs to that one's owner, on the owner's bone.
         for p in drawing.parts.indices {
@@ -746,9 +761,12 @@ public enum CharacterFormat {
     }
 
     /// The parameters, in panel order. A missing range is 0 to 1 and a missing default the
-    /// minimum; a default outside the range is brought into it.
-    private static func parameters(_ nodes: [Node], drawing: inout Drawing) throws -> [Parameter] {
+    /// minimum; a default outside the range is brought into it. Drivers come back by
+    /// parameter index with their bone's name, to resolve once the bones have ids.
+    private static func parameters(_ nodes: [Node], drawing: inout Drawing) throws
+        -> (parameters: [Parameter], drivers: [(index: Int, driver: (bone: String, minimum: Double, maximum: Double))]) {
         var out: [Parameter] = []
+        var drivers: [(index: Int, driver: (bone: String, minimum: Double, maximum: Double))] = []
         for node in nodes {
             let name = try node.require("id").string()
             guard !out.contains(where: { $0.name == name }) else {
@@ -758,10 +776,15 @@ public enum CharacterFormat {
             guard minimum <= maximum else {
                 throw CharacterFileError.invalid(path: node.childPath("min"), problem: "is greater than max")
             }
+            if let driver = try node.field("driver") {
+                drivers.append((out.count, (bone: try driver.require("bone").string(),
+                                            minimum: try driver.require("min").number(),
+                                            maximum: try driver.require("max").number())))
+            }
             out.append(Parameter(id: drawing.makeID(), name: name, minimum: minimum, maximum: maximum,
                                  defaultValue: try node.number("default") ?? minimum))
         }
-        return out
+        return (out, drivers)
     }
 
     /// The test poses: by name, each bone's turn. Unknown bones are skipped.

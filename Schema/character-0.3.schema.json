@@ -228,7 +228,17 @@
         "id": { "description": "The parameter's name, unique among the parameters. Keyforms refer to it.", "type": "string" },
         "min": { "description": "The lowest value. Defaults to 0; not more than max.", "type": "number" },
         "max": { "description": "The highest value. Defaults to 1.", "type": "number" },
-        "default": { "description": "The value the rest drawing shows, brought into min to max. Defaults to min.", "type": "number" }
+        "default": { "description": "The value the rest drawing shows, brought into min to max. Defaults to min.", "type": "number" },
+        "driver": {
+          "description": "A bone whose turn sets the value as the skeleton is posed: its turn from its rest rotation (degrees clockwise, as in poses) at min gives the parameter's min and at max its max, linearly between and held beyond. min and max may be in either order; equal angles drive nothing. A driver on an unknown bone is ignored. Absent means none.",
+          "type": "object",
+          "required": ["bone", "min", "max"],
+          "properties": {
+            "bone": { "description": "The id of a bone (not root).", "type": "string" },
+            "min": { "description": "The turn, in degrees, that gives the parameter's min.", "type": "number" },
+            "max": { "description": "The turn, in degrees, that gives the parameter's max.", "type": "number" }
+          }
+        }
       }
     },
     "keyform": {

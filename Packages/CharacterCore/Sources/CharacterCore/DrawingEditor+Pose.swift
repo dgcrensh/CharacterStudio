@@ -45,7 +45,7 @@ extension DrawingEditor {
         setRotation(rotation, of: id)
     }
 
-    /// Sets bone `id`'s turn, kept inside its rotation limit.
+    /// Sets bone `id`'s turn, kept inside its rotation limit. Bone-driven parameters follow.
     mutating func setRotation(_ degrees: Double, of id: Int) {
         let degrees = drawing.limitedRotation(degrees, of: id)
         if abs(degrees) < 1e-9 {
@@ -53,6 +53,7 @@ extension DrawingEditor {
         } else {
             drawing.pose.rotations[id] = degrees
         }
+        followPose()
     }
 
     /// Sets bone `id`'s turn from its rest pose, in degrees (the pose panel's field).
