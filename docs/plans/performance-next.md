@@ -220,7 +220,13 @@ the moved drawing up to flattening error, for a translation, a rotation and a un
 (skew) falls back to re-tessellating. Keep "Drag end, one part moved" and "Drag end, everything moved" as
 workloads.
 
-### 4. The wiggle preview draws through the live transform (S-M)
+### 4. The wiggle preview draws through the live transform (S-M): shipped
+
+Shipped as `DrawingEditor.wiggleTransform(at:)`, which the renderer draws like a drag: a wiggle frame went from
+3.4 ms to 0.004 ms at 2,400 shapes (the audit's "Next 4" table). Its id changes with the drawing, so an edit
+while the part rocks rebuilds once. The overlay reads the turned drawing only in the outline view. Needs a device
+trace (`Art rebuild` with reason `wiggle` once per wiggle) to confirm.
+
 
 `displayDrawing(at:)` (`DrawingEditor+Bones.swift:473-488`) rotates the wiggling part, its accessories and the
 parts on bones below it, and `updateArt` rebuilds the art from that drawing on every frame

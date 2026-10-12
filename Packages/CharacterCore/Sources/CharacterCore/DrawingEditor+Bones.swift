@@ -458,13 +458,31 @@ extension DrawingEditor {
         guard let id = part ?? wiggleCandidate, drawing.partIndex(id) != nil else { return }
         wigglePart = id
         wiggleStart = time
+        newWiggleID()
     }
 
     public mutating func stopWiggle() { wigglePart = nil }
 
+    mutating func newWiggleID() {
+        liveTransformCount &+= 1
+        wiggleID = liveTransformCount
+    }
+
     /// The wiggle turn at `time`, in degrees (clockwise on screen).
     public func wiggleAngle(at time: Double) -> Double {
         Self.wiggleAmplitude * sin(2 * .pi * (time - wiggleStart) / Self.wigglePeriod)
+    }
+
+    /// The wiggle preview at `time` as a live transform: the drawing as its base, the
+    /// shapes the wiggle turns (see `displayDrawing(at:)`) and the turn about the part's
+    /// pivot. A renderer builds the art once per `id`, which changes with the drawing,
+    /// and each frame only draws the turning shapes through the new transform. Nil when
+    /// nothing wiggles.
+    public func wiggleTransform(at time: Double) -> LiveTransform? {
+        guard let id = wigglePart, let part = drawing.part(id) else { return nil }
+        var shapes: Set<Int> = []
+        for p in wiggleFamily(of: part) { shapes.formUnion(drawing.parts[p].shapes.map(\.id)) }
+        return LiveTransform(id: wiggleID, base: drawing, shapes: shapes, transform: wiggleTurn(of: part, at: time))
     }
 
     /// The drawing as the wiggle preview shows it at `time`: the wiggling part turned
@@ -473,16 +491,28 @@ extension DrawingEditor {
     public func displayDrawing(at time: Double) -> Drawing {
         guard let id = wigglePart, let part = drawing.part(id) else { return drawing }
         var out = drawing
-        let pivot = part.pivot
-        let turn = Affine2D.translation(pivot) * Affine2D.rotation(wiggleAngle(at: time) * .pi / 180) *
-            Affine2D.translation(-pivot)
-        let below = part.bone.map { drawing.descendantBones(of: $0) } ?? []
-        for p in out.parts.indices where out.parts[p].id == id || out.parts[p].accessoryOf == id ||
-            out.parts[p].bone.map({ below.contains($0) }) == true {
+        let turn = wiggleTurn(of: part, at: time)
+        for p in wiggleFamily(of: part) {
             for s in out.parts[p].shapes.indices { out.parts[p].shapes[s].apply(turn) }
             out.parts[p].pivot = turn.apply(out.parts[p].pivot)
         }
         return out
+    }
+
+    /// The turn about `part`'s pivot at `time`.
+    private func wiggleTurn(of part: Part, at time: Double) -> Affine2D {
+        Affine2D.translation(part.pivot) * Affine2D.rotation(wiggleAngle(at: time) * .pi / 180) *
+            Affine2D.translation(-part.pivot)
+    }
+
+    /// Indices of the parts the wiggle of `part` turns: the part, its accessories and
+    /// the parts on bones below its bone.
+    private func wiggleFamily(of part: Part) -> [Int] {
+        let below = part.bone.map { drawing.descendantBones(of: $0) } ?? []
+        return drawing.parts.indices.filter { p in
+            let other = drawing.parts[p]
+            return other.id == part.id || other.accessoryOf == part.id || other.bone.map { below.contains($0) } == true
+        }
     }
 
     // MARK: Joint cap

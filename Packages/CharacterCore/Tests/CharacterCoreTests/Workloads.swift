@@ -271,6 +271,24 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// One frame of the wiggle preview with part 0 turning, as the renderer draws it: it
+    /// reads the wiggle's live transform and draws the art it built when the wiggle
+    /// started through it, rebuilding only when the transform's id changes.
+    static let wiggleFrame = Workload(name: "Wiggle frame") { drawing in
+        var editor = DrawingEditor(drawing: drawing)
+        editor.toggleWiggle(part: drawing.parts[0].id, time: 0)
+        var builder = ArtBuilder()
+        var built: Int?
+        var time = 0.0
+        return {
+            time += 1.0 / 120
+            let live = editor.wiggleTransform(at: time)!
+            guard built != live.id else { return }
+            built = live.id
+            _ = builder.build(live.base, isolatedPart: nil, tolerance: 0.5, moving: live.shapes)
+        }
+    }
+
     /// An undo then a redo of one fill change.
     static let undoRedo = Workload(name: "Undo and redo") { drawing in
         var editor = DrawingEditor(drawing: drawing)
@@ -360,8 +378,8 @@ struct Workload: @unchecked Sendable {
         [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAfterOneEditAndUpload, artRebuildAtNewZoomBucket,
          zoomInRefineVisible, hoverFrame, selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
          scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything, dragEndOnePart,
-         dragEndEverything, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode,
-         svgExport, svgImport]
+         dragEndEverything, wiggleFrame, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse,
+         openDecode, svgExport, svgImport]
     }
 
     static func everything(in drawing: Drawing) -> Selection {
