@@ -11,7 +11,7 @@ let sampleCharactersFolder = URL(fileURLWithPath: #filePath)
     .appendingPathComponent("Schema/examples")
 
 /// The sample characters in `Schema/examples`, used as test fixtures. Robo is rigged
-/// and posed with two-bone weights and accessories; Pip has variants and skins.
+/// and posed with two-bone weights and accessories; Pip has variants, skins and parameters.
 enum SampleCharacters {
     /// The files of sample `name` (such as `pip.charstudio`): its `character.json`, and
     /// any reference images it lists.
@@ -36,6 +36,8 @@ enum SampleCharacters {
     /// A round head on a body, rigged with two bones and posed. The mouth has three
     /// variants (Closed, Open, O) and the eyes two (Open, Blink). The default skin wears a
     /// top hat; the Winter skin swaps it for a beanie and adds a scarf only it has.
+    /// Two parameters key the shown variants: `EyeOpen` (0 to 1, default 1) closes the open
+    /// eyes at 0, and `MouthOpen` (0 to 1, default 0) opens the closed mouth at 1.
     static func pip() -> Drawing {
         var d = Drawing()
         d.name = "Pip"
@@ -65,6 +67,17 @@ enum SampleCharacters {
         let headBone = Bone(id: d.makeID(), name: "Head", parent: bodyBone.id, head: Vec2(0, -60), tail: Vec2(0, -150))
         d.bones = [bodyBone, headBone]
 
+        let eyeOpen = Parameter(id: d.makeID(), name: "EyeOpen", defaultValue: 1)
+        let mouthOpen = Parameter(id: d.makeID(), name: "MouthOpen")
+        d.parameters = [eyeOpen, mouthOpen]
+        /// `rest` with a keyform at `value` of `parameter` where it shows `path`.
+        func keyed(_ rest: VectorShape, _ parameter: Parameter, at value: Double, _ path: BezierPath) -> VectorShape {
+            var shape = rest
+            shape.setKeyforms(restPath: rest.path, restOpacity: rest.opacity,
+                              keys: [(parameter: parameter.id, value: value, path: path, opacity: rest.opacity)])
+            return shape
+        }
+
         let body = part("Body", [shape(rect(-40, -70, 80, 90, radius: 24), fill: RGBAColor(hex: "#6FB37AFF")!)],
                         pivot: Vec2(0, 0), bone: bodyBone.id)
         let head = part("Head", [shape(ellipse(0, -110, 50, 46), fill: skin)], pivot: Vec2(0, -60), bone: headBone.id)
@@ -72,8 +85,9 @@ enum SampleCharacters {
         var eyes = part("Eyes", [], pivot: Vec2(0, -115), bone: headBone.id)
         eyes.accessoryOf = head.id
         withVariants(&eyes, [
-            ("Open", [shape(ellipse(-18, -118, 6, 8), fill: .ink, stroke: nil),
-                      shape(ellipse(18, -118, 6, 8), fill: .ink, stroke: nil)]),
+            // Closed, each eye is a slit.
+            ("Open", [keyed(shape(ellipse(-18, -118, 6, 8), fill: .ink, stroke: nil), eyeOpen, at: 0, ellipse(-18, -117, 7, 1)),
+                      keyed(shape(ellipse(18, -118, 6, 8), fill: .ink, stroke: nil), eyeOpen, at: 0, ellipse(18, -117, 7, 1))]),
             ("Blink", [shape(ShapePrimitives.line(Vec2(-25, -118), Vec2(-11, -118)), fill: nil),
                        shape(ShapePrimitives.line(Vec2(11, -118), Vec2(25, -118)), fill: nil)]),
         ])
@@ -82,7 +96,8 @@ enum SampleCharacters {
         mouth.accessoryOf = head.id
         let lips = RGBAColor(hex: "#B04A4AFF")!
         withVariants(&mouth, [
-            ("Closed", [shape(ShapePrimitives.line(Vec2(-14, -88), Vec2(14, -88)), fill: nil)]),
+            // A flat mouth: an outlined ellipse with no height, which opens wide.
+            ("Closed", [keyed(shape(ellipse(0, -88, 14, 0), fill: lips), mouthOpen, at: 1, ellipse(0, -86, 15, 8))]),
             ("Open", [shape(ellipse(0, -86, 15, 8), fill: lips)]),
             ("O", [shape(ellipse(0, -86, 7, 9), fill: lips)]),
         ])

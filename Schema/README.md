@@ -1,20 +1,20 @@
-# Character file format 0.2
+# Character file format 0.3
 
 A character is a `.charstudio` package (a folder that Files shows as one document):
 
 | File | What it is |
 | --- | --- |
-| `character.json` | The character. Validated by [`character-0.2.schema.json`](character-0.2.schema.json). |
+| `character.json` | The character. Validated by [`character-0.3.schema.json`](character-0.3.schema.json). |
 | `thumbnail.png` | Optional 512 x 512 preview of the art. |
 | `references/` | Pixels of editor-only reference images, named `reference-1.png`, `reference-2.jpg`, ... |
 
-[`examples/robo.charstudio`](examples/robo.charstudio) is a complete example. The CharacterCore tests check that the app re-saves it byte for byte, and CI validates it against the schema (`python Schema/validate.py`, which needs `pip install jsonschema`).
+[`examples/robo.charstudio`](examples/robo.charstudio) is a complete example, and [`examples/pip.charstudio`](examples/pip.charstudio) adds variants, skins and parameters. The CharacterCore tests check that the app re-saves both byte for byte, and CI validates it against the schema (`python Schema/validate.py`, which needs `pip install jsonschema`).
 
 ## Conventions
 
 - Points, y-axis down. Angles in degrees, clockwise on screen. Colors are `#RRGGBBAA` sRGB with straight alpha.
 - Numbers are written with at most 4 decimal places. Keys are written in a fixed order, so saving twice gives the same file.
-- `formatVersion` is semantic. In 0.x a newer minor version may break compatibility, so the app refuses it; from 1.0 only a newer major version is refused. Older files are upgraded on open by the steps in `CharacterFormat.migrations`. 0.2 only added optional keys, so a 0.1 file reads unchanged and is saved as 0.2.
+- `formatVersion` is semantic. In 0.x a newer minor version may break compatibility, so the app refuses it; from 1.0 only a newer major version is refused. Older files are upgraded on open by the steps in `CharacterFormat.migrations`. 0.2 and 0.3 only added optional keys, so a 0.1 or 0.2 file reads unchanged and is saved as 0.3.
 - Readers should ignore keys they do not know.
 
 ## Structure
@@ -26,6 +26,7 @@ A character is a `.charstudio` package (a folder that Files shows as one documen
 - Attachments and shapes may carry `hidden: true` and `locked: true`, editor hints written only when set: the editor doesn't draw hidden art and doesn't let taps reach locked art. Animation tools should draw both as usual.
 - A shape is `closed`, an optional `fill`, an optional `stroke` (`color`, `width`) and `points`. Each point has the anchor `p`, handles `in` and `out` as offsets from `p`, `smooth: false` on corner points, and `symmetric: true` on points whose handles are kept equally long (both optional editor hints). `weights` (`[bone, weight]` pairs) bind a point to two bones (see [Poses and weights](#poses-and-weights)).
 - `poses`: saved test poses (see [Poses and weights](#poses-and-weights)). `animations` is reserved and empty so far.
+- `parameters` (0.3, optional): the values the art can change with, and shapes' `keyforms`; see [Parameters and keyforms](#parameters-and-keyforms).
 - `palette`: the character's reusable colors. Plain `#RRGGBBAA` strings come first, then global colors as `{ "name", "color" }` (0.2).
 - `references`: editor-only reference images, bottom to top, with placement (`x`, `y` center, `rotation`, `scale`), `opacity` and `hidden`. Animation tools should ignore them.
 - `frame` (optional): the character frame, an editor hint written only when set. `x`, `y` (top-left), `width` and `height` give the target box in world space, `ground` the y of the line the character stands on (the box's bottom when missing), and `hidden: true` when the editor isn't showing it. The editor exports this box when it is shown. Added after 0.2 shipped, as an optional key, so the version stays 0.2.
@@ -92,3 +93,13 @@ Added after 0.2 shipped, as an optional key, so the version stays 0.2.
 - **Shapes behind the owner**: `behindOwner: true` on a shape of an accessory's attachment draws that shape just behind the owner's attachment (after any accessories already behind the owner), while the accessory's other shapes keep its own place in `drawOrder`. A hat's back brim can go behind the head while the rest of the hat is in front. Behind shapes keep their order and clip only to other behind shapes of the same accessory. The key is ignored on a part that isn't an accessory. Readers that ignore it draw those shapes with the rest of the accessory.
 - **Where behind shapes go**: `behindSlot` on an accessory's slot names another slot whose attachment the behind shapes draw just behind instead of the owner's, so long hair on the head can have its back sheet behind the neck while the neck stays behind the head (`"drawOrder": ["Torso", "Neck", "Head", "Hair"]` with Hair's `behindSlot` set to `Neck` draws Torso, the back of the hair, Neck, Head, then the rest of the hair). It can name any slot, the accessory's own included, and several accessories' behind shapes in front of the same slot draw in `drawOrder` order. It is written only for an accessory, and only when it isn't the owner. Readers should treat an unknown slot as the owner; readers that ignore the key draw the behind shapes just behind the owner.
 - Outfits are skins that refill accessory slots with other attachments (see [Variants and skins](#variants-and-skins)).
+
+## Parameters and keyforms
+
+Added in 0.3. Both keys are optional and written only when used, so a character without parameters is written as in 0.2 apart from `formatVersion`.
+
+- `parameters` (after `poses`) lists the character's parameters in the order the editor shows them: `{ "id", "min", "max", "default" }`, such as `{ "id": "EyeOpen", "min": 0, "max": 1, "default": 1 }`. `id` is the parameter's name, unique among them. A missing `min` is 0, a missing `max` 1 and a missing `default` the `min`; a `default` outside the range is brought into it. `min` greater than `max`, or two parameters with one id, are errors.
+- **The rest drawing:** the shapes in `skins` are the art with every parameter at its `default`. The values the editor's sliders are at are not saved; the file always holds the rest drawing, and a reader opens the character there.
+- `keyforms` on a shape (after `points`) holds the shape at chosen parameter values: `{ "parameter", "value", "offsets", "opacity" }`, ordered by parameter (in `parameters` order), then value. `offsets` lists the points that move, each `{ "point", "p", "in", "out" }`: the point's index in `points` and how far its anchor and its two handles (themselves offsets from the anchor) move from the rest drawing. The offsets are sparse: a point that doesn't move is left out, so are `p`, `in` and `out` when zero (missing means `[0, 0]`), and `opacity`, added to the shape's `opacity`, when 0. Offsets are in the attachment's bone space, like the points, so they turn with the bone.
+- **Blending:** the rest drawing is an implicit zero key at each parameter's default, and a keyform is never at the default. For one parameter, a shape blends linearly between the two keys around the parameter's value and holds the nearest end key beyond the last one on either side. Parameters add: the shape shows its points plus the blended offsets of every parameter that keys it, and its `opacity` plus the blended opacity offsets, kept within 0 to 1.
+- **Reading:** a keyform naming an unknown parameter is ignored, and so is one at its parameter's default; a `value` outside the range is brought into it, and of two keyforms at one parameter value the first is used. A `point` index outside the shape's `points`, or one listed twice in a keyform, is an error. Readers that ignore `parameters` and `keyforms` draw the rest drawing.
