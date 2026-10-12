@@ -11,6 +11,18 @@ struct VariantChip: Identifiable, Equatable {
     let name: String
 }
 
+/// One row of the parameters panel: a parameter, its slider's value and the values
+/// shapes have keyforms at, for the slider's tick marks.
+struct ParameterRow: Identifiable, Equatable {
+    let id: Int
+    let name: String
+    let minimum: Double
+    let maximum: Double
+    let defaultValue: Double
+    let value: Double
+    let keyValues: [Double]
+}
+
 /// The editor state SwiftUI controls show. Refreshed from the session after each
 /// gesture and command, never per touch sample.
 @MainActor
@@ -162,6 +174,15 @@ final class EditorUIState {
     var canGiveSkinArt = false
     var canUseDefaultArt = false
 
+    // Parameters and keyforms
+    /// The parameters in panel order, with their values and key values.
+    var parameters: [ParameterRow] = []
+    /// Where edits land while a parameter is away from its default (see
+    /// `Drawing.keyformBanner`); nil at the rest drawing.
+    var keyformBanner: String?
+    var canAddKeyform = false
+    var canDeleteKeyform = false
+
     // Workspace
     var outlineView = false
     var ghostsUnselected = false
@@ -297,8 +318,9 @@ final class CanvasStore {
     }
 
     /// Copies editor state into `ui` and redraws. The values read from the whole
-    /// drawing are read again only when the drawing changed.
-    func refresh() {
+    /// drawing are read again only when the drawing changed. A `continuous` change (a
+    /// parameter slider tick) is handed to the document once the run goes quiet.
+    func refresh(continuous: Bool = false) {
         let interval = Signposts.canvas.beginInterval("Refresh")
         defer { Signposts.canvas.endInterval("Refresh", interval) }
         let editor = session.editor
@@ -313,6 +335,7 @@ final class CanvasStore {
             update(\.frame, editor.drawing.frame)
             update(\.canExport, editor.drawing.exportArea() != nil)
             update(\.layers, LayerTree(drawing: editor.drawing))
+            refreshParameters(editor.drawing)
         }
         update(\.tool, editor.tool)
         update(\.canUndo, editor.canUndo)
@@ -416,6 +439,8 @@ final class CanvasStore {
         update(\.activeSkinName, editor.drawing.activeSkinName)
         update(\.canGiveSkinArt, editor.canGiveSkinArt)
         update(\.canUseDefaultArt, editor.canUseDefaultArt)
+        update(\.canAddKeyform, editor.canAddKeyform)
+        update(\.canDeleteKeyform, editor.canDeleteKeyform)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -437,7 +462,12 @@ final class CanvasStore {
             seenTapCommands = session.tapCommandCount
             showToast(session.lastTapCommand == .redo ? "Redo" : "Undo")
         }
-        updateDocument()
+        // An edit the editor refused (one a keyform can't keep) says why, once.
+        if let notice = editor.notice {
+            session.editor.clearNotice()
+            showToast(notice)
+        }
+        updateDocument(continuous: continuous)
         onChange?()
     }
 
@@ -456,9 +486,25 @@ final class CanvasStore {
         update(\.recentColors, editor.recentColors)
         update(\.palette, editor.drawing.palette)
         update(\.globalColors, editor.drawing.globalColors)
+        // An opacity change at a slider's value can make a keyform there.
+        refreshParameters(editor.drawing)
         if refreshedRevision != nil { refreshedRevision = editor.revision }
+        if let notice = editor.notice {
+            session.editor.clearNotice()
+            showToast(notice)
+        }
         updateDocument(continuous: true)
         onChange?()
+    }
+
+    /// The parameters panel's rows and the keyform banner.
+    private func refreshParameters(_ drawing: Drawing) {
+        update(\.parameters, drawing.parameters.map {
+            ParameterRow(id: $0.id, name: $0.name, minimum: $0.minimum, maximum: $0.maximum,
+                         defaultValue: $0.defaultValue, value: drawing.value(of: $0.id),
+                         keyValues: drawing.keyValues(of: $0.id))
+        })
+        update(\.keyformBanner, drawing.keyformBanner)
     }
 
     /// Shows a short message over the canvas.
@@ -665,6 +711,27 @@ final class CanvasStore {
     func giveSkinArt() { edit { $0.editor.giveSkinArt() } }
     func moveArtToSkin() { edit { $0.editor.moveArtToSkin() } }
     func useDefaultArt() { edit { $0.editor.useDefaultArt() } }
+
+    // MARK: Parameters and keyforms
+
+    func addParameter() { edit { _ = $0.editor.addParameter(name: "Parameter") } }
+    func renameParameter(_ id: Int, to name: String) { edit { $0.editor.renameParameter(id, to: name) } }
+    func moveParameter(_ id: Int, to index: Int) { edit { $0.editor.moveParameter(id, to: index) } }
+    func deleteParameter(_ id: Int) { edit { $0.editor.deleteParameter(id) } }
+    func setParameterRange(_ id: Int, minimum: Double, maximum: Double) {
+        edit { $0.editor.setParameterRange(id, minimum: minimum, maximum: maximum) }
+    }
+    func setParameterDefault(_ id: Int, to value: Double) { edit { $0.editor.setParameterDefault(id, to: value) } }
+    func resetParameters() { edit { $0.editor.resetParameters() } }
+    func addKeyform() { edit { $0.editor.addKeyform() } }
+    func deleteKeyform() { edit { $0.editor.deleteCurrentKeyform() } }
+
+    /// A slider tick: moves the parameter, snapping onto nearby keys, and redraws the art.
+    /// Not an undo step; the document hears of it once the slider stops.
+    func setParameterValue(_ value: Double, of id: Int) {
+        Signposts.canvas.withIntervalSignpost("Edit") { session.editor.setParameterValue(value, of: id, snapping: true) }
+        refresh(continuous: true)
+    }
 
     // MARK: Symmetry, wiggle and joints
 

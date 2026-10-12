@@ -137,6 +137,13 @@ extension DrawingEditor {
         commit(from: before, folding: false)
     }
 
+    /// Delete Keyform: deletes the keyform at the moved parameter's value (see
+    /// `deleteKeyform(parameter:value:)`).
+    public mutating func deleteCurrentKeyform() {
+        guard case .keyform(let id, let value) = drawing.keyformTarget else { return }
+        deleteKeyform(parameter: id, value: value)
+    }
+
     /// True when Delete Keyform has something to delete at the moved parameter's value:
     /// a selected shape, or with nothing selected any shape, has a keyform there.
     public var canDeleteKeyform: Bool {

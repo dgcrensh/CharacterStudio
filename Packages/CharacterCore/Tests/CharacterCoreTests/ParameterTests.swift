@@ -340,7 +340,7 @@ final class ParameterTests: XCTestCase {
         e.setParameterValue(1, of: mouthOpen)
         e.selection = .none
         XCTAssertTrue(e.canDeleteKeyform)
-        e.deleteKeyform(parameter: mouthOpen, value: 1)
+        e.deleteCurrentKeyform()
         XCTAssertEqual(e.drawing.keyValues(of: mouthOpen), [])
         XCTAssertNil(e.drawing.shape(mouth)!.keys)
         XCTAssertNotNil(e.drawing.shape(eye)!.keys)
