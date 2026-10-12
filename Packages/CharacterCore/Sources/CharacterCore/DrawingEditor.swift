@@ -613,9 +613,11 @@ public struct DrawingEditor: Sendable {
             if let bone { finishDrawnBone(bone, mirror: mirror) }
             commit(from: before)
         case .anchors(let ref, _, let before, _):
+            // A shape with keyforms is closed the same way at every key.
             if closing != nil, let idx = drawing.indices(ref),
-               let closed = drawing.parts[idx.0].shapes[idx.1].path.closedWithStraightEdge() {
-                drawing.parts[idx.0].shapes[idx.1].path = closed
+               let closed = changingPoints(of: drawing.parts[idx.0].shapes[idx.1], refusal: Self.closeRefusal,
+                                           { $0.closedWithStraightEdge() }) {
+                drawing.parts[idx.0].shapes[idx.1] = closed
             }
             commit(from: undoBase ?? before)
             undoBase = nil
@@ -1035,6 +1037,11 @@ public struct DrawingEditor: Sendable {
     private mutating func joinOrContinuePen(_ ref: ShapeRef, _ end: PathEnd) {
         guard let other = drawing.shape(ref), !other.path.closed else { return }
         guard let pen = penPath else {
+            // Its new anchors would have nowhere to be in its keyforms.
+            if other.isKeyed {
+                notice = Self.penExtendRefusal
+                return
+            }
             penPath = PenPath(part: ref.part, shape: ref.shape, fromStart: end == .start, createdPart: false)
             let saved = style
             selection = .shape(part: ref.part, shape: ref.shape)
@@ -1164,7 +1171,15 @@ public struct DrawingEditor: Sendable {
                 guard insertsOnTap else { break }
                 narrowSelection(to: ref)
                 var inserted: Int?
-                editShape(ref) { inserted = $0.path.insertPoint(segment: segment, t: t) }
+                // A shape with keyforms gets the new anchor at the same place on its curve at every key.
+                if let shape = drawing.shape(ref),
+                   let changed = changingPoints(of: shape, refusal: Drawing.topologyMessage, { path -> BezierPath? in
+                       var p = path
+                       inserted = p.insertPoint(segment: segment, t: t)
+                       return p
+                   }) {
+                    editShape(ref) { $0 = changed }
+                }
                 selectedAnchors = inserted.map { [$0] } ?? []
             case .shape(let ref):
                 if addToSelection {
@@ -1633,9 +1648,9 @@ public struct DrawingEditor: Sendable {
     /// Joins shape `b` onto shape `a` at the given ends, keeping `a`'s style and
     /// removing `b`. Does not record undo.
     mutating func joinShapes(_ a: ShapeRef, _ aEnd: PathEnd, _ b: ShapeRef, _ bEnd: PathEnd) -> Bool {
-        guard a != b, let ai = drawing.indices(a), let pathB = drawing.shape(b)?.path,
-              let joined = BezierPath.joined(drawing.parts[ai.0].shapes[ai.1].path, aEnd, pathB, bEnd) else { return false }
-        drawing.parts[ai.0].shapes[ai.1].path = joined
+        guard a != b, let ai = drawing.indices(a), let shapeB = drawing.shape(b),
+              let joined = joinedShape(drawing.parts[ai.0].shapes[ai.1], aEnd, shapeB, bEnd) else { return false }
+        drawing.parts[ai.0].shapes[ai.1] = joined
         removeShape(b)
         return true
     }
