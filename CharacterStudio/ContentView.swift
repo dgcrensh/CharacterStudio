@@ -27,7 +27,14 @@ struct ContentView: View {
                 ModifierStrip(store: store, ui: store.ui)
                     .padding(.trailing, 16)
             }
-            .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 10) {
+                    if store.ui.variantPart != nil, !store.ui.variants.isEmpty {
+                        VariantStrip(store: store, ui: store.ui)
+                    }
+                    StyleBar(store: store, ui: store.ui)
+                }
+            }
             .overlay { ToastView(ui: store.ui) }
             .overlay { PencilPalette(store: store, ui: store.ui) }
             // Keyboard shortcuts (EditorCommands) act on the focused document's canvas.
@@ -169,6 +176,7 @@ private struct ToolBar: View {
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
             Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
+            SkinMenu(store: store, ui: ui)
             ViewMenu(store: store, ui: ui, showingFrame: $showingFrame)
             Menu {
                 Button("Import SVG", systemImage: "square.and.arrow.down") { importingSVG = true }
@@ -288,6 +296,8 @@ private struct EditMenu: View {
                     }
                 }
             }
+            Button("Add Variant", systemImage: "rectangle.stack.badge.plus") { store.addVariant() }
+                .disabled(ui.variantPart == nil)
             if ui.canMoveShapes {
                 Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
                 Menu("Move to Part", systemImage: "arrow.right.square") {
@@ -318,6 +328,133 @@ private struct EditMenu: View {
             }
         } label: {
             Label("Edit", systemImage: "square.on.square.dashed")
+        }
+    }
+}
+
+/// The skin switcher: shows the default skin or another, adds, renames and deletes
+/// skins, and gives the selected part art of its own in the shown skin.
+private struct SkinMenu: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    @State private var renaming = false
+    @State private var newName = ""
+
+    var body: some View {
+        Menu {
+            Picker("Skin", selection: Binding(get: { ui.activeSkin }, set: { store.showSkin($0) })) {
+                Text("Default").tag(Skin.defaultID)
+                ForEach(ui.skins) { skin in
+                    Text(skin.name).tag(skin.id)
+                }
+            }
+            .pickerStyle(.inline)
+            Button("New Skin", systemImage: "plus") { store.addSkin() }
+            if ui.activeSkin != Skin.defaultID {
+                Button("Rename \(ui.activeSkinName)", systemImage: "pencil") {
+                    newName = ui.activeSkinName
+                    renaming = true
+                }
+                Button("Delete \(ui.activeSkinName)", systemImage: "trash", role: .destructive) {
+                    store.deleteSkin(ui.activeSkin)
+                }
+                Divider()
+                if ui.canGiveSkinArt {
+                    Button("Own Art for \(ui.variantPartName)", systemImage: "square.on.square") { store.giveSkinArt() }
+                    Button("\(ui.variantPartName) Only in \(ui.activeSkinName)", systemImage: "square.dashed") {
+                        store.moveArtToSkin()
+                    }
+                }
+                if ui.canUseDefaultArt {
+                    Button("Default Art for \(ui.variantPartName)", systemImage: "arrow.uturn.backward") {
+                        store.useDefaultArt()
+                    }
+                }
+            }
+        } label: {
+            Label("Skins", systemImage: ui.activeSkin == Skin.defaultID ? "tshirt" : "tshirt.fill")
+        }
+        .alert("Rename Skin", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") { store.renameSkin(ui.activeSkin, to: newName) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
+/// The variants of the selected part, one chip each: tap one to show it. Each chip's
+/// menu renames, moves and deletes it; the strip also adds a variant and toggles the
+/// onion skin of the others.
+private struct VariantStrip: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    @State private var renaming: VariantChip?
+    @State private var newName = ""
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(ui.variantPartName)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(ui.variants.enumerated()), id: \.element.id) { index, variant in
+                        chip(variant, at: index)
+                    }
+                }
+            }
+            .frame(maxWidth: 520)
+            .fixedSize(horizontal: true, vertical: false)
+            Button("Add Variant", systemImage: "plus") { store.addVariant() }
+            Toggle(isOn: Binding(get: { ui.showsOnionSkin }, set: { store.setShowsOnionSkin($0) })) {
+                Label("Onion Skin", systemImage: "square.3.layers.3d.down.right")
+            }
+            .toggleStyle(.button)
+        }
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .alert("Rename Variant", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                if let variant = renaming, let part = ui.variantPart { store.renameVariant(variant.id, of: part, to: newName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func chip(_ variant: VariantChip, at index: Int) -> some View {
+        let isActive = variant.id == ui.activeVariant
+        return Button {
+            if let part = ui.variantPart { store.selectVariant(variant.id, of: part) }
+        } label: {
+            Text(variant.name)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary), in: Capsule())
+                .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+        .contextMenu {
+            Button("Rename", systemImage: "pencil") {
+                newName = variant.name
+                renaming = variant
+            }
+            Button("Move Left", systemImage: "arrow.left") {
+                if let part = ui.variantPart { store.moveVariant(variant.id, of: part, to: index - 1) }
+            }
+            .disabled(index == 0)
+            Button("Move Right", systemImage: "arrow.right") {
+                if let part = ui.variantPart { store.moveVariant(variant.id, of: part, to: index + 1) }
+            }
+            .disabled(index == ui.variants.count - 1)
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                if let part = ui.variantPart { store.deleteVariant(variant.id, of: part) }
+            }
         }
     }
 }

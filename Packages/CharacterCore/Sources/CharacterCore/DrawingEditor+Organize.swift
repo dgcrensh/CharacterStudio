@@ -248,12 +248,16 @@ extension DrawingEditor {
     }
 
     /// True when part `id` has a part below it to merge into.
-    public func canMergePartDown(_ id: Int) -> Bool { (drawing.partIndex(id) ?? 0) > 0 }
+    /// A part with variants or skin art can't be merged, since only its shown art would go.
+    public func canMergePartDown(_ id: Int) -> Bool {
+        guard let i = drawing.partIndex(id) else { return false }
+        return i > 0 && !drawing.parts[i].holdsOtherArt
+    }
 
     /// Moves part `id`'s shapes into the part below it (keeping how they stack) and
     /// removes it. The merged part keeps the lower part's name and pivot.
     public mutating func mergePartDown(_ id: Int) {
-        guard let i = drawing.partIndex(id), i > 0 else { return }
+        guard canMergePartDown(id), let i = drawing.partIndex(id) else { return }
         cancelGesture()
         let before = drawing
         let wasIsolated = isolatedPart == id
@@ -293,7 +297,9 @@ extension DrawingEditor {
             moved += taken.shapes
             movedGroups += taken.groups
             // Only parts emptied by the move go; empty parts that lost nothing stay.
-            if !remaining.shapes.isEmpty || remaining.shapes.count == part.shapes.count { kept.append(remaining) }
+            if !remaining.shapes.isEmpty || remaining.shapes.count == part.shapes.count || part.holdsOtherArt {
+                kept.append(remaining)
+            }
             if i == topIndex { insertAt = kept.count }
         }
         drawing.parts = kept
@@ -321,7 +327,7 @@ extension DrawingEditor {
         for p in drawing.parts.indices where drawing.parts[p].id != id {
             let partID = drawing.parts[p].id
             if drawing.parts[p].shapes.allSatisfy({ refs.contains(ShapeRef(part: partID, shape: $0.id)) }),
-               !drawing.parts[p].shapes.isEmpty {
+               !drawing.parts[p].shapes.isEmpty, !drawing.parts[p].holdsOtherArt {
                 emptied.insert(partID)
             }
             let taken = Self.takeGroups(from: drawing.parts[p],
@@ -432,16 +438,14 @@ extension DrawingEditor {
         var copy = drawing.parts[i]
         copy.id = drawing.makeID()
         copy.name = drawing.uniquePartName(copy.name)
-        for s in copy.shapes.indices {
-            copy.shapes[s].id = drawing.makeID()
-            copy.shapes[s].apply(shift)
-        }
-        drawing.renewGroups(of: &copy)
+        // Every variant and skin's art is copied along.
+        drawing.renewArtIDs(of: &copy)
+        copy.updateAllShapes { $0.apply(shift) }
         copy.pivot = shift.apply(copy.pivot)
         drawing.parts.insert(copy, at: i + 1)
         // Its accessories are copied along, each just in front of its original.
         copyAccessories(of: id, to: copy.id) { part in
-            for s in part.shapes.indices { part.shapes[s].apply(shift) }
+            part.updateAllShapes { $0.apply(shift) }
             part.pivot = shift.apply(part.pivot)
         }
         return copy.id
@@ -474,6 +478,14 @@ extension DrawingEditor {
                 if !copy.shapes.isEmpty { clip.parts.append(copy) }
             }
             kind = "shapes"
+        }
+        // What the parts show is copied (pasting takes a part's shown shapes), not their
+        // other variants or skins.
+        for p in clip.parts.indices {
+            clip.parts[p].variants = []
+            clip.parts[p].activeVariant = nil
+            clip.parts[p].otherSkinArt = [:]
+            clip.parts[p].shownSkin = Skin.defaultID
         }
         // The global colors the copied shapes follow travel with them, by name.
         let used = Set(clip.parts.flatMap { $0.shapes.flatMap { [$0.fillGlobal, $0.stroke?.global].compactMap { $0 } } })

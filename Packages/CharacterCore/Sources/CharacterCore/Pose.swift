@@ -242,10 +242,10 @@ public enum AutoWeights {
         guard let firstID = part.bone, let first = drawing.bone(firstID), let secondID = part.secondBone,
               let second = drawing.bone(secondID), firstID != secondID else { return part }
         var out = part
-        for s in out.shapes.indices {
-            for i in out.shapes[s].path.points.indices {
-                out.shapes[s].path.points[i].weight = weight(at: out.shapes[s].path.points[i].position, first: first,
-                                                             second: second)
+        // Every variant and skin's art bends with the part.
+        out.updateAllShapes { shape in
+            for i in shape.path.points.indices {
+                shape.path.points[i].weight = weight(at: shape.path.points[i].position, first: first, second: second)
             }
         }
         return out

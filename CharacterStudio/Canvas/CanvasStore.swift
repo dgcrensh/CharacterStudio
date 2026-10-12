@@ -5,6 +5,12 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// One chip in the variant strip.
+struct VariantChip: Identifiable, Equatable {
+    let id: Int
+    let name: String
+}
+
 /// The editor state SwiftUI controls show. Refreshed from the session after each
 /// gesture and command, never per touch sample.
 @MainActor
@@ -134,6 +140,20 @@ final class EditorUIState {
     var weightPaintBone: Int?
     /// The two bones of the part being painted: the part's own, then its second.
     var weightPaintChoices: [Bone] = []
+
+    // Variants and skins
+    /// The part the variant strip shows, and its variants in strip order (none for a
+    /// part with one drawing).
+    var variantPart: Int?
+    var variantPartName = ""
+    var variants: [VariantChip] = []
+    var activeVariant: Int?
+    var showsOnionSkin = false
+    var skins: [Skin] = []
+    var activeSkin = Skin.defaultID
+    var activeSkinName = "default"
+    var canGiveSkinArt = false
+    var canUseDefaultArt = false
 
     // Workspace
     var outlineView = false
@@ -373,6 +393,17 @@ final class CanvasStore {
         update(\.weightPaintBone, editor.weightPaintBone)
         let painted = editor.weightPaintPart.flatMap { editor.drawing.part($0) }
         update(\.weightPaintChoices, [painted?.bone, painted?.secondBone].compactMap { $0.flatMap { editor.drawing.bone($0) } })
+        let variantPart = editor.variantPart.flatMap { editor.drawing.part($0) }
+        update(\.variantPart, variantPart?.id)
+        update(\.variantPartName, variantPart?.name ?? "")
+        update(\.variants, variantPart?.variants.map { VariantChip(id: $0.id, name: $0.name) } ?? [])
+        update(\.activeVariant, variantPart?.activeVariant)
+        update(\.showsOnionSkin, editor.showsOnionSkin)
+        update(\.skins, editor.drawing.skins)
+        update(\.activeSkin, editor.drawing.activeSkin)
+        update(\.activeSkinName, editor.drawing.activeSkinName)
+        update(\.canGiveSkinArt, editor.canGiveSkinArt)
+        update(\.canUseDefaultArt, editor.canUseDefaultArt)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -586,6 +617,23 @@ final class CanvasStore {
     func bindSecondBone() { edit { $0.editor.bindSelectedPartToSecondBone() } }
     func unbindSecondBone() { edit { $0.editor.unbindSecondBone() } }
     func autoWeightSelectedPart() { edit { $0.editor.autoWeightSelectedPart() } }
+
+    // MARK: Variants and skins
+
+    func addVariant() { edit { _ = $0.editor.addVariant() } }
+    func selectVariant(_ id: Int, of part: Int) { edit { $0.editor.selectVariant(id, of: part) } }
+    func cycleVariant(by step: Int) { edit { $0.editor.cycleVariant(by: step) } }
+    func renameVariant(_ id: Int, of part: Int, to name: String) { edit { $0.editor.renameVariant(id, of: part, to: name) } }
+    func moveVariant(_ id: Int, of part: Int, to index: Int) { edit { $0.editor.moveVariant(id, of: part, to: index) } }
+    func deleteVariant(_ id: Int, of part: Int) { edit { $0.editor.deleteVariant(id, of: part) } }
+    func setShowsOnionSkin(_ on: Bool) { edit { $0.editor.showsOnionSkin = on } }
+    func addSkin() { edit { _ = $0.editor.addSkin(named: "Skin") } }
+    func showSkin(_ id: Int) { edit { $0.editor.showSkin(id) } }
+    func renameSkin(_ id: Int, to name: String) { edit { $0.editor.renameSkin(id, to: name) } }
+    func deleteSkin(_ id: Int) { edit { $0.editor.deleteSkin(id) } }
+    func giveSkinArt() { edit { $0.editor.giveSkinArt() } }
+    func moveArtToSkin() { edit { $0.editor.moveArtToSkin() } }
+    func useDefaultArt() { edit { $0.editor.useDefaultArt() } }
 
     // MARK: Symmetry, wiggle and joints
 

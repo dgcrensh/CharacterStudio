@@ -424,13 +424,11 @@ extension DrawingEditor {
         var copy = drawing.parts[i]
         copy.id = drawing.makeID()
         copy.name = drawing.uniquePartName(SideName.flipped(copy.name) ?? copy.name)
-        for s in copy.shapes.indices {
-            copy.shapes[s].id = drawing.makeID()
-            copy.shapes[s].apply(symmetry.transform)
-        }
-        drawing.renewGroups(of: &copy)
-        for g in copy.groups.indices {
-            copy.groups[g].name = SideName.flipped(copy.groups[g].name) ?? copy.groups[g].name
+        drawing.renewArtIDs(of: &copy)
+        let mirror = symmetry.transform
+        copy.updateAllArt { shapes, groups in
+            for s in shapes.indices { shapes[s].apply(mirror) }
+            for g in groups.indices { groups[g].name = SideName.flipped(groups[g].name) ?? groups[g].name }
         }
         copy.pivot = symmetry.mirror(copy.pivot)
         // A copied accessory goes on its owner's partner on the other side, when there is one.
@@ -441,10 +439,12 @@ extension DrawingEditor {
         drawing.parts.insert(copy, at: i + 1)
         let symmetry = symmetry
         copyAccessories(of: id, to: copy.id) { part in
-            for s in part.shapes.indices { part.shapes[s].apply(symmetry.transform) }
+            part.updateAllArt { shapes, groups in
+                for s in shapes.indices { shapes[s].apply(symmetry.transform) }
+                for g in groups.indices { groups[g].name = SideName.flipped(groups[g].name) ?? groups[g].name }
+            }
             part.pivot = symmetry.mirror(part.pivot)
             part.name = SideName.flipped(part.name) ?? part.name
-            for g in part.groups.indices { part.groups[g].name = SideName.flipped(part.groups[g].name) ?? part.groups[g].name }
         }
         return copy.id
     }

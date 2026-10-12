@@ -79,14 +79,23 @@ public enum CharacterFormat {
         let globals = Dictionary(drawing.globalColors.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         var slots: [JSONValue] = []
         var skin: [(key: String, value: JSONValue)] = []
+        // The other skins' slots, by skin id.
+        var otherSkins: [Int: [(key: String, value: JSONValue)]] = [:]
         let slotOf = Dictionary(zip(drawing.parts.map(\.id), names), uniquingKeysWith: { a, _ in a })
         for (part, name) in zip(drawing.parts, names) {
             // A part on a bone the drawing doesn't have (a copied part) goes on the root.
             let bone = part.bone.flatMap { id in drawing.bone(id).map { (id: id, transform: $0.transform) } }
             let boneName = bone.flatMap { bones[$0.id] } ?? rootBone
+            // The default art, and the art for each skin the part has its own in.
+            let defaultArt = part.art(inSkin: Skin.defaultID) ?? PartArt()
+            let skinArt = drawing.skins.compactMap { skin in part.art(inSkin: skin.id).map { (skin.id, $0) } }
+            // A part only in other skins writes no default attachment; the slot names the art
+            // it shows in the first of them.
+            let onlyInSkins = defaultArt.shapes.isEmpty && defaultArt.variants.isEmpty && !skinArt.isEmpty
+            let named = onlyInSkins ? skinArt[0].1 : defaultArt
             var slot: [(key: String, value: JSONValue)] = [
                 (key: "id", value: .string(name)), (key: "bone", value: .string(boneName)),
-                (key: "attachment", value: .string(name)),
+                (key: "attachment", value: .string(named.activeVariantName ?? name)),
             ]
             // An accessory names its owner's slot, only when the owner is in the file.
             if let owner = part.accessoryOf.flatMap({ slotOf[$0] }) {
@@ -100,7 +109,7 @@ public enum CharacterFormat {
             // Attachments are stored in their bone's space.
             var local = part
             if let inverse = bone?.transform.inverted {
-                for s in local.shapes.indices { local.shapes[s].apply(inverse) }
+                local.updateAllShapes { $0.apply(inverse) }
                 local.pivot = inverse.apply(local.pivot)
             }
             // A part bound to a second bone writes both bones' weights on every point.
@@ -108,8 +117,28 @@ public enum CharacterFormat {
                 guard bone != nil, second != part.bone, let secondName = bones[second] else { return nil }
                 return (boneName, secondName)
             }
-            skin.append((key: name, value: obj([name: attachment(local, globals: globals, weights: weights)])))
+            // One attachment per variant, named for it, or one named for the slot.
+            func attachments(_ art: PartArt?) -> JSONValue {
+                guard let art else { return .object([]) }
+                var piece = local
+                guard !art.variants.isEmpty else {
+                    (piece.shapes, piece.groups) = (art.shapes, art.groups)
+                    return .object([(key: name, value: attachment(piece, globals: globals, weights: weights))])
+                }
+                return .object(art.variants.map { variant in
+                    (piece.shapes, piece.groups) = variant.id == art.activeVariant ? (art.shapes, art.groups)
+                        : (variant.shapes, variant.groups)
+                    return (key: variant.name, value: attachment(piece, globals: globals, weights: weights))
+                })
+            }
+            if !onlyInSkins { skin.append((key: name, value: attachments(local.art(inSkin: Skin.defaultID)))) }
+            for (id, _) in skinArt {
+                otherSkins[id, default: []].append((key: name, value: attachments(local.art(inSkin: id))))
+            }
         }
+        // The default skin, then the others in the order they were made.
+        var skins: [(key: String, value: JSONValue)] = [(key: defaultSkin, value: .object(skin))]
+        for other in drawing.skins { skins.append((key: other.name, value: .object(otherSkins[other.id] ?? []))) }
         let rootBoneValue = obj([
             "id": .string(rootBone), "parent": .null, "length": 0,
             "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1,
@@ -133,7 +162,7 @@ public enum CharacterFormat {
             "bones": .array(boneValues),
             "slots": .array(slots),
             "drawOrder": .array(drawOrder),
-            "skins": obj([defaultSkin: .object(skin)]),
+            "skins": .object(skins),
             "poses": poses(drawing, names: bones),
             "animations": .object([]),
             "palette": .array(palette),
@@ -415,58 +444,82 @@ public enum CharacterFormat {
             }
         }
 
-        let skin = try root.field("skins")?.field(defaultSkin)
+        // The default skin, then the others, which become the drawing's skins in file order.
+        let skinsNode = try root.field("skins")
+        var skinNodes: [(id: Int, node: Node)] = []
+        if let node = try skinsNode?.field(defaultSkin) { skinNodes.append((Skin.defaultID, node)) }
+        for (name, _) in try skinsNode?.members() ?? [] where name != defaultSkin {
+            guard let node = try skinsNode?.field(name), !drawing.skins.contains(where: { $0.name == name }) else { continue }
+            let skin = Skin(id: drawing.makeID(), name: name)
+            drawing.skins.append(skin)
+            skinNodes.append((skin.id, node))
+        }
         var partBones: [Int: String] = [:]
         var secondBones: [Int: String] = [:]
         var partIDs: [String: Int] = [:]
         var owners: [Int: String] = [:]
         var behindSlots: [Int: String] = [:]
         for slot in ordered {
-            guard let attachmentName = slot.attachment,
-                  let node = try skin?.field(slot.id)?.field(attachmentName) else { continue }
-            // Only vector attachments exist in v0.1; other types are skipped.
-            guard try node.field("type")?.string() ?? "vector" == "vector" else { continue }
-            var part = Part(id: drawing.makeID(), name: slot.id)
-            if let pivot = try node.vec2("pivot") { part.pivot = pivot }
-            part.isHidden = try node.bool("hidden") ?? false
-            part.isLocked = try node.bool("locked") ?? false
-            // Group ids in the file are local to the attachment.
-            var groups: [Int: Int] = [:]
-            for groupNode in try node.field("groups")?.array() ?? [] {
-                let number = try groupNode.require("id").integer()
-                guard groups[number] == nil else {
-                    throw CharacterFileError.invalid(path: groupNode.path + ".id", problem: "repeats group \(number)")
+            // The slot's vector attachments in each skin, in file order. Other types are skipped.
+            var found: [(skin: Int, attachments: [(name: String, node: Node)])] = []
+            for (skinID, skinNode) in skinNodes {
+                guard let slotNode = try skinNode.field(slot.id) else { continue }
+                var attachments: [(name: String, node: Node)] = []
+                for (name, _) in try slotNode.members() {
+                    guard let node = try slotNode.field(name), try node.field("type")?.string() ?? "vector" == "vector"
+                    else { continue }
+                    attachments.append((name, node))
                 }
-                let group = ShapeGroup(id: drawing.makeID(), name: try groupNode.field("name")?.string() ?? "Group",
-                                       isClipped: try groupNode.field("clipped")?.bool() ?? false)
-                groups[number] = group.id
-                part.groups.append(group)
+                if !attachments.isEmpty { found.append((skinID, attachments)) }
             }
-            // Per-point weights by bone name, read once the slot's bone is known.
-            var shapeWeights: [[[(bone: String, weight: Double)]]] = []
-            for shapeNode in try node.field("shapes")?.array() ?? [] {
-                var pointWeights: [[(bone: String, weight: Double)]] = []
-                var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals, weights: &pointWeights)
-                shapeWeights.append(pointWeights)
-                // An unknown group leaves the shape ungrouped.
-                decoded.group = try shapeNode.integer("group").flatMap { groups[$0] }
-                part.shapes.append(decoded)
+            // A slot with nothing to show in any skin is skipped, as an empty slot.
+            guard let first = found.first?.attachments.first?.node else { continue }
+            var part = Part(id: drawing.makeID(), name: slot.id)
+            if let pivot = try first.vec2("pivot") { part.pivot = pivot }
+            part.isHidden = try first.bool("hidden") ?? false
+            part.isLocked = try first.bool("locked") ?? false
+            // Per-point weights by bone name, by shape id in file order, read once the slot's
+            // bone is known.
+            var shapeWeights: [(shape: Int, points: [[(bone: String, weight: Double)]])] = []
+            var arts: [Int: PartArt] = [:]
+            for (skinID, attachments) in found {
+                var art = PartArt()
+                // One attachment is the part's drawing; several are its variants.
+                if attachments.count == 1 {
+                    (art.shapes, art.groups) = try self.art(attachments[0].node, globals: globals, drawing: &drawing,
+                                                            weights: &shapeWeights)
+                } else {
+                    for (name, node) in attachments {
+                        let read = try self.art(node, globals: globals, drawing: &drawing, weights: &shapeWeights)
+                        art.variants.append(PartVariant(id: drawing.makeID(), name: name, shapes: read.shapes,
+                                                        groups: read.groups))
+                    }
+                    // The slot names the variant shown, else the first one shows.
+                    let active = art.variants.first { $0.name == slot.attachment } ?? art.variants[0]
+                    var holder = Part(id: 0, name: "")
+                    holder.art = art
+                    holder.activateVariant(active.id)
+                    art = holder.art
+                }
+                arts[skinID] = art
             }
+            part.art = arts.removeValue(forKey: Skin.defaultID) ?? PartArt()
+            part.otherSkinArt = arts
             // Attachments are in their bone's space; the editor works in world space.
             let boneName = slot.bone ?? rootBone
             let world = skeleton.world[boneName] ?? skeleton.world[rootBone] ?? .identity
             if !world.isApproximately(.identity, tolerance: 0) {
-                for s in part.shapes.indices { part.shapes[s].apply(world) }
+                part.updateAllShapes { $0.apply(world) }
                 part.pivot = world.apply(part.pivot)
             }
             if boneName != rootBone, skeleton.world[boneName] != nil {
                 partBones[part.id] = boneName
-                if let second = secondBone(of: shapeWeights, slotBone: boneName, known: skeleton.world) {
+                if let second = secondBone(of: shapeWeights.map(\.points), slotBone: boneName, known: skeleton.world) {
                     secondBones[part.id] = second
-                    for s in part.shapes.indices {
-                        for i in part.shapes[s].path.points.indices {
-                            part.shapes[s].path.points[i].weight = weight(shapeWeights[s][i], of: second)
-                        }
+                    let byShape = Dictionary(shapeWeights.map { ($0.shape, $0.points) }, uniquingKeysWith: { a, _ in a })
+                    part.updateAllShapes { shape in
+                        guard let points = byShape[shape.id] else { return }
+                        for i in shape.path.points.indices { shape.path.points[i].weight = weight(points[i], of: second) }
                     }
                 }
             }
@@ -528,6 +581,36 @@ public enum CharacterFormat {
                                            isHidden: try node.field("hidden")?.bool() ?? false)
         }
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
+    }
+
+    /// One vector attachment's shapes and groups, with each shape's per-point weights
+    /// appended to `weights`.
+    private static func art(_ node: Node, globals: [String: Int], drawing: inout Drawing,
+                            weights: inout [(shape: Int, points: [[(bone: String, weight: Double)]])]) throws
+        -> (shapes: [VectorShape], groups: [ShapeGroup]) {
+        // Group ids in the file are local to the attachment.
+        var groupIDs: [Int: Int] = [:]
+        var groups: [ShapeGroup] = []
+        for groupNode in try node.field("groups")?.array() ?? [] {
+            let number = try groupNode.require("id").integer()
+            guard groupIDs[number] == nil else {
+                throw CharacterFileError.invalid(path: groupNode.path + ".id", problem: "repeats group \(number)")
+            }
+            let group = ShapeGroup(id: drawing.makeID(), name: try groupNode.field("name")?.string() ?? "Group",
+                                   isClipped: try groupNode.field("clipped")?.bool() ?? false)
+            groupIDs[number] = group.id
+            groups.append(group)
+        }
+        var shapes: [VectorShape] = []
+        for shapeNode in try node.field("shapes")?.array() ?? [] {
+            var pointWeights: [[(bone: String, weight: Double)]] = []
+            var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals, weights: &pointWeights)
+            weights.append((decoded.id, pointWeights))
+            // An unknown group leaves the shape ungrouped.
+            decoded.group = try shapeNode.integer("group").flatMap { groupIDs[$0] }
+            shapes.append(decoded)
+        }
+        return (shapes, groups)
     }
 
     /// The bone a part bends with besides its slot's: the known bone other than the slot's

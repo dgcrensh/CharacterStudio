@@ -182,6 +182,17 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// the layer those shapes draw just behind instead of the owner, such as the neck for
     /// long back hair on the head. Nil draws them just behind the owner.
     public var behindLayer: Int?
+    /// The part's drawings (mouth shapes, hand poses, blinks), in the order the variant
+    /// strip shows them, with `activeVariant` the one shown. Empty for a part with one
+    /// drawing. The active variant's art is `shapes` and `groups`; see `PartVariant`.
+    public var variants: [PartVariant] = []
+    public var activeVariant: Int?
+    /// The skin whose art the part shows (`Skin.defaultID` for the default skin). The
+    /// active skin's, or the default when the part has no art of its own there.
+    public var shownSkin = Skin.defaultID
+    /// The part's art in the skins it isn't showing, by skin id. It has default art
+    /// whatever it shows, so while it shows another skin its default art is in here.
+    public var otherSkinArt: [Int: PartArt] = [:]
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -461,6 +472,11 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var pose = Pose()
     /// Saved test poses, in the order they were made.
     public var poses: [NamedPose] = []
+    /// Skins besides the default one, in the order they were made.
+    public var skins: [Skin] = []
+    /// The skin the parts show (`Skin.defaultID` for the default). Kept with the drawing
+    /// so switching is undoable, but not saved: the file opens on the default skin.
+    public var activeSkin = Skin.defaultID
     public var nextID = 1
 
     public init() {}
@@ -617,14 +633,14 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             break
         case .layer(let id):
-            // Accessories move with their part.
+            // Accessories move with their part, and every variant and skin's art with it.
             for p in family(of: id) {
-                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
+                parts[p].updateAllShapes { $0.apply(t) }
                 parts[p].pivot = t.apply(parts[p].pivot)
             }
         case .layers(let ids):
             for p in families(of: ids) {
-                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
+                parts[p].updateAllShapes { $0.apply(t) }
                 parts[p].pivot = t.apply(parts[p].pivot)
             }
         case .shape(let pid, let sid):
