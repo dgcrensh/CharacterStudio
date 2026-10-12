@@ -54,6 +54,14 @@ public struct CubicBezier: Hashable, Sendable {
         return (CubicBezier(p0, a, d, f), CubicBezier(f, e, c, p3))
     }
 
+    /// About how many points `flatten` appends at `tolerance`, for reserving its output: Wang's
+    /// bound for evenly spaced points.
+    func flattenedCountEstimate(tolerance: Double) -> Int {
+        let bend = max((p0 - p1 * 2 + p2).length, (p1 - p2 * 2 + p3).length)
+        let n = (0.75 * bend / max(tolerance, 1e-6)).squareRoot().rounded(.up)
+        return Int(min(max(n, 1), 65_536))
+    }
+
     /// Appends points approximating the curve to `out`, excluding `p0`, so that no
     /// point of the curve is further than about `tolerance` from the polyline.
     public func flatten(tolerance: Double, into out: inout [Vec2]) {
@@ -211,7 +219,9 @@ public struct BezierPath: Hashable, Sendable, Codable {
     /// A polyline through the path. Closed paths do not repeat the first point.
     public func flattened(tolerance: Double) -> [Vec2] {
         guard let first = points.first else { return [] }
-        var out = [first.position]
+        var out: [Vec2] = []
+        out.reserveCapacity(flattenedCountEstimate(tolerance: tolerance))
+        out.append(first.position)
         for i in 0..<segmentCount {
             segment(i).flatten(tolerance: tolerance, into: &out)
         }
@@ -223,8 +233,12 @@ public struct BezierPath: Hashable, Sendable, Codable {
     /// blended linearly along each segment. Closed paths do not repeat the first point.
     public func flattenedWithWidths(tolerance: Double) -> (points: [Vec2], widths: [Double]) {
         guard let first = points.first else { return ([], []) }
-        var out = [first.position]
-        var widths = [first.width]
+        let estimate = flattenedCountEstimate(tolerance: tolerance)
+        var out: [Vec2] = [], widths: [Double] = []
+        out.reserveCapacity(estimate)
+        widths.reserveCapacity(estimate)
+        out.append(first.position)
+        widths.append(first.width)
         var params: [Double] = []
         for i in 0..<segmentCount {
             params.removeAll(keepingCapacity: true)
@@ -237,6 +251,15 @@ public struct BezierPath: Hashable, Sendable, Codable {
             widths.removeLast()
         }
         return (out, widths)
+    }
+
+    /// A capacity for `flattened(tolerance:)`'s output, from the segments' control points: the
+    /// segments' estimates plus a quarter, since the halving lands a little above them as often as
+    /// not. On the stress drawing no path needed more.
+    func flattenedCountEstimate(tolerance: Double) -> Int {
+        var count = 1
+        for i in 0..<segmentCount { count += segment(i).flattenedCountEstimate(tolerance: tolerance) }
+        return count + count / 4
     }
 
     /// True when some segment of the path is left without an outline.

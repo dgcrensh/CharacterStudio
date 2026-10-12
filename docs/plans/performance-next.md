@@ -260,7 +260,11 @@ Worth doing only after a device trace of an open (the `Open` interval to the fir
 is felt. Whether SwiftUI calls `CharacterDocument.init(configuration:)` on the main thread was not checked here;
 the trace answers that too.
 
-### 6. Reserve tessellation output instead of growing it (S-M)
+### 6. Reserve tessellation output instead of growing it (S-M): shipped
+
+Shipped: new-bucket rebuild 53.6 to 47.0 ms and zoom-in refine 12.7 to 11.4 ms at 2,400 shapes (the audit's
+"Next 6" table), with the same vertices. About 12%, the low end of the estimate.
+
 
 After recommendation 1, array growth is about 28% of a rebuild. `Stroker.triangles` can reserve from the
 flattened point count (a stroke emits a known number of triangles per segment plus joins and caps),
