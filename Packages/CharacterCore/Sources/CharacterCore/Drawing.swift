@@ -656,13 +656,23 @@ public struct Drawing: Hashable, Sendable, Codable {
             }
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
-            parts[idx.0].shapes[idx.1].apply(t)
+            applyToShown(t, &parts[idx.0].shapes[idx.1])
         case .shapes:
-            for (p, s) in shapeIndices(in: selection) { parts[p].shapes[s].apply(t) }
+            for (p, s) in shapeIndices(in: selection) { applyToShown(t, &parts[p].shapes[s]) }
         case .reference(let id):
             guard let r = referenceIndex(id) else { return }
             references[r].apply(t)
         }
+    }
+
+    /// Transforms a selected shape. At the rest its keyforms turn with it; away from the
+    /// rest only what it shows moves, so the edit folds into the keyform being edited.
+    private func applyToShown(_ t: Affine2D, _ shape: inout VectorShape) {
+        guard shape.keys != nil, !parameterValues.isEmpty else { return shape.apply(t) }
+        let keys = shape.keys
+        shape.keys = nil
+        shape.apply(t)
+        shape.keys = keys
     }
 
     public func applying(_ t: Affine2D, to selection: Selection) -> Drawing {

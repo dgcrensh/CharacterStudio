@@ -161,5 +161,52 @@ extension DrawingEditor {
         return targets.contains { p, s in drawing.parts[p].shapes[s].keys?.keyformIndex(at: coordinate) != nil }
     }
 
+    // MARK: Mirror Keyforms
+
+    /// The vertical line Mirror Keyforms mirrors across: the symmetry axis when symmetry
+    /// is on, else the middle of the character's frame, else the middle of the rest drawing.
+    public var keyformMirrorAxis: Double {
+        if symmetry.isEnabled { return symmetry.axis }
+        if let frame = drawing.frame { return frame.bounds.center.x }
+        let bounds = drawing.atRest().parts.reduce(Rect.null) { $0.union($1.bounds) }
+        return bounds.isNull ? symmetry.axis : bounds.center.x
+    }
+
+    /// True when Mirror Keyforms can act on parameter `id`: its slider is away from the
+    /// default, on a side with keyforms.
+    public func canMirrorKeyforms(of id: Int) -> Bool {
+        guard let parameter = drawing.parameter(id) else { return false }
+        let v = drawing.value(of: id), d = parameter.defaultValue
+        guard !Parameter.same(v, d) else { return false }
+        return drawing.keyValues(of: id).contains { v > d ? $0 > d : $0 < d }
+    }
+
+    /// Mirror Keyforms: copies every keyform on the side of parameter `id`'s default that
+    /// its slider is on to the other side, mirrored across `keyformMirrorAxis` (see
+    /// `Drawing.mirroringKeyforms`), and moves the slider to the mirrored value. One undo
+    /// step. The notice says how many keyed shapes had no mirror image to take keyforms.
+    public mutating func mirrorKeyforms(of id: Int) {
+        guard let parameter = drawing.parameter(id) else { return }
+        let v = drawing.value(of: id), d = parameter.defaultValue
+        guard !Parameter.same(v, d) else {
+            notice = "Move \(parameter.name)'s slider to the side to copy from, then mirror its keyforms."
+            return
+        }
+        guard let result = drawing.mirroringKeyforms(of: id, fromAbove: v > d, axis: keyformMirrorAxis),
+              result.mirrored > 0 else {
+            notice = "\(parameter.name) has no keyforms on this side to mirror."
+            return
+        }
+        cancelGesture()
+        let before = drawing
+        drawing = result.drawing
+        commit(from: before, folding: false)
+        drawing.setValue(parameter.clamped(2 * d - v), of: id)
+        if result.unmatched > 0 {
+            notice = result.unmatched == 1 ? "1 keyed shape had no mirror image to take its keyforms; key it by hand."
+                : "\(result.unmatched) keyed shapes had no mirror image to take their keyforms; key them by hand."
+        }
+    }
+
     static let addKeyformAtRestMessage = "Move one or two parameters' sliders away from their defaults to add a keyform there."
 }

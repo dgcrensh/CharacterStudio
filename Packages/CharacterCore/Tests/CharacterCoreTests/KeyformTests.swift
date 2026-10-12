@@ -131,6 +131,18 @@ final class KeyformTests: XCTestCase {
         assertClose(point(e.drawing, eye, 1), Vec2(5, 0))
     }
 
+    func testMovingAKeyedShapeWithSelectAtAKeyformKeysTheMove() {
+        var (e, eye, _, eyeOpen, _) = keyedFace()
+        e.drawing.setValue(0, of: eyeOpen)
+        e.tool = .select
+        e.selection = .shape(part: eye.part, shape: eye.shape)
+        e.nudge(by: Vec2(5, 0))
+        assertClose(point(e.drawing, eye, 1), Vec2(5, 0))
+        // The rest stays where it was.
+        e.drawing.setValue(1, of: eyeOpen)
+        assertClose(point(e.drawing, eye, 1), Vec2(0, -10))
+    }
+
     func testEditingAnExistingKeyformAddsToIt() {
         var (e, eye, _, eyeOpen, _) = keyedFace()
         e.drawing.setValue(0, of: eyeOpen)
