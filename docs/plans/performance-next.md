@@ -240,7 +240,14 @@ turn at `time`) and let the renderer's existing live path draw it: the art is bu
 each frame sets one uniform. Compute the turn once per frame and pass it to the overlay. Estimate: under 0.1 ms
 per frame of CPU, like a drag sample's art, plus the overlay. Keep "Wiggle frame" as a workload.
 
-### 5. Show the first frame before the cold build finishes (M)
+### 5. Show the first frame before the cold build finishes (M): shipped
+
+Shipped as `ArtBuilder.build(leavingOutUncached:)` and `refinePlan(wholeParts:)`: the first frame's art went from
+a 51.5 ms cold build to 0.008 ms at 2,400 shapes, and a refine job flattens the drawing meanwhile, whole parts in
+view first (the audit's "Next 5" table). It is shipped ahead of the device trace this section asked for, at
+Dallas's request. The trace is still the acceptance: `Art rebuild` with reason `open` in the first frame, then
+`Art merge` and `Art rebuild` with reason `open` as each result arrives.
+
 
 Opening still ends with a cold art build on the main thread inside the first frame (`updateArt` when
 `artTolerance == 0`, `CanvasRenderer.swift:381-390`): 59 ms at 2,400 shapes, 45 ms after recommendation 1. This is

@@ -289,6 +289,36 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The art's share of the first frame after opening (recommendation 5 of
+    /// performance-next.md): a build with nothing cached that leaves out every part not
+    /// yet tessellated. The cold build it replaced is "Art rebuild, new zoom bucket" with
+    /// an empty cache, about what `PerformanceTests.testArtBuildCold` times.
+    static let openFirstFrame = Workload(name: "Open: first frame's art") { drawing in
+        {
+            var builder = ArtBuilder()
+            _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2, reusingOtherTolerances: true,
+                              leavingOutUncached: true)
+        }
+    }
+
+    /// From that first frame to the art in view: the background job's first result
+    /// (planning whole parts against an empty cache and tessellating the parts that meet
+    /// an iPad-sized view at 1x around the busy point), then merging it and the build
+    /// that shows those parts on the main thread.
+    static let openFirstArtInView = Workload(name: "Open: first art in view") { drawing in
+        let center = StressDrawing.busyPoint(parts: drawing.parts.count)
+        let half = Vec2(1180, 820) / 2
+        let view = Rect(minPoint: center - half, maxPoint: center + half)
+        return {
+            var builder = ArtBuilder()
+            let plan = builder.tessellations.refinePlan(for: drawing, tolerance: 0.2, viewRect: view, wholeParts: true)
+            precondition(!plan.visible.isEmpty)
+            builder.tessellations.merge(TessellationCache.tessellate(plan.visible, tolerance: 0.2)!, for: drawing)
+            _ = builder.build(drawing, isolatedPart: nil, tolerance: 0.2, reusingOtherTolerances: true,
+                              leavingOutUncached: true)
+        }
+    }
+
     /// An undo then a redo of one fill change.
     static let undoRedo = Workload(name: "Undo and redo") { drawing in
         var editor = DrawingEditor(drawing: drawing)
@@ -379,7 +409,7 @@ struct Workload: @unchecked Sendable {
          zoomInRefineVisible, hoverFrame, selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
          scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything, dragEndOnePart,
          dragEndEverything, wiggleFrame, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse,
-         openDecode, svgExport, svgImport]
+         openDecode, openFirstFrame, openFirstArtInView, svgExport, svgImport]
     }
 
     static func everything(in drawing: Drawing) -> Selection {

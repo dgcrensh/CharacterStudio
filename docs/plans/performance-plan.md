@@ -203,6 +203,7 @@ frame) is deferred: it needs step 1's background job. Numbers in the audit under
 3. The first frame after opening pays a cold art build (70 ms at 2,400 shapes on the Mac). With step 1's background
    job, the renderer can draw the references and an empty canvas for a frame and fill in the art when the job
    returns, visible shapes first. Only worth doing if a device trace shows the `Open` to first `Frame` gap is felt.
+   Shipped later as recommendation 5 of [performance-next.md](performance-next.md).
 
 **Tests.** Number parsing: a table of numbers through both paths (the fast path and `Double(text)`) gives
 bit-identical results, including `-0`, `0.0001`, the largest 15-digit values, exponents (fallback) and every

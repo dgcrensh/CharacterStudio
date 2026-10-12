@@ -132,17 +132,21 @@ public struct TessellationCache: Sendable {
     /// The shapes a refine to `tolerance` has to tessellate, in two batches: those whose
     /// `hitBounds` meet `viewRect` grown by a quarter of its larger side, then the rest.
     /// Shapes this cache already holds at `tolerance` (in either tier) and hidden shapes
-    /// are left out. With no `viewRect`, every shape is in `rest`.
+    /// are left out. With no `viewRect`, every shape is in `rest`. With `wholeParts`, a
+    /// part with any shape in view puts all of its shapes in `visible`, so a build
+    /// `leavingOutUncached` can show it once the first batch is merged.
     public struct RefinePlan: Sendable {
         public var visible: [VectorShape] = []
         public var rest: [VectorShape] = []
         public var isEmpty: Bool { visible.isEmpty && rest.isEmpty }
     }
 
-    public func refinePlan(for drawing: Drawing, tolerance: Double, viewRect: Rect?) -> RefinePlan {
+    public func refinePlan(for drawing: Drawing, tolerance: Double, viewRect: Rect?,
+                           wholeParts: Bool = false) -> RefinePlan {
         var plan = RefinePlan()
         let view = viewRect.map { $0.outset(by: max($0.width, $0.height) / 4) }
         for part in drawing.parts {
+            let start = (visible: plan.visible.count, rest: plan.rest.count)
             for index in part.shapes.indices where part.isShown(index) {
                 let shape = part.shapes[index]
                 guard tessellation(of: shape, tolerance: tolerance) == nil else { continue }
@@ -151,6 +155,10 @@ public struct TessellationCache: Sendable {
                 } else {
                     plan.rest.append(shape)
                 }
+            }
+            if wholeParts, plan.visible.count > start.visible, plan.rest.count > start.rest {
+                plan.visible.append(contentsOf: plan.rest[start.rest...])
+                plan.rest.removeSubrange(start.rest...)
             }
         }
         return plan
