@@ -41,10 +41,17 @@ current slider values, so the slider never jumps on undo and slider moves are no
 Keyforms store one offset per point, so a keyed shape's points can't be added, removed or reordered
 without updating every keyform. Commands that do so run the same operation on the rest path and on
 the path at every key (`VectorShape.changingPoints`) and rebuild the offsets, which keeps every key's
-shape (inserting a point by de Casteljau split is exact at every key). Operations whose result
-depends on the geometry (simplify, refits) can't be kept consistent and are refused on keyed shapes
-with a message. As a safety net, `foldKeyformEdits` refuses any commit that leaves a keyed shape's
-points out of step with its keyforms.
+shape (inserting a point by de Casteljau split is exact at every key). That covers inserting and
+deleting anchors, split, scissors, closing a path (by Join or by dragging an end onto the other) and
+Clean for Rig's fixes, whose choices (where to add anchors, whether to reverse, whether ends merge) are
+made once on the shown path and then forced the same way at every key. Joining two shapes joins them
+at every key either one has, an unkeyed side giving its rest path. The pen won't extend a keyed open
+path (draw a new path and join it instead), and closing is refused where the ends meet at only some
+keys; both say why in `notice`. As a safety net, `foldKeyformEdits` refuses any commit that leaves a
+keyed shape's points out of step with its keyforms.
+
+Deleting an anchor heals the gap at each key separately, so between two keys the shape is a blend of
+the healed keys rather than the healed blend; the keys themselves are exact.
 
 ## Measurements
 
