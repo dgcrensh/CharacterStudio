@@ -1663,7 +1663,10 @@ public struct DrawingEditor: Sendable {
         commit(from: before, key: "\(key)-\(selection)")
     }
 
-    mutating func commit(from before: Drawing, key: String? = nil) {
+    /// Records the change since `before` as an undo step. `folding` is false for
+    /// commands that rewrite keyforms themselves (the parameter commands), whose changes
+    /// must not be folded into a keyform again.
+    mutating func commit(from before: Drawing, key: String? = nil, folding: Bool = true) {
         // Any other edit ends a run of color changes.
         if key == nil { recentColorSource = nil }
         // Groups stay whole: no empty groups, and each one's shapes together.
@@ -1674,7 +1677,7 @@ public struct DrawingEditor: Sendable {
         if !drawing.skinsAreValid { drawing.repairSkins() }
         // Edits land in the rest drawing or in the keyform the parameters are at, and are
         // refused when they can't.
-        if !drawing.parameters.isEmpty || !before.parameters.isEmpty,
+        if folding, !drawing.parameters.isEmpty || !before.parameters.isEmpty,
            let refusal = drawing.foldKeyformEdits(since: before) {
             let nextID = drawing.nextID
             drawing = before

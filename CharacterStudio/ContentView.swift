@@ -35,6 +35,12 @@ struct ContentView: View {
                     StyleBar(store: store, ui: store.ui)
                 }
             }
+            .overlay(alignment: .top) {
+                if let banner = store.ui.keyformBanner {
+                    KeyformBanner(text: banner)
+                        .padding(.top, 8)
+                }
+            }
             .overlay { ToastView(ui: store.ui) }
             .overlay { PencilPalette(store: store, ui: store.ui) }
             // Keyboard shortcuts (EditorCommands) act on the focused document's canvas.
@@ -91,6 +97,7 @@ private struct ToolBar: View {
     @State private var showingAppearance = false
     @State private var showingFrame = false
     @State private var showingRigCheck = false
+    @State private var showingParameters = false
     @State private var importingSVG = false
     @State private var exporting = false
     @State private var exportFile = ExportFile()
@@ -113,6 +120,7 @@ private struct ToolBar: View {
         .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
         .popover(isPresented: $showingFrame) { FramePanel(store: store, ui: ui) }
         .popover(isPresented: $showingRigCheck) { RigCheckPanel(store: store) }
+        .popover(isPresented: $showingParameters) { ParametersPanel(store: store, ui: ui) }
         // The importer and exporter sit on separate views: SwiftUI shows only one file
         // panel modifier per view.
         .background {
@@ -178,6 +186,7 @@ private struct ToolBar: View {
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
             Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
+            Button("Parameters", systemImage: "dial.medium") { showingParameters = true }
             SkinMenu(store: store, ui: ui)
             ViewMenu(store: store, ui: ui, showingFrame: $showingFrame)
             Menu {
@@ -1208,6 +1217,22 @@ private struct PencilPalette: View {
         let margin = radius + 40
         return CGPoint(x: min(max(p.x, margin), max(size.width - margin, margin)),
                        y: min(max(p.y, margin), max(size.height - margin, margin)))
+    }
+}
+
+/// While a parameter is away from its default: which keyform edits land in, or why
+/// edits are refused. It only informs, so touches pass through to the canvas.
+private struct KeyformBanner: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "dial.medium")
+            .font(.subheadline)
+            .lineLimit(2)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .allowsHitTesting(false)
     }
 }
 
