@@ -1675,6 +1675,8 @@ public struct DrawingEditor: Sendable {
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // Every part shows the art its skin and variant call for.
         if !drawing.skinsAreValid { drawing.repairSkins() }
+        // Switches name parameters and layers that exist, within the parameters' ranges.
+        if !drawing.switchesAreValid { drawing.repairSwitches() }
         // Edits land in the rest drawing or in the keyform the parameters are at, and are
         // refused when they can't.
         if folding, !drawing.parameters.isEmpty || !before.parameters.isEmpty,

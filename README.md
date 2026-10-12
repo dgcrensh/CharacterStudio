@@ -63,6 +63,15 @@ Milestone 8 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format m
 - **Commands** (`DrawingEditor+Parameters`, `Parameters.swift`): adding, renaming, moving and deleting parameters, the range and the default (rebasing keyforms so every shape looks the same at every value), the sliders and their snapping, Add and Delete Keyform, and the banner text (`keyformBanner`). Tests are in `ParameterTests`.
 - **Format:** 0.3 adds `parameters` at the top level and keyforms on shapes, both optional, with a migration step from 0.2; see [Schema/README.md](Schema/README.md).
 
+## Milestone 9: head turns
+
+Milestone 9 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.3: what is new is optional keys.
+
+**Part switches.** A part can switch over a range of a parameter's values, for changes too big to morph with keyforms. A switch says what the part does while the parameter is from one value to another (ends included): show one of its variants, by name, such as a side-on nose past `Turn` 0.5; and draw just behind or just in front of another layer, such as the far ear tucking behind the head as it turns or back hair coming round in front. Behind shapes of accessories keep working as before. To hide a part past a threshold, switch it to an empty variant. Where several switches apply, the first with a variant the part has decides the variant, and the first with a placement decides where it draws; outside every switch the part shows its own variant in its own place. The canvas follows the sliders live, while the layers panel keeps the order as set, so reordering isn't confused by a turned head. Adding, changing, reordering and deleting a part's switches are one undo step each; a new switch starts on the slider that is moved, from its value to that end of the range. Picking a variant by hand while a switch shows another makes it the part's own, and the switch takes over again when a slider moves. Switches work in every skin with a variant of that name, follow a renamed variant, and go with a deleted parameter; a placement next to a deleted layer goes too. The file keeps each part's own variant as the shown one, whatever the sliders.
+
+- **How it works** (CharacterCore, `Switches.swift`, `DrawingEditor+Switches.swift`): `Part.switches` holds `PartSwitch`es. As with keyforms, the art shown is stored: when the values change (`Drawing.evaluateKeyforms`), `Drawing.applySwitches` activates the switched variant and remembers the part's own in `Part.switchedFrom` (not saved), and `Drawing.drawStackPieces` moves placed parts (`unswitchedDrawStackPieces` is the order the layers panel shows). `DrawingEditor.commit` keeps switches valid (`switchesAreValid`, `repairSwitches`). Tests are in `SwitchTests`.
+- **Format:** `switches` on a slot, `{ "parameter", "min", "max", "attachment", "drawBehind" | "drawInFront" }`; see [Schema/README.md](Schema/README.md#part-switches).
+
 ## Milestone 7 notes (limbs)
 
 Milestone 7 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.2: the limb constraints are new optional keys on bones.

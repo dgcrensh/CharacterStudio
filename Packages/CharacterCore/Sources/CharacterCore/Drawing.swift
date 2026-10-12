@@ -197,6 +197,13 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// The part's art in the skins it isn't showing, by skin id. It has default art
     /// whatever it shows, so while it shows another skin its default art is in here.
     public var otherSkinArt: [Int: PartArt] = [:]
+    /// What the part does over chosen ranges of parameter values (show another variant,
+    /// draw behind or in front of another layer), first match first; see `PartSwitch`.
+    public var switches: [PartSwitch] = []
+    /// While a switch shows one of the part's variants: the variant the part showed
+    /// before, which it goes back to when no switch applies. Not saved (the file names
+    /// this one); see `Drawing.applySwitches`.
+    public var switchedFrom: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {

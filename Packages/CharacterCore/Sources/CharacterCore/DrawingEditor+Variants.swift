@@ -40,12 +40,16 @@ extension DrawingEditor {
             ?? drawing.parts[p].variants.count
         drawing.parts[p].variants.insert(variant, at: at)
         drawing.parts[p].activateVariant(variant.id)
+        // Shown by hand, it becomes the part's own variant, whatever a switch had chosen.
+        drawing.parts[p].switchedFrom = nil
         selection = .layer(id)
         commit(from: before)
         return variant.id
     }
 
-    /// Shows variant `variant` of part `part` (the variant strip's tap).
+    /// Shows variant `variant` of part `part` (the variant strip's tap). The variant
+    /// becomes the part's own, shown outside its switches, even while a switch had chosen
+    /// another; the switches take over again the next time a slider moves.
     public mutating func selectVariant(_ variant: Int, of part: Int) {
         guard let p = drawing.partIndex(part), drawing.parts[p].variantIndex(variant) != nil,
               drawing.parts[p].activeVariant != variant else { return }
@@ -54,6 +58,7 @@ extension DrawingEditor {
         // The old variant's shapes go out of view, so a selection in the part becomes the part.
         let inPart = variantPart == part
         drawing.parts[p].activateVariant(variant)
+        drawing.parts[p].switchedFrom = nil
         if inPart { selection = .layer(part) }
         validateSelection()
         commit(from: before)
@@ -68,12 +73,21 @@ extension DrawingEditor {
     }
 
     /// Renames a variant; names are trimmed and kept unique within the part, and an
-    /// empty name is ignored.
+    /// empty name is ignored. The part's switches that show it follow the new name,
+    /// unless another skin's art of the part still has a variant with the old one.
     public mutating func renameVariant(_ variant: Int, of part: Int, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let p = drawing.partIndex(part), let v = drawing.parts[p].variantIndex(variant) else { return }
         let before = drawing
-        drawing.parts[p].variants[v].name = drawing.parts[p].uniqueVariantName(trimmed, excluding: variant)
+        let old = drawing.parts[p].variants[v].name
+        let new = drawing.parts[p].uniqueVariantName(trimmed, excluding: variant)
+        drawing.parts[p].variants[v].name = new
+        let stillUsed = drawing.parts[p].otherSkinArt.values.contains { $0.variants.contains { $0.name == old } }
+        if !stillUsed {
+            for k in drawing.parts[p].switches.indices where drawing.parts[p].switches[k].variant == old {
+                drawing.parts[p].switches[k].variant = new
+            }
+        }
         commit(from: before)
     }
 
@@ -94,6 +108,10 @@ extension DrawingEditor {
         guard let p = drawing.partIndex(part), let v = drawing.parts[p].variantIndex(variant) else { return }
         cancelGesture()
         let before = drawing
+        // A switch's variant going away shows the part's own again; the part's own going
+        // away leaves the switched one as its own.
+        if drawing.parts[p].activeVariant == variant { drawing.parts[p].unswitch() }
+        if drawing.parts[p].switchedFrom == variant { drawing.parts[p].switchedFrom = nil }
         if drawing.parts[p].activeVariant == variant {
             let variants = drawing.parts[p].variants
             if variants.count > 1 { drawing.parts[p].activateVariant(variants[v == 0 ? 1 : v - 1].id) }
@@ -177,12 +195,14 @@ extension DrawingEditor {
         guard canGiveSkinArt, let id = variantPart, let p = drawing.partIndex(id) else { return }
         cancelGesture()
         let before = drawing
+        drawing.parts[p].unswitch()
         var copy = Part(id: id, name: "")
         copy.art = drawing.parts[p].art
         drawing.renewArtIDs(of: &copy)
         drawing.parts[p].otherSkinArt[Skin.defaultID] = drawing.parts[p].art
         drawing.parts[p].art = copy.art
         drawing.parts[p].shownSkin = drawing.activeSkin
+        drawing.applySwitches()
         selection = .layer(id)
         commit(from: before)
     }
@@ -193,8 +213,10 @@ extension DrawingEditor {
         guard canGiveSkinArt, let id = variantPart, let p = drawing.partIndex(id) else { return }
         cancelGesture()
         let before = drawing
+        drawing.parts[p].unswitch()
         drawing.parts[p].otherSkinArt[Skin.defaultID] = PartArt()
         drawing.parts[p].shownSkin = drawing.activeSkin
+        drawing.applySwitches()
         selection = .layer(id)
         commit(from: before)
     }
@@ -205,9 +227,11 @@ extension DrawingEditor {
               let defaultArt = drawing.parts[p].otherSkinArt[Skin.defaultID] else { return }
         cancelGesture()
         let before = drawing
+        drawing.parts[p].switchedFrom = nil
         drawing.parts[p].otherSkinArt[Skin.defaultID] = nil
         drawing.parts[p].art = defaultArt
         drawing.parts[p].shownSkin = Skin.defaultID
+        drawing.applySwitches()
         selection = .layer(id)
         validateSelection()
         commit(from: before)

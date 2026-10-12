@@ -165,9 +165,12 @@ extension Part {
 
     /// Shows the part's art for skin `id`, or its default art when it has none there.
     /// The active variant carries over by name when the new art has one with that name.
+    /// A variant a switch chose goes back first (`unswitch`), so the part's own variant
+    /// carries over; `Drawing.showSkin` then applies the switches again.
     public mutating func show(skin id: Int) {
         let target = hasArt(inSkin: id) ? id : Skin.defaultID
         guard target != shownSkin, let next = otherSkinArt.removeValue(forKey: target) else { return }
+        unswitch()
         let variantName = activeVariantName
         otherSkinArt[shownSkin] = art
         art = next
@@ -204,6 +207,7 @@ extension Drawing {
         let target = id == Skin.defaultID || skin(id) != nil ? id : Skin.defaultID
         activeSkin = target
         for p in parts.indices { parts[p].show(skin: target) }
+        applySwitches()
     }
 
     /// True when every part shows the art the active skin calls for, every part's
@@ -254,6 +258,7 @@ extension Drawing {
             }
             parts[p].show(skin: activeSkin)
         }
+        applySwitches()
     }
 
     private static func repairVariants(_ art: inout PartArt) {
@@ -275,7 +280,8 @@ extension Drawing {
     /// Gives every shape, group and variant `part` holds a new id (for a copy), keeping
     /// each shape in its group.
     public mutating func renewArtIDs(of part: inout Part) {
-        func renew(_ art: inout PartArt) {
+        var switchedFrom = part.switchedFrom
+        func renew(_ art: inout PartArt, shown: Bool = false) {
             var fresh: [Int: Int] = [:]
             func renewList(_ shapes: inout [VectorShape], _ groups: inout [ShapeGroup]) {
                 for g in groups.indices {
@@ -292,6 +298,7 @@ extension Drawing {
             for v in art.variants.indices {
                 let id = makeID()
                 if art.activeVariant == art.variants[v].id { art.activeVariant = id }
+                if shown, switchedFrom == art.variants[v].id { switchedFrom = id }
                 art.variants[v].id = id
                 var variant = art.variants[v]
                 renewList(&variant.shapes, &variant.groups)
@@ -299,8 +306,9 @@ extension Drawing {
             }
         }
         var shown = part.art
-        renew(&shown)
+        renew(&shown, shown: true)
         part.art = shown
+        part.switchedFrom = switchedFrom
         for key in part.otherSkinArt.keys.sorted() { renew(&part.otherSkinArt[key]!) }
     }
 }
