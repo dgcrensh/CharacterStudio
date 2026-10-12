@@ -833,6 +833,23 @@ What is left after dragging everything is the pass over the moved vertices, comp
 its transformed base, and the warm build copying every part's vertices. Other rows are unchanged within noise.
 The renderer side (`CanvasRenderer.updateArt`) is checked only by CI's app build until a device trace.
 
+#### Next 4: the wiggle draws through a live transform
+
+Recommendation 4 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,
+median of 9, milliseconds, run back to back. Part 0 (60 shapes, no bones below) wiggles. Before is a frame as the
+renderer drew it after recommendations 1 and 2: the turned drawing from `displayDrawing(at:)` and a warm build of
+it. After is the "Wiggle frame" workload: reading `wiggleTransform(at:)`, whose id doesn't change, so nothing is
+built; the art is built once when the wiggle starts and after each edit while it runs.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Wiggle frame | before | 2.04 | 2.25 | 2.62 | 3.43 | 5.01 |
+| | after | 0.004 | 0.004 | 0.004 | 0.004 | 0.004 |
+
+The overlay no longer turns a copy of the drawing every frame either; only the outline view's wireframe still
+reads `displayDrawing(at:)`. The renderer side (`CanvasRenderer.updateArt`) is checked only by the app build
+until a device trace (`Art rebuild` with reason `wiggle` once per wiggle, not per frame).
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and

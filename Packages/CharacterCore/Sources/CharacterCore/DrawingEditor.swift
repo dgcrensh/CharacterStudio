@@ -134,6 +134,8 @@ public struct DrawingEditor: Sendable {
             if let id = isolatedGroup, isolatedPart.flatMap({ drawing.part($0)?.group(id) }) == nil { isolatedGroup = nil }
             if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }
             if let id = wigglePart, drawing.partIndex(id) == nil { wigglePart = nil }
+            // The wiggle's live transform has a new base (see `wiggleTransform(at:)`).
+            if wigglePart != nil { newWiggleID() }
             if let id = targetLayer, drawing.partIndex(id) == nil { targetLayer = nil }
         }
     }
@@ -184,6 +186,8 @@ public struct DrawingEditor: Sendable {
     /// The part rocking about its pivot for the wiggle preview, and when it started.
     public internal(set) var wigglePart: Int?
     var wiggleStart = 0.0
+    /// The id of the wiggle's live transform, new whenever its base drawing changes.
+    var wiggleID = 0
     /// What the shape tool draws, and its settings.
     public var shapeKind: ShapeKind = .rectangle
     public var shapeOptions = ShapeToolOptions()
@@ -236,7 +240,8 @@ public struct DrawingEditor: Sendable {
     }
     /// The transform drag in progress, if it moves shapes. See `LiveTransform`.
     public private(set) var liveTransform: LiveTransform?
-    private var liveTransformCount = 0
+    /// Numbers live transforms, the drags' and the wiggle's alike.
+    var liveTransformCount = 0
     var gestureZoom = 1.0
     /// The last tap with a time, for spotting a double tap.
     private var lastTap: (point: Vec2, time: Double)?

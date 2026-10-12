@@ -578,6 +578,71 @@ final class JointToolsTests: XCTestCase {
         XCTAssertEqual(e.displayDrawing(at: t), e.drawing)
     }
 
+    func testTheWiggleIsALiveTransformOfTheShapesItTurns() throws {
+        var d = Drawing()
+        let upper = Bone(id: d.makeID(), name: "Upper", head: .zero, tail: Vec2(100, 0))
+        let lower = Bone(id: d.makeID(), name: "Lower", parent: upper.id, head: Vec2(100, 0), tail: Vec2(200, 0))
+        d.bones = [upper, lower]
+        let arm = addRect(&d, "Upper", rect(0, -10, 100, 20), bone: upper.id)
+        d.parts[0].pivot = Vec2(5, 0)
+        _ = addRect(&d, "Lower", rect(100, -10, 100, 20), bone: lower.id)
+        _ = addRect(&d, "Body", rect(-50, -50, 40, 100))
+        var e = DrawingEditor(drawing: d)
+        XCTAssertNil(e.wiggleTransform(at: 0))
+        e.toggleWiggle(part: arm, time: 10)
+        let t = 10 + DrawingEditor.wigglePeriod / 8
+        let live = try XCTUnwrap(e.wiggleTransform(at: t))
+        XCTAssertTrue(live.movesTessellation, "a turn draws through the art built for the drawing")
+        XCTAssertEqual(live.base, e.drawing)
+        XCTAssertEqual(live.shapes, Set(d.parts[0...1].flatMap { $0.shapes.map(\.id) }))
+        // Its transform takes the base's shapes to where the preview shows them.
+        let shown = e.displayDrawing(at: t)
+        for (p, part) in live.base.parts.enumerated() {
+            for (s, var shape) in part.shapes.enumerated() {
+                if live.shapes.contains(shape.id) { shape.apply(live.transform) }
+                XCTAssertEqual(shape, shown.parts[p].shapes[s])
+            }
+        }
+
+        // The same art for the whole wiggle: the id holds over time and changes with the drawing.
+        XCTAssertEqual(e.wiggleTransform(at: t + 0.3)?.id, live.id)
+        XCTAssertNotEqual(e.wiggleTransform(at: t + 0.3)?.transform, live.transform)
+        e.selection = .layer(arm)
+        e.setFill(RGBAColor(r: 1, g: 0, b: 0))
+        let edited = try XCTUnwrap(e.wiggleTransform(at: t))
+        XCTAssertNotEqual(edited.id, live.id)
+        XCTAssertEqual(edited.base, e.drawing)
+
+        // The next wiggle, and a drag, get ids of their own.
+        e.toggleWiggle(time: 20)
+        XCTAssertNil(e.wiggleTransform(at: t))
+        e.toggleWiggle(part: arm, time: 30)
+        let again = try XCTUnwrap(e.wiggleTransform(at: 30))
+        XCTAssertNotEqual(again.id, edited.id)
+        e.stopWiggle()
+        e.tool = .select
+        e.pencilBegan(at: Vec2(50, 0), zoom: 1)
+        e.pencilMoved(to: Vec2(60, 0))
+        let drag = try XCTUnwrap(e.liveTransform)
+        XCTAssertFalse([live.id, edited.id, again.id].contains(drag.id))
+    }
+
+    func testTheWiggleBuildsItsArtOnce() throws {
+        var d = Drawing()
+        let arm = addRect(&d, "Arm", rect(0, -10, 100, 20))
+        _ = addRect(&d, "Body", rect(-50, -50, 40, 100))
+        var e = DrawingEditor(drawing: d)
+        var builder = ArtBuilder()
+        _ = builder.build(e.drawing, isolatedPart: nil, tolerance: 0.5)
+        e.toggleWiggle(part: arm, time: 0)
+        let live = try XCTUnwrap(e.wiggleTransform(at: 0.2))
+        builder.tessellationCount = 0
+        let batch = builder.build(live.base, isolatedPart: nil, tolerance: 0.5, moving: live.shapes)
+        XCTAssertEqual(builder.tessellationCount, 0, "the turning shapes keep the drawing's triangles")
+        let marks = batch.steps.compactMap { step -> Bool? in if case .moving(let on) = step { on } else { nil } }
+        XCTAssertEqual(marks, [true, false])
+    }
+
     func testWiggleStopsWhenThePartGoes() {
         var d = Drawing()
         let part = addRect(&d, "Arm", rect(0, 0, 10, 10))

@@ -71,7 +71,8 @@ private struct PaintUniforms {
 /// triangles are cached and rebuilt only when that shape changes. A select-tool drag
 /// keeps the art built from the drawing as it began and draws the moved shapes through
 /// the drag's transform, so it re-tessellates nothing until the Pencil lifts (see
-/// `LiveTransform`). Vertices are in world space and the
+/// `LiveTransform`). The wiggle preview draws its turning shapes the same way. Vertices
+/// are in world space and the
 /// camera is applied in the vertex shader, so navigation never re-tessellates in a
 /// frame: when zoom crosses a power of two, the shapes are re-flattened in a background
 /// job, visible ones first, while the current art keeps drawing (see `updateArt`).
@@ -110,9 +111,8 @@ final class CanvasRenderer {
     private var artIsolation: Int?
     private var artGroupIsolation: Int?
     private var artGhost: Set<Int>?
-    /// True when the cached art was built from the wiggle preview's moving picture.
-    private var artWiggled = false
-    /// The live transform the cached art was built for, and its current transform.
+    /// The live transform (a drag's or the wiggle's) the cached art was built for, and
+    /// its current transform.
     private var artLive: Int?
     private var liveTransform = Affine2D.identity
     /// The live drag drawn on the last frame, whose triangles move with the shapes when it ends.
@@ -269,10 +269,12 @@ final class CanvasRenderer {
         let time = CACurrentMediaTime()
         let w = Double(viewSize.width), h = Double(viewSize.height)
         let screen = [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)].map { session.camera.toWorld($0) }
+        // Computed once a frame, for the art and the outline view's wireframe.
+        let wiggle = editor.wiggleTransform(at: time)
         // The outline view draws the art as a wireframe in the overlay instead.
         if !editor.outlineView {
             updateArt(editor: editor, zoom: session.camera.zoom, navigating: session.isNavigating,
-                      viewRect: Rect(points: screen), time: time)
+                      viewRect: Rect(points: screen), wiggle: wiggle)
         }
         loadMissingTextures(for: editor.drawing.references, commandBuffer: commandBuffer)
 
@@ -321,7 +323,8 @@ final class CanvasRenderer {
             }
             Signposts.canvas.endInterval("Live stroke", interval)
         }
-        let shown = editor.wigglePart != nil ? editor.displayDrawing(at: time) : nil
+        // Only the outline view's wireframe reads the turned drawing.
+        let shown = editor.outlineView ? wiggle.map { _ in editor.displayDrawing(at: time) } : nil
         let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
             EditorOverlay.layers(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
                                  art: shown, darkMode: darkMode, cache: &overlayCache)
@@ -373,19 +376,21 @@ final class CanvasRenderer {
 
     // MARK: Art
 
-    /// Rebuilds the art when the drawing, isolation or ghost focus changed, when a
-    /// background refine merged, and on every frame of the wiggle preview (only the
-    /// wiggling shapes re-tessellate). During a drag that `LiveTransform` can draw, it
-    /// builds the drag's starting drawing once and then only updates the transform.
+    /// Rebuilds the art when the drawing, isolation or ghost focus changed, or when a
+    /// background refine merged. During a drag that `LiveTransform` can draw, and while
+    /// `wiggle` (the wiggle preview's live transform) turns a part, it builds the base
+    /// drawing once and then only updates the transform.
     ///
     /// The art is flattened finely enough for the zoom, in power-of-two buckets. A new
     /// bucket never re-tessellates in the frame (see `scheduleRefine`).
-    private func updateArt(editor: DrawingEditor, zoom: Double, navigating: Bool, viewRect: Rect, time: Double) {
+    private func updateArt(editor: DrawingEditor, zoom: Double, navigating: Bool, viewRect: Rect,
+                           wiggle: LiveTransform?) {
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let wanted = 0.2 / bucket
-        let wiggling = editor.wigglePart != nil
-        let live = wiggling ? nil : editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
-        let drawing = live?.base ?? (wiggling ? editor.displayDrawing(at: time) : editor.drawing)
+        // A drag while wiggling edits the wiggle's base, so it rebuilds on every sample.
+        let drag = editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
+        let live = wiggle ?? drag
+        let drawing = live?.base ?? editor.drawing
         // A live drag just ended: carry the moved shapes' triangles to where they landed
         // rather than flattening them again. Enlarged ones are coarse until a refine.
         if live == nil, let ended = lastLive {
@@ -397,7 +402,8 @@ final class CanvasRenderer {
                 artMixed = true
             }
         }
-        lastLive = live
+        // A wiggle moves nothing when it stops, so only a drag is carried.
+        lastLive = wiggle == nil ? drag : nil
         // The first build has nothing to show meanwhile, so it flattens at the zoom's tolerance.
         if artTolerance == 0 { artTolerance = wanted }
         scheduleRefine(to: wanted, drawing: drawing, navigating: navigating, viewRect: viewRect)
@@ -405,11 +411,11 @@ final class CanvasRenderer {
         let ghost = editor.ghostFocus
         liveTransform = live?.transform ?? .identity
         let current = live.map { artLive == $0.id } ?? (artLive == nil && editor.revision == artRevision)
-        guard wiggling || artWiggled || !current || artRefined ||
+        guard !current || artRefined ||
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
         // Why, for the signpost.
-        let reason = wiggling || artWiggled ? "wiggle" : !current ? (live != nil ? "drag" : "edit")
+        let reason = !current ? (wiggle != nil ? "wiggle" : live != nil ? "drag" : "edit")
             : artRefined ? "refine" : "focus"
         // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
         artRevision = live == nil ? editor.revision : -1
@@ -417,7 +423,6 @@ final class CanvasRenderer {
         artIsolation = editor.isolatedPart
         artGroupIsolation = editor.isolatedGroup
         artGhost = ghost
-        artWiggled = wiggling
         artRefined = false
         artDrawing = drawing
         let interval = Signposts.canvas.beginInterval("Art rebuild")
