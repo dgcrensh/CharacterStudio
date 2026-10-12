@@ -181,7 +181,9 @@ extension DrawingEditor {
         guard let parameter = drawing.parameter(id) else { return false }
         let v = drawing.value(of: id), d = parameter.defaultValue
         guard !Parameter.same(v, d) else { return false }
-        return drawing.keyValues(of: id).contains { v > d ? $0 > d : $0 < d }
+        let onSide: (Double) -> Bool = { v > d ? $0 > d : $0 < d }
+        return drawing.keyValues(of: id).contains(where: onSide) ||
+            drawing.parts.contains { $0.switches.contains { $0.parameter == id && (onSide($0.minimum) || onSide($0.maximum)) } }
     }
 
     /// Mirror Keyforms: copies every keyform on the side of parameter `id`'s default that
@@ -196,7 +198,7 @@ extension DrawingEditor {
             return
         }
         guard let result = drawing.mirroringKeyforms(of: id, fromAbove: v > d, axis: keyformMirrorAxis),
-              result.mirrored > 0 else {
+              result.mirrored > 0 || result.switches > 0 else {
             notice = "\(parameter.name) has no keyforms on this side to mirror."
             return
         }

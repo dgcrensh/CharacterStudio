@@ -7,6 +7,13 @@ import Foundation
 /// part named for a side (`Ear.L`) lands on a shape of the other side's part (`Ear.R`);
 /// in any other part it lands on a shape of the same part (the other eye of an Eyes
 /// part, or itself for a face outline drawn about the axis).
+///
+/// Part switches on the parameter are mirrored the same way: a switch over a range on the
+/// source side gives the counterpart part (by side name, else the part itself) a switch
+/// over the mirrored range. Its placement is next to the counterpart of the layer it named,
+/// and its variant is the counterpart's variant of that name, the variant named for the
+/// other side (`Side.L` for `Side.R`), or else a mirrored copy of it named "… Mirrored",
+/// made (or redrawn) on the part: a side-on nose for the right turn gives the left turn's.
 public struct KeyformMirrorResult: Sendable {
     /// The drawing with the mirrored keyforms, shown at its parameter values.
     public var drawing: Drawing
@@ -15,6 +22,8 @@ public struct KeyformMirrorResult: Sendable {
     /// Keyed shapes that had no mirror image to land on (no shape of the same number of
     /// points near their mirror image), and keyforms whose mirrored value is out of range.
     public var unmatched: Int
+    /// How many part switches were mirrored.
+    public var switches: Int = 0
 }
 
 extension Drawing {
@@ -71,7 +80,6 @@ extension Drawing {
                 }
             }
         }
-        guard mirrored > 0 || unmatched > 0 else { return nil }
         var out = self
         for (ref, keys) in writes {
             guard let (p, s) = out.indices(ref) else { continue }
@@ -85,7 +93,83 @@ extension Drawing {
             shape.evaluateKeyforms(at: parameterValues, parameters: parameters)
             out.parts[p].shapes[s] = shape
         }
-        return KeyformMirrorResult(drawing: out, mirrored: mirrored, unmatched: unmatched)
+        let switches = out.mirrorSwitches(of: parameter, fromAbove: fromAbove, mirror: mirror)
+        guard mirrored > 0 || unmatched > 0 || switches > 0 else { return nil }
+        return KeyformMirrorResult(drawing: out, mirrored: mirrored, unmatched: unmatched, switches: switches)
+    }
+
+    /// Mirrors the switches on `parameter` from one side of its default to the other (see
+    /// `KeyformMirrorResult`), and returns how many it mirrored.
+    private mutating func mirrorSwitches(of parameter: Parameter, fromAbove: Bool, mirror: Affine2D) -> Int {
+        let id = parameter.id, d = parameter.defaultValue
+        guard parts.contains(where: { $0.switches.contains { $0.parameter == id } }) else { return 0 }
+        self = unswitched()
+        let snapshot = parts
+        func counterpart(_ index: Int) -> Int {
+            SideName.flipped(snapshot[index].name).flatMap { name in snapshot.firstIndex { $0.name == name } } ?? index
+        }
+        var count = 0
+        for (p, part) in snapshot.enumerated() {
+            for source in part.switches where source.parameter == id {
+                let onSource = fromAbove ? source.minimum >= d - Parameter.tolerance && source.maximum > d + Parameter.tolerance
+                    : source.maximum <= d + Parameter.tolerance && source.minimum < d - Parameter.tolerance
+                guard onSource else { continue }
+                let q = counterpart(p)
+                var made = PartSwitch(parameter: id, minimum: parameter.clamped(2 * d - source.maximum),
+                                      maximum: parameter.clamped(2 * d - source.minimum))
+                if let name = source.variant {
+                    let flipped = SideName.flipped(name).flatMap { f in parts[q].variants.contains { $0.name == f } ? f : nil }
+                    if let flipped {
+                        made.variant = flipped
+                    } else if q != p {
+                        made.variant = name
+                    } else if let variant = part.variants.first(where: { $0.name == name }) {
+                        made.variant = mirroredVariant(of: variant.id, inPart: p, mirror: mirror)
+                    }
+                }
+                if let placement = source.placement, let target = snapshot.firstIndex(where: { $0.id == placement.target }) {
+                    let other = snapshot[counterpart(target)].id
+                    switch placement {
+                    case .behind: made.placement = .behind(other)
+                    case .inFront: made.placement = .inFront(other)
+                    }
+                }
+                guard made.variant != nil || made.placement != nil else { continue }
+                parts[q].switches.removeAll {
+                    $0.parameter == id && Parameter.same($0.minimum, made.minimum) && Parameter.same($0.maximum, made.maximum)
+                }
+                parts[q].switches.append(made)
+                count += 1
+            }
+        }
+        applySwitches()
+        return count
+    }
+
+    /// Makes (or redraws) variant `id` of part `p` mirrored as a variant named "… Mirrored",
+    /// and returns that name.
+    private mutating func mirroredVariant(of id: Int, inPart p: Int, mirror: Affine2D) -> String? {
+        guard let source = parts[p].variant(id), let art = parts[p].variantArt(id) else { return nil }
+        let name = "\(source.name) Mirrored"
+        var copy = Part(id: parts[p].id, name: "")
+        copy.shapes = art.shapes
+        copy.groups = art.groups
+        renewArtIDs(of: &copy)
+        for s in copy.shapes.indices { copy.shapes[s].apply(mirror) }
+        if let existing = parts[p].variants.first(where: { $0.name == name }) {
+            if existing.id == parts[p].activeVariant {
+                parts[p].shapes = copy.shapes
+                parts[p].groups = copy.groups
+            } else if let v = parts[p].variantIndex(existing.id) {
+                parts[p].variants[v].shapes = copy.shapes
+                parts[p].variants[v].groups = copy.groups
+            }
+        } else {
+            let at = (parts[p].variantIndex(id) ?? parts[p].variants.count - 1) + 1
+            parts[p].variants.insert(PartVariant(id: makeID(), name: parts[p].uniqueVariantName(name), shapes: copy.shapes,
+                                                 groups: copy.groups), at: at)
+        }
+        return name
     }
 
     /// How the points of one path line up with another's mirror image: point `i` of the

@@ -160,6 +160,39 @@ final class KeyformMirrorTests: XCTestCase {
         XCTAssertEqual(f.editor.drawing.shape(f.outline)!.keys!.keyforms.count, 2)
     }
 
+    func testSwitchesMirrorToo() {
+        var f = MirrorFace()
+        // A Nose part with a front and a side-on variant (a triangle pointing right).
+        let front = VectorShape(id: f.editor.drawing.makeID(), path: ShapePrimitives.rectangle(Rect(minPoint: Vec2(-3, 0), maxPoint: Vec2(3, 10))))
+        let side = VectorShape(id: f.editor.drawing.makeID(), path: BezierPath(points: [
+            PathPoint(Vec2(0, 0), smooth: false), PathPoint(Vec2(8, 10), smooth: false), PathPoint(Vec2(0, 10), smooth: false),
+        ], closed: true))
+        var nose = Part(id: f.editor.drawing.makeID(), name: "Nose", shapes: [front])
+        let frontID = f.editor.drawing.makeID(), sideID = f.editor.drawing.makeID()
+        nose.variants = [PartVariant(id: frontID, name: "Front"), PartVariant(id: sideID, name: "Side", shapes: [side])]
+        nose.activeVariant = frontID
+        nose.switches = [PartSwitch(parameter: f.x, minimum: 15, maximum: 30, variant: "Side")]
+        f.editor.drawing.parts.append(nose)
+        let head = f.editor.drawing.parts[1].id, earL = f.earL.part, earR = f.earR.part
+        f.editor.drawing.parts[0].switches = [PartSwitch(parameter: f.x, minimum: 10, maximum: 30, placement: .behind(head))]
+
+        f.editor.setParameterValue(20, of: f.x)
+        XCTAssertTrue(f.editor.canMirrorKeyforms(of: f.x))
+        f.editor.mirrorKeyforms(of: f.x)
+        let d = f.editor.drawing
+        // Ear.L tucks behind the head on the other turn.
+        XCTAssertEqual(d.part(earL)!.switches, [PartSwitch(parameter: f.x, minimum: -30, maximum: -10, placement: .behind(head))])
+        XCTAssertEqual(d.part(earR)!.switches.count, 1)
+        // The nose gets a mirrored side-on drawing for the other turn, shown now the slider is at -20.
+        let mirroredNose = d.part(nose.id)!
+        XCTAssertEqual(mirroredNose.switches.last, PartSwitch(parameter: f.x, minimum: -30, maximum: -15, variant: "Side Mirrored"))
+        XCTAssertEqual(mirroredNose.activeVariantName, "Side Mirrored")
+        assertSame(mirroredNose.shapes[0].path, mirrored(side.path))
+        XCTAssertEqual(d.drawStack.map(\.name), ["Ear.R", "Ear.L", "Head", "Badge", "Nose"])
+        // Saved, the nose shows its own front drawing.
+        XCTAssertEqual(d.atRest().unswitched().part(nose.id)!.activeVariantName, "Front")
+    }
+
     func testTheMirrorAxisIsTheSymmetryAxisElseTheMiddle() {
         var f = MirrorFace()
         f.editor.symmetry.axis = 7
