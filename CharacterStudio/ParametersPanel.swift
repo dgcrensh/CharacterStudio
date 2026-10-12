@@ -4,7 +4,8 @@ import SwiftUI
 /// The character's parameters: a slider for each, with tick marks at the values shapes
 /// have keyforms at and at the default, and each one's name, range and default. Moving
 /// a slider changes what the art shows (not an undo step); editing the art with one
-/// slider away from its default keys it there. Every other change is one undo step.
+/// slider away from its default keys it there (two, a point of their grid). Below, the
+/// selected layer's part switches. Every other change is one undo step.
 struct ParametersPanel: View {
     let store: CanvasStore
     let ui: EditorUIState
@@ -26,7 +27,7 @@ struct ParametersPanel: View {
                         parameterRow(row, at: index)
                     }
                 } footer: {
-                    Text("Move one slider and edit the art to make a keyform at that value. Between keys the art blends.")
+                    Text("Move one slider and edit the art to make a keyform at that value, or two to make one at that point of their grid; with three or more moved the art can't be edited. Between keys the art blends. Mirror Keyforms copies the keyforms and switches on the side of the default the slider is on to the other side, mirrored across the symmetry axis (or the middle of the frame when symmetry is off).")
                 }
                 Section {
                     Button("Add Keyform", systemImage: "plus.diamond") { store.addKeyform() }
@@ -35,9 +36,12 @@ struct ParametersPanel: View {
                         .disabled(!ui.canDeleteKeyform)
                     Button("Reset All", systemImage: "arrow.uturn.backward") { store.resetParameters() }
                         .disabled(ui.keyformBanner == nil)
+                    Toggle("Onion Skin", systemImage: "square.3.layers.3d.down.right",
+                           isOn: Binding(get: { ui.showsOnionSkin }, set: { store.setShowsOnionSkin($0) }))
                 } footer: {
-                    Text("Add and Delete Keyform act on the selected shapes at the moved slider's value; with nothing selected, Delete Keyform removes that keyform from every shape.")
+                    Text("Add and Delete Keyform act on the selected shapes at the moved sliders' values; with nothing selected, Delete Keyform removes that keyform from every shape. Onion Skin outlines the keyed shapes at the neighbouring keys.")
                 }
+                switchesSection
             }
             Section {
                 Button("Add Parameter", systemImage: "plus") { store.addParameter() }
@@ -72,6 +76,10 @@ struct ParametersPanel: View {
                            systemImage: "slider.horizontal.below.rectangle") {
                         if expanded.contains(row.id) { expanded.remove(row.id) } else { expanded.insert(row.id) }
                     }
+                    Button("Mirror Keyforms", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                        store.mirrorKeyforms(of: row.id)
+                    }
+                    .disabled(!row.canMirrorKeyforms)
                     Button("Move Up", systemImage: "arrow.up") { store.moveParameter(row.id, to: index - 1) }
                         .disabled(index == 0)
                     Button("Move Down", systemImage: "arrow.down") { store.moveParameter(row.id, to: index + 1) }
@@ -87,6 +95,122 @@ struct ParametersPanel: View {
                 numberRow("Minimum", row.minimum) { store.setParameterRange(row.id, minimum: $0, maximum: row.maximum) }
                 numberRow("Maximum", row.maximum) { store.setParameterRange(row.id, minimum: row.minimum, maximum: $0) }
                 numberRow("Default", row.defaultValue) { store.setParameterDefault(row.id, to: $0) }
+                driverRows(row)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// The bone that drives the parameter, and the turns that give its minimum and maximum.
+    @ViewBuilder
+    private func driverRows(_ row: ParameterRow) -> some View {
+        Picker("Driven by Bone", selection: Binding<Int?>(get: { row.driver?.bone }, set: { bone in
+            if let bone {
+                store.setParameterDriver(row.id, bone: bone, minimumAngle: row.driver?.minimumAngle ?? -30,
+                                         maximumAngle: row.driver?.maximumAngle ?? 30)
+            } else {
+                store.clearParameterDriver(row.id)
+            }
+        })) {
+            Text("None").tag(Int?.none)
+            ForEach(ui.bones) { bone in
+                Text(bone.name).tag(Int?.some(bone.id))
+            }
+        }
+        if let driver = row.driver {
+            numberRow("Turn at Minimum (°)", driver.minimumAngle) {
+                store.setParameterDriver(row.id, bone: driver.bone, minimumAngle: $0, maximumAngle: driver.maximumAngle)
+            }
+            numberRow("Turn at Maximum (°)", driver.maximumAngle) {
+                store.setParameterDriver(row.id, bone: driver.bone, minimumAngle: driver.minimumAngle, maximumAngle: $0)
+            }
+        }
+    }
+
+    // MARK: Part switches
+
+    /// The selected layer's switches: what it shows and where it draws over a range of
+    /// one parameter's values.
+    private var switchesSection: some View {
+        Section {
+            if let part = ui.switchPart {
+                ForEach(Array(ui.switches.enumerated()), id: \.offset) { index, item in
+                    switchRow(item, at: index, of: part)
+                }
+                Button("Add Switch", systemImage: "plus") { store.addSwitch(to: part) }
+            } else {
+                Text("Select a layer to give it switches.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text(ui.switchPart == nil ? "Switches" : "Switches of \(ui.switchPartName)")
+        } footer: {
+            Text("While a parameter is in a switch's range, the layer shows that variant and draws behind or in front of another layer. Where several apply, the first decides.")
+        }
+    }
+
+    private func switchRow(_ item: PartSwitch, at index: Int, of part: Int) -> some View {
+        let set: (PartSwitch) -> Void = { store.updateSwitch(index, of: part, to: $0) }
+        let parameterName = ui.parameters.first { $0.id == item.parameter }?.name ?? "Parameter"
+        // A variant name the shown art lacks (another skin's) stays pickable.
+        var variants = ui.switchVariantNames
+        if let name = item.variant, !variants.contains(name) { variants.append(name) }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("\(parameterName) \(Parameter.text(item.minimum)) to \(Parameter.text(item.maximum))")
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Menu {
+                    Button("Move Up", systemImage: "arrow.up") { store.moveSwitch(index, of: part, to: index - 1) }
+                        .disabled(index == 0)
+                    Button("Move Down", systemImage: "arrow.down") { store.moveSwitch(index, of: part, to: index + 1) }
+                        .disabled(index == ui.switches.count - 1)
+                    Button("Delete", systemImage: "trash", role: .destructive) { store.deleteSwitch(index, of: part) }
+                } label: {
+                    Label("Switch Options", systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
+                }
+            }
+            Picker("Parameter", selection: Binding(get: { item.parameter }, set: { id in
+                var changed = item
+                changed.parameter = id
+                set(changed)
+            })) {
+                ForEach(ui.parameters) { parameter in
+                    Text(parameter.name).tag(parameter.id)
+                }
+            }
+            numberRow("From", item.minimum) { value in
+                var changed = item
+                changed.minimum = value
+                set(changed)
+            }
+            numberRow("To", item.maximum) { value in
+                var changed = item
+                changed.maximum = value
+                set(changed)
+            }
+            Picker("Variant", selection: Binding<String?>(get: { item.variant }, set: { name in
+                var changed = item
+                changed.variant = name
+                set(changed)
+            })) {
+                Text("None").tag(String?.none)
+                ForEach(variants, id: \.self) { name in
+                    Text(name).tag(String?.some(name))
+                }
+            }
+            Picker("Placement", selection: Binding<SwitchPlacement?>(get: { item.placement }, set: { placement in
+                var changed = item
+                changed.placement = placement
+                set(changed)
+            })) {
+                Text("None").tag(SwitchPlacement?.none)
+                ForEach(ui.switchTargets) { layer in
+                    Text("Behind \(layer.name)").tag(SwitchPlacement?.some(.behind(layer.id)))
+                    Text("In Front of \(layer.name)").tag(SwitchPlacement?.some(.inFront(layer.id)))
+                }
             }
         }
         .padding(.vertical, 4)
