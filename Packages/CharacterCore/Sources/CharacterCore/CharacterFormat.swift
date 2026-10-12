@@ -370,19 +370,33 @@ public enum CharacterFormat {
         return .object(members)
     }
 
-    /// The shape's keyforms on the file's parameters, by parameter order then value. The
-    /// offsets are sparse: zero points, zero members and a zero opacity are left out.
-    /// Keyforms that don't match the shape's points can't be read back, so none are written.
+    /// The shape's keyforms on the file's parameters, by parameter order then value, each
+    /// grid's after its first parameter's own. A grid keyform names first the parameter
+    /// that comes first in the file. The offsets are sparse: zero points, zero members
+    /// and a zero opacity are left out. Keyforms that don't match the shape's points can't
+    /// be read back, so none are written.
     private static func keyforms(_ shape: VectorShape, parameters: FileParameters) -> [JSONValue] {
         guard let keys = shape.keys, keys.isConsistent, keys.restPoints.count == shape.path.points.count else { return [] }
-        let written = keys.keyforms.filter { key in
-            guard let i = parameters.order[key.parameter] else { return false }
-            return !Parameter.same(key.value, parameters.list[i].defaultValue)
-        }.sorted { a, b in
-            let pa = parameters.order[a.parameter]!, pb = parameters.order[b.parameter]!
-            return pa != pb ? pa < pb : a.value < b.value
+        // Each keyform's parameters as (place in the file, value), in file order.
+        typealias Place = (order: Int, value: Double)
+        func places(_ key: Keyform) -> (Place, Place?)? {
+            guard let i = parameters.order[key.parameter],
+                  !Parameter.same(key.value, parameters.list[i].defaultValue) else { return nil }
+            guard let second = key.parameter2 else { return ((i, key.value), nil) }
+            guard let j = parameters.order[second], !Parameter.same(key.value2, parameters.list[j].defaultValue)
+            else { return nil }
+            return i < j ? ((i, key.value), (j, key.value2)) : ((j, key.value2), (i, key.value))
         }
-        return written.map { key in
+        let written = keys.keyforms.compactMap { key in places(key).map { (key: key, first: $0.0, second: $0.1) } }
+            .sorted { a, b in
+                if a.first.order != b.first.order { return a.first.order < b.first.order }
+                let sa = a.second?.order ?? -1, sb = b.second?.order ?? -1
+                if sa != sb { return sa < sb }
+                if a.first.value != b.first.value { return a.first.value < b.first.value }
+                return (a.second?.value ?? 0) < (b.second?.value ?? 0)
+            }
+        return written.map { entry in
+            let key = entry.key
             var offsets: [JSONValue] = []
             for (i, offset) in key.offsets.enumerated() {
                 var point: [(key: String, value: JSONValue)] = []
@@ -394,10 +408,14 @@ public enum CharacterFormat {
                 offsets.append(.object([(key: "point", value: .number(Double(i)))] + point))
             }
             var members: [(key: String, value: JSONValue)] = [
-                (key: "parameter", value: .string(parameters.list[parameters.order[key.parameter]!].name)),
-                (key: "value", value: num(key.value)),
-                (key: "offsets", value: .array(offsets)),
+                (key: "parameter", value: .string(parameters.list[entry.first.order].name)),
+                (key: "value", value: num(entry.first.value)),
             ]
+            if let second = entry.second {
+                members.append((key: "parameter2", value: .string(parameters.list[second.order].name)))
+                members.append((key: "value2", value: num(second.value)))
+            }
+            members.append((key: "offsets", value: .array(offsets)))
             if num(key.opacity) != 0 { members.append((key: "opacity", value: num(key.opacity))) }
             return .object(members)
         }
@@ -887,8 +905,9 @@ public enum CharacterFormat {
     }
 
     /// A shape's keyforms, offsets from its points (the rest drawing). A keyform on an
-    /// unknown parameter, or at its parameter's default, is skipped; a value outside the
-    /// range is brought into it, and of two keyforms at one value the first is kept.
+    /// unknown parameter, or at its parameter's default, is skipped (a grid keyform also
+    /// when its two parameters are the same); a value outside the range is brought into
+    /// it, and of two keyforms at one place the first is kept.
     private static func keyforms(_ node: Node, pointCount: Int, parameters: [String: Parameter]) throws -> [Keyform] {
         var out: [Keyform] = []
         for keyNode in try node.array() {
@@ -909,11 +928,20 @@ public enum CharacterFormat {
                                                outHandle: try offsetNode.vec2("out") ?? .zero)
             }
             let opacity = try keyNode.number("opacity") ?? 0
+            let second = try keyNode.string("parameter2")
+            let value2 = second == nil ? 0 : try keyNode.requireNumber("value2")
             guard let parameter = parameters[name] else { continue }
             let clamped = parameter.clamped(value)
-            guard !Parameter.same(clamped, parameter.defaultValue),
-                  !out.contains(where: { $0.parameter == parameter.id && Parameter.same($0.value, clamped) }) else { continue }
-            out.append(Keyform(parameter: parameter.id, value: clamped, offsets: offsets, opacity: opacity))
+            guard !Parameter.same(clamped, parameter.defaultValue) else { continue }
+            var coordinate = KeyCoordinate(parameter: parameter.id, value: clamped)
+            if let second {
+                guard let other = parameters[second], other.id != parameter.id else { continue }
+                let clamped2 = other.clamped(value2)
+                guard !Parameter.same(clamped2, other.defaultValue) else { continue }
+                coordinate = KeyCoordinate(parameter.id, clamped, other.id, clamped2)
+            }
+            guard !out.contains(where: { $0.coordinate.matches(coordinate) }) else { continue }
+            out.append(Keyform(at: coordinate, offsets: offsets, opacity: opacity))
         }
         return out
     }

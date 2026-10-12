@@ -67,12 +67,73 @@ public struct PointGeometry: Hashable, Sendable, Codable {
     public static func lerp(_ a: PointGeometry, _ b: PointGeometry, _ t: Double) -> PointGeometry { a + (b - a) * t }
 }
 
-/// A shape at one value of one parameter: how far each point (anchor and both handles)
-/// and the opacity move from the rest drawing there.
+/// Where a keyform sits: a value of one parameter, or for a keyform on a grid of two
+/// parameters (such as `AngleX` × `AngleY`) a value of each. A grid coordinate keeps the
+/// parameter with the lower id first, so each point of a grid has one coordinate.
+public struct KeyCoordinate: Hashable, Sendable {
+    public var parameter: Int
+    public var value: Double
+    /// The grid's second parameter (a higher id than `parameter`), nil on one parameter.
+    public var parameter2: Int?
+    public var value2: Double
+
+    public init(parameter: Int, value: Double) {
+        self.parameter = parameter
+        self.value = value
+        self.parameter2 = nil
+        self.value2 = 0
+    }
+
+    /// A point of the grid of parameters `a` and `b` (in either order; they must differ).
+    public init(_ a: Int, _ va: Double, _ b: Int, _ vb: Double) {
+        if a < b {
+            (parameter, value, parameter2, value2) = (a, va, b, vb)
+        } else {
+            (parameter, value, parameter2, value2) = (b, vb, a, va)
+        }
+    }
+
+    /// True for a point of a grid of two parameters.
+    public var isGrid: Bool { parameter2 != nil }
+
+    /// The parameter values the coordinate names.
+    public var values: [Int: Double] {
+        guard let parameter2 else { return [parameter: value] }
+        return [parameter: value, parameter2: value2]
+    }
+
+    public func involves(_ id: Int) -> Bool { parameter == id || parameter2 == id }
+
+    /// The coordinate's value of parameter `id`, nil when it doesn't name it.
+    public func value(of id: Int) -> Double? {
+        parameter == id ? value : parameter2 == id ? value2 : nil
+    }
+
+    /// True when both name the same parameters at the same values (within `Parameter.tolerance`).
+    public func matches(_ other: KeyCoordinate) -> Bool {
+        parameter == other.parameter && parameter2 == other.parameter2 && Parameter.same(value, other.value) &&
+            (parameter2 == nil || Parameter.same(value2, other.value2))
+    }
+
+    /// The coordinate with parameter `id`'s value replaced (nothing changes when it isn't named).
+    public func setting(_ id: Int, to v: Double) -> KeyCoordinate {
+        var out = self
+        if parameter == id { out.value = v } else if parameter2 == id { out.value2 = v }
+        return out
+    }
+}
+
+/// A shape at one value of one parameter, or at one point of a grid of two parameters:
+/// how far each point (anchor and both handles) and the opacity move from the rest
+/// drawing there.
 public struct Keyform: Hashable, Sendable, Codable {
     /// A `Parameter` id.
     public var parameter: Int
     public var value: Double
+    /// For a keyform on a grid of two parameters, the second one (a higher id than
+    /// `parameter`) and its value; see `KeyCoordinate`.
+    public var parameter2: Int?
+    public var value2: Double = 0
     /// One per point of the shape's path, in path order.
     public var offsets: [PointGeometry]
     /// Added to the shape's rest opacity (the sum is kept within 0 to 1).
@@ -84,6 +145,30 @@ public struct Keyform: Hashable, Sendable, Codable {
         self.offsets = offsets
         self.opacity = opacity
     }
+
+    public init(at coordinate: KeyCoordinate, offsets: [PointGeometry], opacity: Double = 0) {
+        self.init(parameter: coordinate.parameter, value: coordinate.value, offsets: offsets, opacity: opacity)
+        parameter2 = coordinate.parameter2
+        value2 = coordinate.parameter2 == nil ? 0 : coordinate.value2
+    }
+
+    public var coordinate: KeyCoordinate {
+        get {
+            var c = KeyCoordinate(parameter: parameter, value: value)
+            c.parameter2 = parameter2
+            c.value2 = parameter2 == nil ? 0 : value2
+            return c
+        }
+        set {
+            parameter = newValue.parameter
+            value = newValue.value
+            parameter2 = newValue.parameter2
+            value2 = newValue.value2
+        }
+    }
+
+    /// True for a keyform on a grid of two parameters.
+    public var isGrid: Bool { parameter2 != nil }
 
     /// True when the keyform moves nothing.
     public var isZero: Bool { abs(opacity) < 1e-12 && offsets.allSatisfy(\.isZero) }
@@ -97,10 +182,18 @@ public struct Keyform: Hashable, Sendable, Codable {
 /// the rest drawing as an implicit key at the parameter's default (a keyform never sits
 /// at the default) and the nearest key held beyond the last one. Parameters combine
 /// additively: the shape shows the rest plus each parameter's blended offset.
+///
+/// Keyforms on a grid of two parameters (`Keyform.isGrid`) hold the whole offset from the
+/// rest at their point of the grid, with neither parameter at its default. Between them
+/// the shape blends bilinearly: on top of the two parameters' own offsets it adds each
+/// grid point's difference from those (zero along the defaults, and at grid points with
+/// no keyform), blended across the grid cell the values are in and held beyond its edges.
+/// So the shape shows each grid keyform exactly at its point, and the sum of the two
+/// parameters' offsets where it has none.
 public struct ShapeKeyforms: Hashable, Sendable, Codable {
     public var restPoints: [PointGeometry]
     public var restOpacity: Double
-    /// Sorted by parameter id, then value.
+    /// Sorted by parameter id, then grid parameter (one-parameter keyforms first), then values.
     public var keyforms: [Keyform]
 
     public init(restPoints: [PointGeometry], restOpacity: Double, keyforms: [Keyform] = []) {
@@ -111,29 +204,60 @@ public struct ShapeKeyforms: Hashable, Sendable, Codable {
     }
 
     public mutating func sortKeyforms() {
-        keyforms.sort { $0.parameter != $1.parameter ? $0.parameter < $1.parameter : $0.value < $1.value }
+        keyforms.sort { a, b in
+            if a.parameter != b.parameter { return a.parameter < b.parameter }
+            if a.parameter2 != b.parameter2 { return (a.parameter2 ?? -1) < (b.parameter2 ?? -1) }
+            if a.value != b.value { return a.value < b.value }
+            return a.value2 < b.value2
+        }
     }
 
-    /// The parameters the shape has keyforms on, in id order.
+    /// The parameters the shape has keyforms on (either parameter of a grid), in id order.
     public var parameters: [Int] {
+        var out = Set<Int>()
+        for key in keyforms {
+            out.insert(key.parameter)
+            if let second = key.parameter2 { out.insert(second) }
+        }
+        return out.sorted()
+    }
+
+    /// The parameters the shape has one-parameter keyforms on, in id order.
+    var singleParameters: [Int] {
         var out: [Int] = []
-        for key in keyforms where out.last != key.parameter { out.append(key.parameter) }
+        for key in keyforms where key.parameter2 == nil && out.last != key.parameter { out.append(key.parameter) }
         return out
     }
 
+    /// The grids (pairs of parameters) the shape has keyforms on.
+    var grids: [(Int, Int)] {
+        var out: [(Int, Int)] = []
+        for key in keyforms {
+            guard let second = key.parameter2, !out.contains(where: { $0 == (key.parameter, second) }) else { continue }
+            out.append((key.parameter, second))
+        }
+        return out
+    }
+
+    /// The one-parameter keyform at (`parameter`, `value`).
     public func keyformIndex(parameter: Int, value: Double) -> Int? {
-        keyforms.firstIndex { $0.parameter == parameter && Parameter.same($0.value, value) }
+        keyforms.firstIndex { $0.parameter2 == nil && $0.parameter == parameter && Parameter.same($0.value, value) }
+    }
+
+    /// The keyform at `coordinate`.
+    public func keyformIndex(at coordinate: KeyCoordinate) -> Int? {
+        keyforms.firstIndex { $0.coordinate.matches(coordinate) }
     }
 
     /// True when every keyform has an offset per rest point.
     public var isConsistent: Bool { keyforms.allSatisfy { $0.offsets.count == restPoints.count } }
 
     /// Parameter `id`'s blended offsets and opacity offset at `value`, with `defaultValue`
-    /// the implicit zero key. Nil when the shape has no keyforms on it.
+    /// the implicit zero key. Nil when the shape has no one-parameter keyforms on it.
     public func offsets(parameter id: Int, at value: Double, defaultValue: Double) -> (points: [PointGeometry], opacity: Double)? {
         // The keys on this parameter, sorted by value, with the rest at the default.
         var keys: [(value: Double, key: Keyform?)] = []
-        for key in keyforms where key.parameter == id && !Parameter.same(key.value, defaultValue) {
+        for key in keyforms where key.parameter2 == nil && key.parameter == id && !Parameter.same(key.value, defaultValue) {
             keys.append((key.value, key))
         }
         guard !keys.isEmpty else { return nil }
@@ -156,19 +280,77 @@ public struct ShapeKeyforms: Hashable, Sendable, Codable {
         return (blended, oa + (ob - oa) * t)
     }
 
+    /// What the grid of parameters `a` and `b` (`a` the lower id) adds on top of their own
+    /// offsets at values `va` and `vb`: each grid keyform's difference from those offsets,
+    /// blended bilinearly (see the type's notes). Nil when the shape has no keyforms on the
+    /// grid, or either value is at its default.
+    func gridOffsets(_ a: Int, _ va: Double, default da: Double, _ b: Int, _ vb: Double,
+                     default db: Double) -> (points: [PointGeometry], opacity: Double)? {
+        guard !Parameter.same(va, da), !Parameter.same(vb, db) else { return nil }
+        let corners = keyforms.filter { $0.parameter == a && $0.parameter2 == b }
+        guard !corners.isEmpty else { return nil }
+        func axis(_ values: [Double], _ d: Double) -> [Double] {
+            var out = [d]
+            for v in values where !out.contains(where: { Parameter.same($0, v) }) { out.append(v) }
+            return out.sorted()
+        }
+        let xs = axis(corners.map(\.value), da), ys = axis(corners.map(\.value2), db)
+        // The cell the values are in, held at the grid's edges.
+        func cell(_ grid: [Double], _ v: Double) -> (Int, Int, Double) {
+            if v <= grid[0] { return (0, 0, 0) }
+            if v >= grid[grid.count - 1] { return (grid.count - 1, grid.count - 1, 0) }
+            let upper = grid.firstIndex { $0 >= v }!
+            let t = (v - grid[upper - 1]) / max(grid[upper] - grid[upper - 1], 1e-12)
+            return (upper - 1, upper, t)
+        }
+        let (x0, x1, tx) = cell(xs, va), (y0, y1, ty) = cell(ys, vb)
+        let zero = Array(repeating: PointGeometry.zero, count: restPoints.count)
+        func difference(_ x: Double, _ y: Double) -> (points: [PointGeometry], opacity: Double) {
+            guard !Parameter.same(x, da), !Parameter.same(y, db),
+                  let key = corners.first(where: { Parameter.same($0.value, x) && Parameter.same($0.value2, y) })
+            else { return (zero, 0) }
+            let fa = blended(parameter: a, at: x, defaultValue: da), fb = blended(parameter: b, at: y, defaultValue: db)
+            var points = key.offsets
+            for i in points.indices where i < fa.points.count && i < fb.points.count {
+                points[i] = points[i] - fa.points[i] - fb.points[i]
+            }
+            return (points, key.opacity - fa.opacity - fb.opacity)
+        }
+        let weights = [((x0, y0), (1 - tx) * (1 - ty)), ((x1, y0), tx * (1 - ty)), ((x0, y1), (1 - tx) * ty),
+                       ((x1, y1), tx * ty)]
+        var points = zero, opacity = 0.0
+        for ((i, j), w) in weights where w > 1e-12 {
+            let d = difference(xs[i], ys[j])
+            for k in points.indices where k < d.points.count { points[k] = points[k] + d.points[k] * w }
+            opacity += d.opacity * w
+        }
+        return (points, opacity)
+    }
+
     /// The summed offsets of every parameter at `values` (by parameter id; a parameter
-    /// missing from `values` is at its default). `parameters` gives each one's default;
-    /// keyforms on parameters it doesn't have are ignored.
+    /// missing from `values` is at its default), with each grid's on top. `parameters`
+    /// gives each one's default; keyforms on parameters it doesn't have are ignored.
     public func offsets(at values: [Int: Double], parameters: [Parameter]) -> (points: [PointGeometry], opacity: Double) {
         var points = Array(repeating: PointGeometry.zero, count: restPoints.count)
         var opacity = 0.0
-        for id in self.parameters {
-            guard let parameter = parameters.first(where: { $0.id == id }) else { continue }
-            let value = parameter.clamped(values[id] ?? parameter.defaultValue)
-            guard !Parameter.same(value, parameter.defaultValue),
-                  let found = offsets(parameter: id, at: value, defaultValue: parameter.defaultValue) else { continue }
+        func add(_ found: (points: [PointGeometry], opacity: Double)) {
             for i in points.indices where i < found.points.count { points[i] = points[i] + found.points[i] }
             opacity += found.opacity
+        }
+        func moved(_ id: Int) -> (value: Double, parameter: Parameter)? {
+            guard let parameter = parameters.first(where: { $0.id == id }) else { return nil }
+            let value = parameter.clamped(values[id] ?? parameter.defaultValue)
+            return Parameter.same(value, parameter.defaultValue) ? nil : (value, parameter)
+        }
+        for id in singleParameters {
+            guard let (value, parameter) = moved(id),
+                  let found = offsets(parameter: id, at: value, defaultValue: parameter.defaultValue) else { continue }
+            add(found)
+        }
+        for (a, b) in grids {
+            guard let (va, pa) = moved(a), let (vb, pb) = moved(b),
+                  let found = gridOffsets(a, va, default: pa.defaultValue, b, vb, default: pb.defaultValue) else { continue }
+            add(found)
         }
         return (points, opacity)
     }
@@ -220,18 +402,23 @@ extension VectorShape {
     /// The path at keyform (`parameter`, `value`), with every other parameter at its
     /// default, and the opacity there.
     public func geometry(parameter: Int, value: Double, parameters: [Parameter]) -> (path: BezierPath, opacity: Double) {
+        geometry(at: KeyCoordinate(parameter: parameter, value: value), parameters: parameters)
+    }
+
+    /// The path and opacity at `coordinate`, with every other parameter at its default.
+    public func geometry(at coordinate: KeyCoordinate, parameters: [Parameter]) -> (path: BezierPath, opacity: Double) {
         var out = self
-        out.evaluateKeyforms(at: [parameter: value], parameters: parameters)
+        out.evaluateKeyforms(at: coordinate.values, parameters: parameters)
         return (out.path, out.opacity)
     }
 
-    /// Every key the shape has (its keyforms' parameters and values), each with the
-    /// path and opacity shown there. The rest is not included.
-    public func keyedGeometry(parameters: [Parameter]) -> [(parameter: Int, value: Double, path: BezierPath, opacity: Double)] {
+    /// Every key the shape has (its keyforms' coordinates), each with the path and
+    /// opacity shown there. The rest is not included.
+    public func keyedGeometry(parameters: [Parameter]) -> [(coordinate: KeyCoordinate, path: BezierPath, opacity: Double)] {
         guard let keys else { return [] }
         return keys.keyforms.map { key in
-            let g = geometry(parameter: key.parameter, value: key.value, parameters: parameters)
-            return (key.parameter, key.value, g.path, g.opacity)
+            let g = geometry(at: key.coordinate, parameters: parameters)
+            return (key.coordinate, g.path, g.opacity)
         }
     }
 
@@ -242,7 +429,7 @@ extension VectorShape {
     /// `evaluateKeyforms` afterwards to show it at the current values.
     @discardableResult
     public mutating func setKeyforms(restPath: BezierPath, restOpacity: Double,
-                                     keys: [(parameter: Int, value: Double, path: BezierPath, opacity: Double)]) -> Bool {
+                                     keys: [(coordinate: KeyCoordinate, path: BezierPath, opacity: Double)]) -> Bool {
         let n = restPath.points.count
         guard keys.allSatisfy({ $0.path.points.count == n }) else { return false }
         path = restPath
@@ -253,12 +440,20 @@ extension VectorShape {
         }
         let rest = restPath.points.map(PointGeometry.init)
         let keyforms = keys.map { key in
-            Keyform(parameter: key.parameter, value: key.value,
-                    offsets: zip(key.path.points, rest).map { PointGeometry($0) - $1 },
+            Keyform(at: key.coordinate, offsets: zip(key.path.points, rest).map { PointGeometry($0) - $1 },
                     opacity: key.opacity - opacity)
         }
         self.keys = ShapeKeyforms(restPoints: rest, restOpacity: opacity, keyforms: keyforms)
         return true
+    }
+
+    /// `setKeyforms` with keys on one parameter each.
+    @discardableResult
+    public mutating func setKeyforms(restPath: BezierPath, restOpacity: Double,
+                                     keys: [(parameter: Int, value: Double, path: BezierPath, opacity: Double)]) -> Bool {
+        setKeyforms(restPath: restPath, restOpacity: restOpacity, keys: keys.map {
+            (coordinate: KeyCoordinate(parameter: $0.parameter, value: $0.value), path: $0.path, opacity: $0.opacity)
+        })
     }
 
     /// Applies a change of points (inserting, deleting, splitting) to the shape and every
@@ -288,7 +483,7 @@ extension VectorShape {
         for (i, restPiece) in restPieces.enumerated() {
             var shape = self
             let pieceKeys = geometry.enumerated().map { k, key in
-                (parameter: key.parameter, value: key.value, path: keyPieces[k][i], opacity: key.opacity)
+                (coordinate: key.coordinate, path: keyPieces[k][i], opacity: key.opacity)
             }
             shape.setKeyforms(restPath: restPiece, restOpacity: keys.restOpacity, keys: pieceKeys)
             shape.evaluateKeyforms(at: values, parameters: parameters)
@@ -311,8 +506,20 @@ public enum KeyformTarget: Hashable, Sendable {
     /// One parameter is away from its default: edits land in the keyform at its value,
     /// made when a shape has none there.
     case keyform(parameter: Int, value: Double)
-    /// Several parameters are away from their defaults: there is no one keyform to edit.
+    /// Two parameters are away from their defaults: edits land in the keyform at that
+    /// point of their grid, made when a shape has none there.
+    case grid(KeyCoordinate)
+    /// Three or more parameters are away from their defaults: there is no one keyform to edit.
     case blocked
+
+    /// The keyform edits land in, nil at the rest and when blocked.
+    public var coordinate: KeyCoordinate? {
+        switch self {
+        case .rest, .blocked: nil
+        case .keyform(let parameter, let value): KeyCoordinate(parameter: parameter, value: value)
+        case .grid(let coordinate): coordinate
+        }
+    }
 }
 
 extension Drawing {
@@ -339,6 +546,7 @@ extension Drawing {
         switch moved.count {
         case 0: return .rest
         case 1: return .keyform(parameter: moved[0].id, value: value(of: moved[0].id))
+        case 2: return .grid(KeyCoordinate(moved[0].id, value(of: moved[0].id), moved[1].id, value(of: moved[1].id)))
         default: return .blocked
         }
     }
@@ -395,17 +603,27 @@ extension Drawing {
         return out
     }
 
-    /// The values parameter `id` has keyforms at, on any shape, sorted.
+    /// The values parameter `id` has keyforms at (on it alone or on a grid with another
+    /// parameter), on any shape, sorted.
     public func keyValues(of id: Int) -> [Double] {
         var out: [Double] = []
         for part in parts where part.holdsKeyforms {
             for shape in part.allShapes {
-                for key in shape.keys?.keyforms ?? [] where key.parameter == id && !out.contains(where: { Parameter.same($0, key.value) }) {
-                    out.append(key.value)
+                for key in shape.keys?.keyforms ?? [] {
+                    guard let value = key.coordinate.value(of: id), !out.contains(where: { Parameter.same($0, value) })
+                    else { continue }
+                    out.append(value)
                 }
             }
         }
         return out.sorted()
+    }
+
+    /// True when some shape (in any variant or skin) has a keyform at `coordinate`.
+    public func hasKeyform(at coordinate: KeyCoordinate) -> Bool {
+        parts.contains { part in
+            part.holdsKeyforms && part.allShapes.contains { $0.keys?.keyformIndex(at: coordinate) != nil }
+        }
     }
 
     /// Folds the edits made since `before` into the rest drawing or a keyform, as
@@ -445,7 +663,7 @@ extension Drawing {
         case refused(String)
     }
 
-    static let blockedMessage = "Set all but one parameter to its default to edit the art."
+    static let blockedMessage = "Set all but one or two parameters to their defaults to edit the art."
     static let topologyMessage = "This shape has keyforms, so its points can't be added, removed or reordered that way."
 
     private static func fold(_ shape: VectorShape, was: VectorShape, target: KeyformTarget, values: [Int: Double],
@@ -460,7 +678,8 @@ extension Drawing {
                 let moved = shape.path.points.count != was.path.points.count || shape.pointGeometry != was.pointGeometry ||
                     shape.opacity != was.opacity
                 return moved ? .refused(blockedMessage) : .unchanged
-            case .keyform(let parameter, let value):
+            case .keyform, .grid:
+                let coordinate = target.coordinate!
                 guard shape.path.points.count == was.path.points.count else {
                     return shape.keys == nil ? .unchanged : .folded({ var s = shape; s.keys = nil; return s }())
                 }
@@ -472,7 +691,7 @@ extension Drawing {
                     p.points[i].outHandle = was.path.points[i].outHandle
                 }; return p }()
                 out.setKeyforms(restPath: restPath, restOpacity: was.opacity,
-                                keys: [(parameter, value, shape.path, shape.opacity)])
+                                keys: [(coordinate, shape.path, shape.opacity)])
                 out.evaluateKeyforms(at: values, parameters: parameters)
                 return .folded(out)
             }
@@ -507,6 +726,18 @@ extension Drawing {
                 let key = Keyform(parameter: parameter, value: value, offsets: zip(base, delta).map { $0 + $1 },
                                   opacity: opacityChanged ? shape.opacity - keys.restOpacity : blended?.opacity ?? 0)
                 out.keys!.keyforms.append(key)
+                out.keys!.sortKeyforms()
+            }
+        case .grid(let coordinate):
+            // A grid keyform holds the whole offset from the rest at its point, which is what
+            // the shape shows there now that only the grid's parameters are moved.
+            let offsets = zip(geometry, keys.restPoints).map { $0 - $1 }
+            let opacity = (opacityChanged ? shape.opacity : expected.opacity) - keys.restOpacity
+            if let k = keys.keyformIndex(at: coordinate) {
+                out.keys!.keyforms[k].offsets = offsets
+                if opacityChanged { out.keys!.keyforms[k].opacity = opacity }
+            } else {
+                out.keys!.keyforms.append(Keyform(at: coordinate, offsets: offsets, opacity: opacity))
                 out.keys!.sortKeyforms()
             }
         }

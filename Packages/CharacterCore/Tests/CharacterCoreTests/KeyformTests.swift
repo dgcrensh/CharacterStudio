@@ -92,7 +92,8 @@ final class KeyformTests: XCTestCase {
         e.drawing.setParameterValues([eyeOpen: 0.5, mouthOpen: 0.5])
         assertClose(point(e.drawing, eye, 1), Vec2(0, -5))
         assertClose(point(e.drawing, mouth, 3), Vec2(0, 60))
-        XCTAssertEqual(e.drawing.keyformTarget, .blocked)
+        // Two moved parameters edit a point of their grid.
+        XCTAssertEqual(e.drawing.keyformTarget, .grid(KeyCoordinate(eyeOpen, 0.5, mouthOpen, 0.5)))
     }
 
     func testParametersAddUpOnOneShape() {
@@ -107,9 +108,11 @@ final class KeyformTests: XCTestCase {
         assertClose(point(e.drawing, eye, 1), Vec2(0, -1))
     }
 
-    func testEditsWithTwoParametersMovedAreRefused() {
+    func testEditsWithThreeParametersMovedAreRefused() {
         var (e, eye, _, eyeOpen, mouthOpen) = keyedFace()
-        e.drawing.setParameterValues([eyeOpen: 0, mouthOpen: 1])
+        let squint = Parameter(id: e.drawing.makeID(), name: "Squint", minimum: 0, maximum: 1, defaultValue: 0)
+        e.drawing.parameters.append(squint)
+        e.drawing.setParameterValues([eyeOpen: 0, mouthOpen: 1, squint.id: 1])
         let before = e.drawing
         moveAnchor(&e, eye, 1, to: Vec2(0, 5))
         XCTAssertNotNil(e.notice)

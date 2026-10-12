@@ -95,16 +95,18 @@ extension DrawingEditor {
 
     // MARK: Keyforms
 
-    /// True when Add Keyform can act: one parameter is away from its default and shapes are selected.
+    /// True when Add Keyform can act: one or two parameters are away from their
+    /// defaults and shapes are selected.
     public var canAddKeyform: Bool {
-        guard case .keyform = drawing.keyformTarget else { return false }
+        guard drawing.keyformTarget.coordinate != nil else { return false }
         return !drawing.shapeIndices(in: selection).isEmpty
     }
 
-    /// Adds a keyform at the moved parameter's value to each selected shape, equal to
-    /// what it shows now, so it becomes keyed there without moving.
+    /// Adds a keyform where the moved parameters are (one value, or a point of two
+    /// parameters' grid) to each selected shape, equal to what it shows now, so it
+    /// becomes keyed there without moving.
     public mutating func addKeyform() {
-        guard case .keyform(let id, let value) = drawing.keyformTarget, let parameter = drawing.parameter(id) else {
+        guard let coordinate = drawing.keyformTarget.coordinate else {
             notice = drawing.isAtRest ? Self.addKeyformAtRestMessage : Drawing.blockedMessage
             return
         }
@@ -114,7 +116,7 @@ extension DrawingEditor {
         let before = drawing
         let values = drawing.parameterValues, parameters = drawing.parameters
         for (p, s) in targets {
-            drawing.parts[p].shapes[s].addKeyform(parameter: parameter, value: value, values: values, parameters: parameters)
+            drawing.parts[p].shapes[s].addKeyform(at: coordinate, values: values, parameters: parameters)
         }
         commit(from: before, folding: false)
     }
@@ -122,10 +124,16 @@ extension DrawingEditor {
     /// Deletes the keyform at (`parameter`, `value`) from the selected shapes, or from
     /// every shape (in every variant and skin) when nothing is selected.
     public mutating func deleteKeyform(parameter id: Int, value: Double) {
+        deleteKeyform(at: KeyCoordinate(parameter: id, value: value))
+    }
+
+    /// Deletes the keyform at `coordinate` from the selected shapes, or from every shape
+    /// (in every variant and skin) when nothing is selected.
+    public mutating func deleteKeyform(at coordinate: KeyCoordinate) {
         cancelGesture()
         let before = drawing
         let values = drawing.parameterValues, parameters = drawing.parameters
-        let remove: (Keyform) -> Bool = { $0.parameter == id && Parameter.same($0.value, value) }
+        let remove: (Keyform) -> Bool = { $0.coordinate.matches(coordinate) }
         let targets = drawing.shapeIndices(in: selection)
         if targets.isEmpty {
             drawing.updateKeyedShapes { $0.removeKeyforms(where: remove, values: values, parameters: parameters) }
@@ -137,23 +145,21 @@ extension DrawingEditor {
         commit(from: before, folding: false)
     }
 
-    /// Delete Keyform: deletes the keyform at the moved parameter's value (see
-    /// `deleteKeyform(parameter:value:)`).
+    /// Delete Keyform: deletes the keyform where the moved parameters are (see
+    /// `deleteKeyform(at:)`).
     public mutating func deleteCurrentKeyform() {
-        guard case .keyform(let id, let value) = drawing.keyformTarget else { return }
-        deleteKeyform(parameter: id, value: value)
+        guard let coordinate = drawing.keyformTarget.coordinate else { return }
+        deleteKeyform(at: coordinate)
     }
 
-    /// True when Delete Keyform has something to delete at the moved parameter's value:
+    /// True when Delete Keyform has something to delete where the moved parameters are:
     /// a selected shape, or with nothing selected any shape, has a keyform there.
     public var canDeleteKeyform: Bool {
-        guard case .keyform(let id, let value) = drawing.keyformTarget else { return false }
+        guard let coordinate = drawing.keyformTarget.coordinate else { return false }
         let targets = drawing.shapeIndices(in: selection)
-        guard !targets.isEmpty else { return drawing.keyValues(of: id).contains { Parameter.same($0, value) } }
-        return targets.contains { p, s in
-            drawing.parts[p].shapes[s].keys?.keyformIndex(parameter: id, value: value) != nil
-        }
+        guard !targets.isEmpty else { return drawing.hasKeyform(at: coordinate) }
+        return targets.contains { p, s in drawing.parts[p].shapes[s].keys?.keyformIndex(at: coordinate) != nil }
     }
 
-    static let addKeyformAtRestMessage = "Move a parameter's slider away from its default to add a keyform there."
+    static let addKeyformAtRestMessage = "Move one or two parameters' sliders away from their defaults to add a keyform there."
 }

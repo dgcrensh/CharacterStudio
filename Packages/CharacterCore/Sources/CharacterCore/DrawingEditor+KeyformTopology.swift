@@ -47,17 +47,16 @@ extension DrawingEditor {
         let parameters = drawing.parameters
         let restA = a.atRest()
         guard let rest = join(restA.path, b.atRest().path) else { return nil }
-        var keys: [(parameter: Int, value: Double)] = []
-        for key in (a.keys?.keyforms ?? []) + (b.keys?.keyforms ?? [])
-        where !keys.contains(where: { $0.parameter == key.parameter && Parameter.same($0.value, key.value) }) {
-            keys.append((key.parameter, key.value))
+        var keys: [KeyCoordinate] = []
+        for key in (a.keys?.keyforms ?? []) + (b.keys?.keyforms ?? []) where !keys.contains(where: { $0.matches(key.coordinate) }) {
+            keys.append(key.coordinate)
         }
-        var keyed: [(parameter: Int, value: Double, path: BezierPath, opacity: Double)] = []
+        var keyed: [(coordinate: KeyCoordinate, path: BezierPath, opacity: Double)] = []
         for key in keys {
-            let ga = a.geometry(parameter: key.parameter, value: key.value, parameters: parameters)
-            let gb = b.geometry(parameter: key.parameter, value: key.value, parameters: parameters)
+            let ga = a.geometry(at: key, parameters: parameters)
+            let gb = b.geometry(at: key, parameters: parameters)
             guard let path = join(ga.path, gb.path) else { return nil }
-            keyed.append((key.parameter, key.value, path, ga.opacity))
+            keyed.append((key, path, ga.opacity))
         }
         var out = a
         guard out.setKeyforms(restPath: rest, restOpacity: restA.opacity, keys: keyed) else { return nil }
