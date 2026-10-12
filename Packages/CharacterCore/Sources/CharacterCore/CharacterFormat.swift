@@ -387,9 +387,9 @@ public enum CharacterFormat {
             // Only vector attachments exist in v0.1; other types are skipped.
             guard try node.field("type")?.string() ?? "vector" == "vector" else { continue }
             var part = Part(id: drawing.makeID(), name: slot.id)
-            if let pivot = try node.field("pivot")?.vec2() { part.pivot = pivot }
-            part.isHidden = try node.field("hidden")?.bool() ?? false
-            part.isLocked = try node.field("locked")?.bool() ?? false
+            if let pivot = try node.vec2("pivot") { part.pivot = pivot }
+            part.isHidden = try node.bool("hidden") ?? false
+            part.isLocked = try node.bool("locked") ?? false
             // Group ids in the file are local to the attachment.
             var groups: [Int: Int] = [:]
             for groupNode in try node.field("groups")?.array() ?? [] {
@@ -405,7 +405,7 @@ public enum CharacterFormat {
             for shapeNode in try node.field("shapes")?.array() ?? [] {
                 var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals)
                 // An unknown group leaves the shape ungrouped.
-                decoded.group = try shapeNode.field("group").flatMap { groups[try $0.integer()] }
+                decoded.group = try shapeNode.integer("group").flatMap { groups[$0] }
                 part.shapes.append(decoded)
             }
             // Attachments are in their bone's space; the editor works in world space.
@@ -531,48 +531,47 @@ public enum CharacterFormat {
     private static func shape(_ node: Node, id: Int, globals: [String: Int]) throws -> VectorShape {
         var points: [PathPoint] = []
         for p in try node.require("points").array() {
-            var point = PathPoint(try p.require("p").vec2())
-            point.inHandle = try p.field("in")?.vec2() ?? .zero
-            point.outHandle = try p.field("out")?.vec2() ?? .zero
-            if let w = try p.field("w") {
-                let width = try w.number()
-                guard width >= 0 else { throw CharacterFileError.invalid(path: w.path, problem: "is negative") }
+            var point = PathPoint(try p.requireVec2("p"))
+            point.inHandle = try p.vec2("in") ?? .zero
+            point.outHandle = try p.vec2("out") ?? .zero
+            if let width = try p.number("w") {
+                guard width >= 0 else { throw CharacterFileError.invalid(path: p.childPath("w"), problem: "is negative") }
                 point.width = width
             }
-            point.isSmooth = try p.field("smooth")?.bool() ?? true
-            if point.isSmooth, try p.field("symmetric")?.bool() ?? false { point.mode = .symmetric }
-            point.stroked = try p.field("stroked")?.bool() ?? true
+            point.isSmooth = try p.bool("smooth") ?? true
+            if point.isSmooth, try p.bool("symmetric") ?? false { point.mode = .symmetric }
+            point.stroked = try p.bool("stroked") ?? true
             points.append(point)
         }
-        let path = BezierPath(points: points, closed: try node.field("closed")?.bool() ?? false)
+        let path = BezierPath(points: points, closed: try node.bool("closed") ?? false)
         var shape = VectorShape(id: id, path: path)
-        shape.fill = try node.field("fill")?.color()
+        shape.fill = try node.color("fill")
         if shape.fill != nil {
             // An unknown global color name leaves the plain color.
-            shape.fillGlobal = try node.field("fillGlobal").flatMap { globals[try $0.string()] }
+            shape.fillGlobal = try node.string("fillGlobal").flatMap { globals[$0] }
             shape.gradient = try node.field("gradient").map(gradient)
         }
         if let stroke = try node.field("stroke") {
             shape.stroke = try self.stroke(stroke, globals: globals)
         }
-        if let opacity = try node.field("opacity")?.number() { shape.opacity = min(max(opacity, 0), 1) }
-        shape.isClipped = try node.field("clipped")?.bool() ?? false
-        shape.isBehindOwner = try node.field("behindOwner")?.bool() ?? false
-        shape.isHidden = try node.field("hidden")?.bool() ?? false
-        shape.isLocked = try node.field("locked")?.bool() ?? false
+        if let opacity = try node.number("opacity") { shape.opacity = min(max(opacity, 0), 1) }
+        shape.isClipped = try node.bool("clipped") ?? false
+        shape.isBehindOwner = try node.bool("behindOwner") ?? false
+        shape.isHidden = try node.bool("hidden") ?? false
+        shape.isLocked = try node.bool("locked") ?? false
         return shape
     }
 
     private static func stroke(_ node: Node, globals: [String: Int]) throws -> StrokeStyle {
-        let width = try node.require("width").number()
+        let width = try node.requireNumber("width")
         guard width >= 0 else { throw CharacterFileError.invalid(path: node.path + ".width", problem: "is negative") }
-        var stroke = StrokeStyle(color: try node.require("color").color(), width: width)
-        stroke.global = try node.field("global").flatMap { globals[try $0.string()] }
+        var stroke = StrokeStyle(color: try node.requireColor("color"), width: width)
+        stroke.global = try node.string("global").flatMap { globals[$0] }
         stroke.cap = try node.field("cap")?.keyword(LineCap.self) ?? .round
         stroke.join = try node.field("join")?.keyword(LineJoin.self) ?? .round
-        if let limit = try node.field("miterLimit") {
-            stroke.miterLimit = try limit.number()
-            guard stroke.miterLimit >= 1 else { throw CharacterFileError.invalid(path: limit.path, problem: "is less than 1") }
+        if let limit = try node.number("miterLimit") {
+            stroke.miterLimit = limit
+            guard limit >= 1 else { throw CharacterFileError.invalid(path: node.childPath("miterLimit"), problem: "is less than 1") }
         }
         if let dash = try node.field("dash") {
             stroke.dash = try dash.array().map { item in
@@ -581,7 +580,7 @@ public enum CharacterFormat {
                 return length
             }
         }
-        stroke.dashOffset = try node.field("dashOffset")?.number() ?? 0
+        stroke.dashOffset = try node.number("dashOffset") ?? 0
         stroke.alignment = try node.field("align")?.keyword(StrokeAlignment.self) ?? .center
         return stroke
     }
@@ -702,7 +701,8 @@ private struct Node {
         .invalid(path: path.isEmpty ? "(root)" : path, problem: problem)
     }
 
-    private func childPath(_ key: String) -> String { PathLink.path(parent: link, step: .key(key)) }
+    /// The path of the member `key`, for errors found after reading it.
+    func childPath(_ key: String) -> String { PathLink.path(parent: link, step: .key(key)) }
 
     func members() throws -> [(key: String, value: JSONValue)] {
         guard case .object(let m) = value else { throw fail("is not an object") }
@@ -750,6 +750,7 @@ private struct Node {
     }
 
     func vec2() throws -> Vec2 {
+        if let pair = Node.pair(value) { return pair }
         let items = try array()
         guard items.count == 2 else { throw fail("is not an [x, y] pair") }
         return Vec2(try items[0].number(), try items[1].number())
@@ -768,5 +769,64 @@ private struct Node {
     func color() throws -> RGBAColor {
         guard let color = RGBAColor(hex: try string()) else { throw fail("is not a #RRGGBBAA color") }
         return color
+    }
+
+    // MARK: Member values
+
+    // Reading a member through `field(key)` allocates a path link and a node, and `vec2()` an array of
+    // nodes, all for an error path that is almost never read. These read the member's value directly and
+    // only build the node when the value is the wrong type, so a bad file throws exactly what
+    // `field(key)?.number()` and the rest would.
+
+    /// The member `key` read by `fast`, or by `slow` on its node when `fast` returns nil; a missing key or
+    /// `null` is nil.
+    private func member<T>(_ key: String, fast: (JSONValue) -> T?, slow: (Node) throws -> T) throws -> T? {
+        guard case .object(let m) = value else { return try field(key).map(slow) }
+        guard let v = m.first(where: { $0.key == key })?.value, !v.isNull else { return nil }
+        if let result = fast(v) { return result }
+        return try slow(Node(value: v, parent: link, step: .key(key)))
+    }
+
+    /// The member `key`, which must be present.
+    private func required<T>(_ key: String, _ read: (String) throws -> T?) throws -> T {
+        guard let result = try read(key) else {
+            throw CharacterFileError.invalid(path: childPath(key), problem: "is missing")
+        }
+        return result
+    }
+
+    func number(_ key: String) throws -> Double? {
+        try member(key, fast: { if case .number(let n) = $0, n.isFinite { n } else { nil } }, slow: { try $0.number() })
+    }
+
+    func requireNumber(_ key: String) throws -> Double { try required(key, number) }
+
+    func integer(_ key: String) throws -> Int? {
+        try member(key, fast: { if case .number(let n) = $0 { Int(exactly: n) } else { nil } }, slow: { try $0.integer() })
+    }
+
+    func bool(_ key: String) throws -> Bool? {
+        try member(key, fast: { if case .bool(let b) = $0 { b } else { nil } }, slow: { try $0.bool() })
+    }
+
+    func string(_ key: String) throws -> String? {
+        try member(key, fast: { if case .string(let s) = $0 { s } else { nil } }, slow: { try $0.string() })
+    }
+
+    func color(_ key: String) throws -> RGBAColor? {
+        try member(key, fast: { if case .string(let s) = $0 { RGBAColor(hex: s) } else { nil } }, slow: { try $0.color() })
+    }
+
+    func requireColor(_ key: String) throws -> RGBAColor { try required(key, color) }
+
+    func vec2(_ key: String) throws -> Vec2? { try member(key, fast: Node.pair, slow: { try $0.vec2() }) }
+
+    func requireVec2(_ key: String) throws -> Vec2 { try required(key, vec2) }
+
+    /// `value` as an `[x, y]` pair of finite numbers, or nil.
+    private static func pair(_ value: JSONValue) -> Vec2? {
+        guard case .array(let items) = value, items.count == 2,
+              case .number(let x) = items[0], x.isFinite, case .number(let y) = items[1], y.isFinite else { return nil }
+        return Vec2(x, y)
     }
 }

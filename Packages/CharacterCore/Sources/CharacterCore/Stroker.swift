@@ -252,13 +252,17 @@ public enum Stroker {
     }
 
     /// Appends a triangle wound counter-clockwise (positive area); degenerate ones are dropped.
+    /// Three single appends: `append(contentsOf: [a, b, c])` allocated an array for every triangle.
     private static func triangle(_ a: Vec2, _ b: Vec2, _ c: Vec2, into out: inout [Vec2]) {
         let area = (b - a).cross(c - a)
         guard abs(area) > 1e-12 else { return }
+        out.append(a)
         if area > 0 {
-            out.append(contentsOf: [a, b, c])
+            out.append(b)
+            out.append(c)
         } else {
-            out.append(contentsOf: [a, c, b])
+            out.append(c)
+            out.append(b)
         }
     }
 }

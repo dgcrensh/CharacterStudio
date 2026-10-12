@@ -289,6 +289,59 @@ final class CharacterFormatTests: XCTestCase {
         }
     }
 
+    /// Values are read without building a node when they have the right type; a wrong type must still
+    /// throw the error the node would have, with its path.
+    func testWrongValueTypesAreReportedWithTheirPath() throws {
+        func error(part: String = "", _ shape: String) throws -> CharacterFileError? {
+            let file = try json("""
+            { "formatVersion": "0.2.0", "slots": [{ "id": "A", "bone": "root", "attachment": "A" }],
+              "skins": { "default": { "A": { "A": { "type": "vector", \(part) "shapes": [\(shape)] } } } } }
+            """)
+            do {
+                _ = try CharacterFormat.decode(file)
+                return nil
+            } catch {
+                return error as? CharacterFileError
+            }
+        }
+        func point(_ members: String) -> String { #"{ "closed": false, "points": [{ \#(members) }] }"# }
+        let shape = "skins.default.A.A.shapes[0]", p = shape + ".points[0]"
+
+        // Pairs.
+        XCTAssertEqual(try error(point(#""p": "0, 0""#)), .invalid(path: p + ".p", problem: "is not an array"))
+        XCTAssertEqual(try error(point(#""p": [0, 0, 0]"#)), .invalid(path: p + ".p", problem: "is not an [x, y] pair"))
+        XCTAssertEqual(try error(point(#""p": [0, "1"]"#)), .invalid(path: p + ".p[1]", problem: "is not a number"))
+        XCTAssertEqual(try error(point(#""p": [1e999, 0]"#)), .invalid(path: p + ".p[0]", problem: "is not a number"))
+        XCTAssertEqual(try error(point(#""p": [0, 0], "in": [0]"#)), .invalid(path: p + ".in", problem: "is not an [x, y] pair"))
+        XCTAssertEqual(try error(point(#""in": [0, 0]"#)), .invalid(path: p + ".p", problem: "is missing"))
+        XCTAssertEqual(try error(part: #""pivot": true,"#, ""), .invalid(path: "skins.default.A.A.pivot", problem: "is not an array"))
+        // Numbers, booleans, strings and colors.
+        XCTAssertEqual(try error(point(#""p": [0, 0], "w": "2""#)), .invalid(path: p + ".w", problem: "is not a number"))
+        XCTAssertEqual(try error(point(#""p": [0, 0], "smooth": 1"#)), .invalid(path: p + ".smooth", problem: "is not true or false"))
+        XCTAssertEqual(try error(#"{ "closed": "yes", "points": [] }"#), .invalid(path: shape + ".closed", problem: "is not true or false"))
+        XCTAssertEqual(try error(#"{ "points": [], "opacity": [1] }"#), .invalid(path: shape + ".opacity", problem: "is not a number"))
+        XCTAssertEqual(try error(#"{ "points": [], "fill": 0 }"#), .invalid(path: shape + ".fill", problem: "is not a string"))
+        XCTAssertEqual(try error(#"{ "points": [], "fill": "red" }"#), .invalid(path: shape + ".fill", problem: "is not a #RRGGBBAA color"))
+        XCTAssertEqual(try error(##"{ "points": [], "fill": "#000000FF", "fillGlobal": 3 }"##),
+                       .invalid(path: shape + ".fillGlobal", problem: "is not a string"))
+        XCTAssertEqual(try error(#"{ "points": [], "group": 1.5 }"#), .invalid(path: shape + ".group", problem: "is not a whole number"))
+        XCTAssertEqual(try error(#"{ "points": [], "group": "1" }"#), .invalid(path: shape + ".group", problem: "is not a number"))
+        // Strokes.
+        XCTAssertEqual(try error(##"{ "points": [], "stroke": { "color": "#000000FF" } }"##),
+                       .invalid(path: shape + ".stroke.width", problem: "is missing"))
+        XCTAssertEqual(try error(#"{ "points": [], "stroke": { "width": 1 } }"#),
+                       .invalid(path: shape + ".stroke.color", problem: "is missing"))
+        XCTAssertEqual(try error(##"{ "points": [], "stroke": { "color": "#000000FF", "width": 1, "miterLimit": 0.5 } }"##),
+                       .invalid(path: shape + ".stroke.miterLimit", problem: "is less than 1"))
+        XCTAssertEqual(try error(##"{ "points": [], "stroke": { "color": "#000000FF", "width": 1, "dashOffset": null, "global": [] } }"##),
+                       .invalid(path: shape + ".stroke.global", problem: "is not a string"))
+        // Something that isn't an object where one is expected.
+        XCTAssertEqual(try error(#"{ "points": [[0, 0]] }"#), .invalid(path: p, problem: "is not an object"))
+        XCTAssertEqual(try error(#"{ "points": [], "stroke": 1 }"#), .invalid(path: shape + ".stroke", problem: "is not an object"))
+        // Null reads as missing.
+        XCTAssertNil(try error(point(#""p": [0, 0], "in": null, "w": null, "smooth": null"#)))
+    }
+
     func testPackageErrors() {
         XCTAssertThrowsError(try CharacterPackage(files: [:])) {
             XCTAssertEqual($0 as? CharacterFileError, .missingFile("character.json"))

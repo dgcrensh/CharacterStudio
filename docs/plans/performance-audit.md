@@ -794,6 +794,28 @@ Hover and scissors are now flat across sizes; scissors is 10 to 30x faster, most
 The eraser is 4x faster at 2,400 shapes but still grows, since the stress drawing packs more shapes under
 the same eraser path as it gets denser.
 
+#### Next 1 and 2: triangles and decoding
+
+Recommendations 1 and 2 of [performance-next.md](performance-next.md). Same Mac, `-c release`,
+`STRESS_DRAWING=full`, median of 9, milliseconds. Before is `712957d`, after is this branch, run back to back.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Art rebuild, new zoom bucket | before | 9.33 | 18.9 | 36.8 | 74.1 | 151.3 |
+| | after | 7.45 | 13.3 | 26.4 | 53.6 | 105.7 |
+| Zoom-in refine, visible shapes | before | 7.12 | 8.62 | 13.6 | 18.2 | 14.7 |
+| | after | 4.65 | 5.92 | 9.55 | 12.9 | 10.7 |
+| Art rebuild after one edit | before | 0.286 | 0.522 | 1.03 | 1.92 | 3.73 |
+| | after | 0.268 | 0.467 | 0.744 | 1.42 | 2.96 |
+| Open: parse and decode | before | 17.4 | 34.7 | 69.6 | 139.9 | 280.6 |
+| | after | 9.29 | 18.6 | 37.3 | 74.8 | 149.7 |
+| Open: decode only | before | 9.33 | 19.1 | 37.7 | 76.0 | 151.4 |
+| | after | 1.13 | 2.28 | 4.68 | 9.66 | 19.1 |
+
+`PerformanceTests` at 2,400 shapes: cold art build 58 to 44 ms, open 142 to 78 ms. Every tessellation is
+about 28% faster without the per-triangle array, and decoding is 8x faster now that values of the right
+type are read without a node or a path link. Open is now 87% parsing. Other rows are unchanged within noise.
+
 ## Smaller notes
 
 - `Drawing.drawStack` (`DrawingEditor+Accessories.swift:29-52`, PR #17) is recomputed per call and

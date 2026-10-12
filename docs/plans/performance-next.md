@@ -170,14 +170,23 @@ this stays low.
 Ranked by what the user feels per hour of work. The first two are each a few lines and were measured; the rest
 are estimates where marked.
 
-### 1. Append triangles without an array literal (S)
+### 1. Append triangles without an array literal (S): shipped
+
+Shipped: new-bucket rebuild 74.1 to 53.6 ms and cold build 58 to 44 ms at 2,400 shapes (the audit's "Next 1
+and 2" table).
+
 
 `Stroker.swift:259, 261`: three `append`s instead of `append(contentsOf: [a, b, c])`. Measured above: 28% off a
 new-bucket refine and 24% off the cold build, and every other rebuild that tessellates gets the same. Keep the
 `CapsuleTessellator` literal as it is (measured slower without it). No test changes; the art tests compare
 triangles and the order is unchanged.
 
-### 2. Decode values without building nodes (S)
+### 2. Decode values without building nodes (S): shipped
+
+Shipped, for the points loop and the rest of `shape`, `stroke` and the part loop: decoding 76.0 to 9.7 ms and
+open 139.9 to 74.8 ms at 2,400 shapes. `testWrongValueTypesAreReportedWithTheirPath` pins the error for each
+accessor and passes on the old decoder too.
+
 
 As prototyped: value accessors on `Node` that fall back to today's path on any mismatch, and the fast path in
 `vec2()`. Measured above: decoding 75 to 14 ms, open 140 to 79 ms at 2,400 shapes. Then apply the same accessors
