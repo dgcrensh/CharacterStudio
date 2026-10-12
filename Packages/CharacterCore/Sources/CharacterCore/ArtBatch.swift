@@ -197,9 +197,46 @@ public struct ArtBuilder: Sendable {
         /// Outline triangles, two floats per vertex, and their bounds.
         var outline: [Float]
         var outlineBounds: Rect
+        /// How many drags have carried these triangles since they were flattened (see
+        /// `carry(_:to:)`), each rounding them to floats again.
+        var carries = 0
 
         /// What the cache counts against its second-tier limit.
         var vertexCount: Int { (fan.count + outline.count) / 2 }
+
+        /// The same triangles taken through `t`, stored for `shape` at `tolerance`.
+        func applying(_ t: Affine2D, as shape: VectorShape, tolerance: Double) -> Tessellation {
+            let (fan, movedFanBounds) = Self.apply(t, to: self.fan)
+            let (outline, outlineBounds) = Self.apply(t, to: self.outline)
+            // An open path has no fan but keeps its flattened bounds, which nothing reads.
+            let fanBounds = fan.isEmpty && !self.fanBounds.isNull ? Rect(points: self.fanBounds.corners.map(t.apply))
+                : movedFanBounds
+            return Tessellation(shape: shape, tolerance: tolerance, fan: fan, fanBounds: fanBounds, outline: outline,
+                                outlineBounds: outlineBounds, carries: carries + 1)
+        }
+
+        /// `floats` (x, y pairs) through `t`, and the bounds of the result.
+        private static func apply(_ t: Affine2D, to floats: [Float]) -> ([Float], Rect) {
+            guard !floats.isEmpty else { return ([], .null) }
+            var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
+            let moved = [Float](unsafeUninitializedCapacity: floats.count) { out, count in
+                floats.withUnsafeBufferPointer { src in
+                    var i = 0
+                    while i + 1 < src.count {
+                        let x = Double(src[i]), y = Double(src[i + 1])
+                        let px = Float(t.a * x + t.c * y + t.tx), py = Float(t.b * x + t.d * y + t.ty)
+                        out[i] = px
+                        out[i + 1] = py
+                        // The bounds of the rounded points, as a fresh tessellation's are of its own.
+                        minX = min(minX, Double(px)); maxX = max(maxX, Double(px))
+                        minY = min(minY, Double(py)); maxY = max(maxY, Double(py))
+                        i += 2
+                    }
+                }
+                count = floats.count
+            }
+            return (moved, Rect(minPoint: Vec2(minX, minY), maxPoint: Vec2(maxX, maxY)))
+        }
     }
 
     /// What one part's steps and vertices depend on besides its shapes' tessellations:
@@ -433,6 +470,54 @@ public struct ArtBuilder: Sendable {
         let result = Self.tessellate(shape, tolerance: tolerance)
         tessellationCount += 1
         tessellations.store(result)
+        return result
+    }
+
+    /// What `carry(_:to:)` did.
+    public struct Carry: Equatable, Sendable {
+        /// Moved shapes whose tessellation was carried rather than dropped.
+        public var carried = 0
+        /// Of those, the ones the drag enlarged, now coarser than the art's tolerance.
+        public var coarse = 0
+    }
+
+    /// After this many carries a shape is flattened again, so float rounding can't add up.
+    static let maximumCarries = 8
+
+    /// When a drag drawn through `live` ends: takes each moved shape's cached
+    /// tessellation through `live.transform` and stores it under the shape as it is in
+    /// `drawing`, so the next build draws the moved shapes without flattening them again
+    /// (see `LiveTransform.movesTessellation`). A shape is carried only when transforming
+    /// it as it was in `live.base` gives exactly the shape in `drawing`, so anything the
+    /// lift changed is tessellated by the next build as usual.
+    ///
+    /// Enlarging leaves the triangles coarser than they were flattened, as they looked
+    /// during the drag. Those are stored at the tolerance they now have and counted as
+    /// `coarse`: a build reusing other tolerances keeps them, and a refine replaces them.
+    @discardableResult
+    public mutating func carry(_ live: LiveTransform, to drawing: Drawing) -> Carry {
+        var result = Carry()
+        guard live.movesTessellation else { return result }
+        let t = live.transform
+        let scale = (t.a * t.a + t.b * t.b).squareRoot()
+        let enlarges = scale > 1 + 1e-9
+        var before: [Int: VectorShape] = [:]
+        for part in live.base.parts {
+            for shape in part.shapes where live.shapes.contains(shape.id) { before[shape.id] = shape }
+        }
+        for part in drawing.parts {
+            for shape in part.shapes {
+                guard let old = before[shape.id], shape != old, let cached = tessellations.anyTessellation(of: old),
+                      cached.carries < Self.maximumCarries else { continue }
+                var moved = old
+                moved.apply(t)
+                guard moved == shape else { continue }
+                let tolerance = enlarges ? cached.tolerance * scale : cached.tolerance
+                tessellations.store(cached.applying(t, as: shape, tolerance: tolerance))
+                result.carried += 1
+                if enlarges { result.coarse += 1 }
+            }
+        }
         return result
     }
 

@@ -243,6 +243,34 @@ struct Workload: @unchecked Sendable {
         }
     }
 
+    /// The frame after lifting the Pencil from a live drag that moved part 0 and its
+    /// accessories: the renderer carries their triangles and rebuilds the moved drawing.
+    static let dragEndOnePart = Workload(name: "Drag end, one part moved") { drawing in
+        dragEnd(drawing, selection: .layer(drawing.parts[0].id))
+    }
+
+    /// The same after dragging everything.
+    static let dragEndEverything = Workload(name: "Drag end, everything moved") { drawing in
+        dragEnd(drawing, selection: everything(in: drawing))
+    }
+
+    /// Each call starts from a copy of a builder that drew the drag (its base, with the
+    /// moved shapes marked), so it includes copying that builder's caches on first write.
+    private static func dragEnd(_ drawing: Drawing, selection: Selection) -> () -> Void {
+        let t = Affine2D.translation(Vec2(30, 12))
+        let live = LiveTransform(id: 1, base: drawing, shapes: LiveTransform.shapes(of: selection, in: drawing)!,
+                                 transform: t)
+        let after = drawing.applying(t, to: selection)
+        var during = ArtBuilder()
+        _ = during.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        _ = during.build(drawing, isolatedPart: nil, tolerance: 0.5, moving: live.shapes)
+        return {
+            var builder = during
+            builder.carry(live, to: after)
+            _ = builder.build(after, isolatedPart: nil, tolerance: 0.5)
+        }
+    }
+
     /// One frame of the wiggle preview with part 0 turning, as the renderer draws it: it
     /// reads the wiggle's live transform and draws the art it built when the wiggle
     /// started through it, rebuilding only when the transform's id changes.
@@ -349,9 +377,9 @@ struct Workload: @unchecked Sendable {
     static var all: [Workload] {
         [artRebuildAfterOneEdit, artRebuildAfterOneEditWalkOnly, artRebuildAfterOneEditAndUpload, artRebuildAtNewZoomBucket,
          zoomInRefineVisible, hoverFrame, selectHoverHitTest, overlayWireframeAtNewZoom, overlayWireframeAcrossZoomBucket,
-         scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything, wiggleFrame,
-         undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse, openDecode, svgExport,
-         svgImport]
+         scissorsHover, pencilStroke, quickShapeCheck, eraserSample, dragSampleEverything, dragEndOnePart,
+         dragEndEverything, wiggleFrame, undoRedo, twoFingerNavigation, refreshQueries, layerTree, save, open, openParse,
+         openDecode, svgExport, svgImport]
     }
 
     static func everything(in drawing: Drawing) -> Selection {

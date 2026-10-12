@@ -816,6 +816,23 @@ Recommendations 1 and 2 of [performance-next.md](performance-next.md). Same Mac,
 about 28% faster without the per-triangle array, and decoding is 8x faster now that values of the right
 type are read without a node or a path link. Open is now 87% parsing. Other rows are unchanged within noise.
 
+#### Next 3: carry the dragged triangles on lift
+
+Recommendation 3 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,
+median of 9, milliseconds, run back to back. Before is the same workload with the carry left out, which is the
+renderer's lift as it was after recommendations 1 and 2. Both rows include copying a builder that drew the drag.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Drag end, everything moved | before | 5.05 | 10.3 | 20.5 | 41.1 | 82.4 |
+| | after | 1.13 | 2.37 | 5.25 | 11.2 | 23.0 |
+| Drag end, one part moved | before | 2.06 | 2.31 | 2.79 | 3.79 | 6.31 |
+| | after | 0.559 | 0.799 | 1.28 | 2.29 | 4.54 |
+
+What is left after dragging everything is the pass over the moved vertices, comparing each moved shape with
+its transformed base, and the warm build copying every part's vertices. Other rows are unchanged within noise.
+The renderer side (`CanvasRenderer.updateArt`) is checked only by CI's app build until a device trace.
+
 #### Next 4: the wiggle draws through a live transform
 
 Recommendation 4 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,

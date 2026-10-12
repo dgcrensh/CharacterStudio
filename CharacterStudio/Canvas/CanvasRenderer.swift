@@ -115,6 +115,8 @@ final class CanvasRenderer {
     /// its current transform.
     private var artLive: Int?
     private var liveTransform = Affine2D.identity
+    /// The live drag drawn on the last frame, whose triangles move with the shapes when it ends.
+    private var lastLive: LiveTransform?
     private var artSteps: [ArtStep] = []
     /// One per part. Each part's vertices live in their own buffer, keyed by segment id,
     /// so an edit uploads only the parts it changed. A buffer is never written after it
@@ -386,8 +388,22 @@ final class CanvasRenderer {
         let bucket = pow(2, ceil(log2(max(zoom, 1.0 / 64))))
         let wanted = 0.2 / bucket
         // A drag while wiggling edits the wiggle's base, so it rebuilds on every sample.
-        let live = wiggle ?? editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
+        let drag = editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
+        let live = wiggle ?? drag
         let drawing = live?.base ?? editor.drawing
+        // A live drag just ended: carry the moved shapes' triangles to where they landed
+        // rather than flattening them again. Enlarged ones are coarse until a refine.
+        if live == nil, let ended = lastLive {
+            let carry = Signposts.canvas.withIntervalSignpost("Art carry", "\(ended.shapes.count) shapes") {
+                artBuilder.carry(ended, to: editor.drawing)
+            }
+            if carry.coarse > 0 {
+                cancelRefine()
+                artMixed = true
+            }
+        }
+        // A wiggle moves nothing when it stops, so only a drag is carried.
+        lastLive = wiggle == nil ? drag : nil
         // The first build has nothing to show meanwhile, so it flattens at the zoom's tolerance.
         if artTolerance == 0 { artTolerance = wanted }
         scheduleRefine(to: wanted, drawing: drawing, navigating: navigating, viewRect: viewRect)
