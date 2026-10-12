@@ -1676,6 +1676,8 @@ public struct DrawingEditor: Sendable {
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // Every part shows the art its skin and variant call for.
         if !drawing.skinsAreValid { drawing.repairSkins() }
+        // Switches name parameters and layers that exist, within the parameters' ranges.
+        if !drawing.switchesAreValid { drawing.repairSwitches() }
         // Parameter drivers name bones that exist, and driven parameters follow the pose.
         if !drawing.parameterDriversAreValid { drawing.repairParameterDrivers() }
         if drawing.pose != before.pose { followPose() }

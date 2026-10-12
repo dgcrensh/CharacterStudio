@@ -575,6 +575,7 @@ extension Drawing {
         for p in parts.indices where parts[p].holdsKeyforms {
             parts[p].updateAllShapes { $0.evaluateKeyforms(at: values, parameters: parameters) }
         }
+        applySwitches()
     }
 
     /// Sets the parameter values (clamped to each range; unknown parameters and values at

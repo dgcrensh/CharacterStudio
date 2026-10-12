@@ -82,12 +82,15 @@ extension DrawingEditor {
         let v = snapping ? drawing.snappedValue(value, of: id) : value
         guard !Parameter.same(drawing.value(of: id), drawing.parameter(id)!.clamped(v)) else { return }
         drawing.setValue(v, of: id)
+        // A switch may have swapped a selected part's variant out of view.
+        if drawing.hasSwitches { validateSelection() }
     }
 
     /// Puts every parameter back at its default, showing the rest drawing. Not an undo step.
     public mutating func resetParameters() {
         guard !drawing.parameterValues.isEmpty else { return }
         drawing.setParameterValues([:])
+        if drawing.hasSwitches { validateSelection() }
     }
 
     /// What the banner over the canvas says (see `Drawing.keyformBanner`).
