@@ -328,6 +328,68 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
+    // MARK: Posing
+
+    /// The stress drawing rigged for posing: a root bone, and for each part an upper bone
+    /// on it ending at the part's middle and a lower bone from there. Each part is on its
+    /// upper bone; with `bending`, it is bound to the lower bone too, with auto weights.
+    static func rigged(_ drawing: Drawing, bending: Bool) -> (drawing: Drawing, root: Int, lower: [Int]) {
+        var d = drawing
+        let root = Bone(id: d.makeID(), name: "Root", head: Vec2(0, -200), tail: Vec2(0, -100))
+        d.bones = [root]
+        var lower: [Int] = []
+        for p in d.parts.indices {
+            let center = d.parts[p].pivot
+            let upper = Bone(id: d.makeID(), name: "Upper \(p)", parent: root.id, head: center - Vec2(80, 0), tail: center)
+            let below = Bone(id: d.makeID(), name: "Lower \(p)", parent: upper.id, head: center, tail: center + Vec2(80, 0))
+            d.bones += [upper, below]
+            d.parts[p].bone = upper.id
+            lower.append(below.id)
+            if bending {
+                d.parts[p].secondBone = below.id
+                d.parts[p] = AutoWeights.assign(d.parts[p], in: d)
+            }
+        }
+        return (d, root.id, lower)
+    }
+
+    /// 20 frames of a pose drag, each drawn as the renderer draws Pose mode: the posed
+    /// art, then a build of it from a builder warm with the rest pose. `turn` sets the
+    /// pose for frame `i`.
+    private func measurePosing(_ drawing: Drawing, turn: @escaping (Int) -> Pose) {
+        var warm = ArtBuilder()
+        _ = warm.build(drawing, isolatedPart: nil, tolerance: 0.5)
+        measure {
+            var builder = warm
+            for i in 1...20 {
+                let art = drawing.posedArt(turn(i))
+                _ = builder.build(art.drawing, isolatedPart: nil, tolerance: 0.5)
+            }
+        }
+    }
+
+    /// Turning the root bone moves every part rigidly: GPU transforms, no re-tessellation.
+    func testPoseRigidParts() {
+        let rig = Self.rigged(drawing, bending: false)
+        measurePosing(rig.drawing) { Pose(rotations: [rig.root: Double($0)]) }
+    }
+
+    /// Turning every lower bone bends every part, so every shape is skinned and
+    /// re-tessellated each frame: the worst case for weighted posing.
+    func testPoseEveryPartBending() {
+        let rig = Self.rigged(drawing, bending: true)
+        measurePosing(rig.drawing) { i in Pose(rotations: Dictionary(uniqueKeysWithValues: rig.lower.map { ($0, Double(i)) })) }
+    }
+
+    /// Only the skinning of the bending case, without tessellating.
+    func testPoseSkinningEveryPart() {
+        let rig = Self.rigged(drawing, bending: true)
+        let pose = Pose(rotations: Dictionary(uniqueKeysWithValues: rig.lower.map { ($0, 20.0) }))
+        measure {
+            for _ in 0..<20 { _ = rig.drawing.posedArt(pose) }
+        }
+    }
+
     // MARK: Workloads
 
     /// Times `workload` on the stress drawing, `calls` calls per `measure` run. The same

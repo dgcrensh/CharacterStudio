@@ -167,7 +167,15 @@
       }
     }
   },
-  "poses": {},
+  "poses": {
+    "Nod": {
+      "Neck": { "rotation": 20 }
+    },
+    "Lean": {
+      "Spine": { "rotation": -10 },
+      "Neck": { "rotation": 15 }
+    }
+  },
   "animations": {},
   "palette": [
     "#FFFFFF80",

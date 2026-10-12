@@ -86,26 +86,34 @@ extension JSONValue {
         }
     }
 
-    /// One-line text for scalars, arrays of scalars, and objects whose values are
-    /// scalars or arrays of scalars. Nil for anything deeper.
+    /// One-line text for scalars, arrays of scalars or of arrays of scalars (such as a
+    /// point's `weights` pairs), and objects whose values are those. Nil for anything deeper.
     private var inlineText: String? {
         switch self {
         case .null, .bool, .number, .string:
             return scalarText
         case .array(let items):
-            guard items.allSatisfy(\.isScalar) else { return nil }
-            return "[" + items.map(\.scalarText).joined(separator: ", ") + "]"
+            if items.allSatisfy(\.isScalar) { return "[" + items.map(\.scalarText).joined(separator: ", ") + "]" }
+            guard items.allSatisfy(\.isScalarArray) else { return nil }
+            return "[" + items.map { $0.inlineText! }.joined(separator: ", ") + "]"
         case .object(let members):
             var parts: [String] = []
             for member in members {
                 switch member.value {
                 case .object: return nil
-                case .array(let items) where !items.allSatisfy(\.isScalar): return nil
+                case .array(let items) where !items.allSatisfy(\.isScalar) && !items.allSatisfy(\.isScalarArray):
+                    return nil
                 default: parts.append(Self.quoted(member.key) + ": " + member.value.inlineText!)
                 }
             }
             return "{ " + parts.joined(separator: ", ") + " }"
         }
+    }
+
+    /// True for an array of scalars (empty included).
+    private var isScalarArray: Bool {
+        if case .array(let items) = self { return items.allSatisfy(\.isScalar) }
+        return false
     }
 
     private var isScalar: Bool {

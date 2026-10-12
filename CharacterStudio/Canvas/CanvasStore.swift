@@ -121,6 +121,20 @@ final class EditorUIState {
     var wigglePart: Int?
     var canWiggle = false
 
+    // Pose mode
+    /// The selected bone's turn from its rest pose, in degrees.
+    var selectedBoneRotation = 0.0
+    var canResetPose = false
+    var poses: [NamedPose] = []
+    var activePose: Int?
+    var canBindSecondBone = false
+    var selectedPartHasSecondBone = false
+    /// The bone the weight brush paints toward, when a two-bone part is selected.
+    var weightPaintBoneName: String?
+    var weightPaintBone: Int?
+    /// The two bones of the part being painted: the part's own, then its second.
+    var weightPaintChoices: [Bone] = []
+
     // Workspace
     var outlineView = false
     var ghostsUnselected = false
@@ -349,6 +363,16 @@ final class CanvasStore {
         update(\.canAddJointCap, editor.canAddJointCap)
         update(\.wigglePart, editor.wigglePart)
         update(\.canWiggle, editor.wiggleCandidate != nil || editor.wigglePart != nil)
+        update(\.selectedBoneRotation, editor.selectedBone.map { editor.drawing.pose.rotation(of: $0) } ?? 0)
+        update(\.canResetPose, editor.canResetPose)
+        update(\.poses, editor.drawing.poses)
+        update(\.activePose, editor.activePose)
+        update(\.canBindSecondBone, editor.canBindSecondBone)
+        update(\.selectedPartHasSecondBone, editor.selectedPartHasSecondBone)
+        update(\.weightPaintBoneName, editor.weightPaintBone.flatMap { editor.drawing.bone($0)?.name })
+        update(\.weightPaintBone, editor.weightPaintBone)
+        let painted = editor.weightPaintPart.flatMap { editor.drawing.part($0) }
+        update(\.weightPaintChoices, [painted?.bone, painted?.secondBone].compactMap { $0.flatMap { editor.drawing.bone($0) } })
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -548,6 +572,20 @@ final class CanvasStore {
             $0.editor.mirrorSelectedBone()
         }
     }
+
+    // MARK: Pose mode
+
+    func resetPose() { edit { $0.editor.resetPose() } }
+    func resetSelectedBonePose() { edit { $0.editor.resetSelectedBonePose() } }
+    func setBoneRotation(_ id: Int, degrees: Double) { edit { $0.editor.setBoneRotation(id, degrees: degrees) } }
+    func savePose() { edit { _ = $0.editor.savePose(named: "Pose") } }
+    func applyPose(_ id: Int) { edit { $0.editor.applyPose(id) } }
+    func updatePose(_ id: Int) { edit { $0.editor.updatePose(id) } }
+    func deletePose(_ id: Int) { edit { $0.editor.deletePose(id) } }
+    func renamePose(_ id: Int, to name: String) { edit { $0.editor.renamePose(id, to: name) } }
+    func bindSecondBone() { edit { $0.editor.bindSelectedPartToSecondBone() } }
+    func unbindSecondBone() { edit { $0.editor.unbindSecondBone() } }
+    func autoWeightSelectedPart() { edit { $0.editor.autoWeightSelectedPart() } }
 
     // MARK: Symmetry, wiggle and joints
 

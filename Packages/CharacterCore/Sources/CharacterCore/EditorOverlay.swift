@@ -14,6 +14,15 @@ public enum EditorOverlay {
     public static let symmetryColor = RGBAColor(r: 0.85, g: 0.35, b: 0.75, a: 0.8)
     /// The character frame's box and ground line.
     public static let frameColor = RGBAColor(r: 0.15, g: 0.62, b: 0.55)
+    /// Weight painting: anchors that follow only the part's own bone, and only its second bone.
+    public static let firstBoneWeightColor = RGBAColor(r: 0.2, g: 0.45, b: 0.95)
+    public static let secondBoneWeightColor = RGBAColor(r: 0.95, g: 0.35, b: 0.2)
+
+    /// The color of an anchor whose second-bone weight is `weight`.
+    public static func weightColor(_ weight: Double) -> RGBAColor {
+        let t = min(max(weight, 0), 1), a = firstBoneWeightColor, b = secondBoneWeightColor
+        return RGBAColor(r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t)
+    }
 
     /// The outline view's wireframe on a light or dark canvas, and the dimmed wireframe of
     /// art outside isolation or the ghost focus. Opaque, since overlapping capsules
@@ -27,9 +36,10 @@ public enum EditorOverlay {
     /// The whole overlay as one array, in drawing order. The renderer keeps the costly
     /// layers between frames with `layers(for:zoom:viewRect:art:darkMode:cache:)` instead.
     public static func vertices(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil,
-                                art: Drawing? = nil, darkMode: Bool = false) -> [Float] {
+                                art: Drawing? = nil, posed: Drawing? = nil, darkMode: Bool = false) -> [Float] {
         var cache = OverlayCache()
-        let layers = layers(for: editor, zoom: zoom, viewRect: viewRect, art: art, darkMode: darkMode, cache: &cache)
+        let layers = layers(for: editor, zoom: zoom, viewRect: viewRect, art: art, posed: posed, darkMode: darkMode,
+                            cache: &cache)
         return layers.wireframe + layers.guides + layers.selection + layers.top
     }
 
@@ -38,12 +48,15 @@ public enum EditorOverlay {
     /// other two are built on every call.
     ///
     /// `viewRect` (world space) bounds lines that run across the whole view, such as the
-    /// symmetry axis and the ground line. `art` is the drawing as the canvas shows it
-    /// (the wiggle preview's), for the outline view; it defaults to the editor's.
+    /// symmetry axis and the ground line. `art` is the drawing as the wiggle preview
+    /// shows it, for the outline view; it defaults to the editor's. `posed` is
+    /// `editor.shownDrawing`, which a renderer can keep between frames; while posing,
+    /// the bones, the outline view and the outlines of the selected bone's parts show it.
     public static func layers(for editor: DrawingEditor, zoom: Double, viewRect: Rect? = nil, art: Drawing? = nil,
-                              darkMode: Bool = false, cache: inout OverlayCache) -> OverlayLayers {
+                              posed: Drawing? = nil, darkMode: Bool = false, cache: inout OverlayCache) -> OverlayLayers {
         var layers = OverlayLayers()
         let px = 1 / max(zoom, 1e-9)
+        let shown = editor.isPosing ? posed ?? editor.shownDrawing : editor.drawing
         // The kept layers depend on the zoom only through flattening and dash lengths, so
         // they are built for the zoom bucket and kept while a pinch stays inside it.
         let bucket = zoomBucket(zoom)
@@ -53,12 +66,13 @@ public enum EditorOverlay {
         if editor.outlineView {
             let focus = editor.ghostFocus
             let key = OverlayCache.WireframeKey(revision: editor.revision, bucket: bucket, isolatedPart: editor.isolatedPart,
-                                                isolatedGroup: editor.isolatedGroup, ghostFocus: focus, darkMode: darkMode)
+                                                isolatedGroup: editor.isolatedGroup, ghostFocus: focus, darkMode: darkMode,
+                                                posing: editor.isPosing)
             if art == nil, cache.wireframeKey == key {
                 layers.wireframe = cache.wireframe
             } else {
-                var b = Builder(editor: editor, px: 1 / bucket)
-                b.wireframe(of: art ?? editor.drawing, focus: focus, darkMode: darkMode)
+                var b = Builder(editor: editor, drawing: shown, px: 1 / bucket)
+                b.wireframe(of: art ?? shown, focus: focus, darkMode: darkMode)
                 layers.wireframe = b.out
                 cache.wireframeKey = art == nil ? key : nil
                 cache.wireframe = b.out
@@ -70,7 +84,7 @@ public enum EditorOverlay {
             cache.generation &+= 1
         }
 
-        var guides = Builder(editor: editor, px: px)
+        var guides = Builder(editor: editor, drawing: shown, px: px)
         guides.guides(viewRect: viewRect, zoom: zoom)
         layers.guides = guides.out
 
@@ -80,7 +94,7 @@ public enum EditorOverlay {
         if cache.selectionKey == key {
             layers.selection = cache.selection
         } else {
-            var b = Builder(editor: editor, px: 1 / bucket)
+            var b = Builder(editor: editor, drawing: editor.drawing, px: 1 / bucket)
             b.selection()
             layers.selection = b.out
             cache.selectionKey = key
@@ -88,7 +102,7 @@ public enum EditorOverlay {
             cache.generation &+= 1
         }
 
-        var top = Builder(editor: editor, px: px)
+        var top = Builder(editor: editor, drawing: editor.drawing, px: px)
         top.top()
         layers.top = top.out
         return layers
@@ -130,6 +144,7 @@ public struct OverlayCache: Sendable {
         var isolatedGroup: Int?
         var ghostFocus: Set<Int>?
         var darkMode: Bool
+        var posing: Bool
     }
 
     struct SelectionKey: Equatable, Sendable {
@@ -158,10 +173,11 @@ public struct OverlayCache: Sendable {
 private struct Builder {
     typealias Overlay = EditorOverlay
     let editor: DrawingEditor
+    /// The drawing as this layer shows it: posed while posing, for the guides.
+    let drawing: Drawing
     let px: Double
     var out: [Float] = []
 
-    var drawing: Drawing { editor.drawing }
     var accent: RGBAColor { Overlay.accent }
 
     mutating func line(_ a: Vec2, _ b: Vec2, width: Double = 1.5, color: RGBAColor = Overlay.accent) {
@@ -336,6 +352,21 @@ private struct Builder {
                     dot(point, radius: (lit ? jointRadius + 2 : jointRadius) - 1.5, color: Overlay.handleFill)
                 }
             }
+        }
+
+        // Weight painting: the painted part's anchors, from the color of its own bone to the
+        // second bone's, and the brush.
+        if editor.tool == .bone, editor.boneMode == .weights {
+            if let id = editor.weightPaintPart, let part = drawing.part(id) {
+                for (i, shape) in part.shapes.enumerated() where part.isShown(i) {
+                    outline(of: ShapeRef(part: part.id, shape: shape.id), color: Overlay.boneColor.withAlpha(0.6))
+                    for point in shape.path.points {
+                        dot(point.position, radius: 4.5, color: Overlay.handleFill)
+                        dot(point.position, radius: 3.5, color: Overlay.weightColor(point.weight))
+                    }
+                }
+            }
+            if let hover = editor.hoverPoint { ring(hover, radius: editor.weightBrushRadius * px, color: accent) }
         }
 
         // The scissors find the target and the cut point in one search.

@@ -165,6 +165,10 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var pivot: Vec2
     /// The bone the part's slot sits on, or nil for the root bone.
     public var bone: Int?
+    /// A second bone the part bends with, such as the forearm for an arm drawn on the
+    /// upper arm. Each point's `PathPoint.weight` says how much it follows this bone
+    /// rather than `bone`. Nil for a rigid part, which moves only with `bone`.
+    public var secondBone: Int?
     /// Editor hints, saved in the file, that apply to every shape in the part.
     public var isHidden: Bool
     public var isLocked: Bool
@@ -452,6 +456,11 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var globalColors: [GlobalColor] = []
     /// The target box and ground line the character is drawn for, if set.
     public var frame: CharacterFrame?
+    /// The pose Pose mode shows. Kept with the drawing so posing is undoable, but not
+    /// saved: the file keeps only the rest pose and the named `poses`.
+    public var pose = Pose()
+    /// Saved test poses, in the order they were made.
+    public var poses: [NamedPose] = []
     public var nextID = 1
 
     public init() {}
