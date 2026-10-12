@@ -121,6 +121,8 @@ public struct ArtBatch: Hashable, Sendable {
     public var steps: [ArtStep] = []
     /// One per part in the draw stack, in order: which steps and vertices it drew.
     public var segments: [ArtSegment] = []
+    /// Parts a build `leavingOutUncached` left out because a shape had no tessellation yet.
+    public var partsLeftOut = 0
 
     public var vertexCount: Int { vertices.count / 2 }
 }
@@ -314,9 +316,16 @@ public struct ArtBuilder: Sendable {
     /// With `reusingOtherTolerances`, an unchanged shape cached at another tolerance
     /// keeps that tessellation; only new and edited shapes are tessellated, at
     /// `tolerance`. The renderer builds that way while a background refine is under way.
+    ///
+    /// With `leavingOutUncached`, a part with a shown shape that has no tessellation at
+    /// any tolerance is left out rather than tessellated, and counted in `partsLeftOut`.
+    /// The renderer's first builds after opening a document do this while a refine job
+    /// tessellates the drawing, the parts in view first, so the first frame shows
+    /// without waiting for every shape to be flattened. A whole part is left out, never
+    /// some of its shapes, so a clipped shape never paints without its base.
     public mutating func build(_ drawing: Drawing, isolatedPart: Int?, isolatedGroup: Int? = nil, tolerance: Double,
                                ghostFocus: Set<Int>? = nil, moving: Set<Int> = [],
-                               reusingOtherTolerances: Bool = false) -> ArtBatch {
+                               reusingOtherTolerances: Bool = false, leavingOutUncached: Bool = false) -> ArtBatch {
         var batch = ArtBatch()
         reusesOtherTolerances = reusingOtherTolerances
         defer { reusesOtherTolerances = false }
@@ -334,6 +343,12 @@ public struct ArtBuilder: Sendable {
             occurrences[part.id] = occurrence + 1
             let slot = PartSlot(id: part.id, occurrence: occurrence)
             seen.insert(slot)
+            // Left out before its cache is looked at, so a part built earlier and edited
+            // since keeps its slot (and its shapes' tessellations) for when it is ready.
+            if leavingOutUncached, !isTessellated(part) {
+                batch.partsLeftOut += 1
+                continue
+            }
             let isolated = part.id == isolatedPart
             let key = PartKey(shapes: part.shapes, groups: part.groups, isHidden: part.isHidden, tolerance: tolerance,
                               isIsolated: isolated,
@@ -355,6 +370,11 @@ public struct ArtBuilder: Sendable {
         }
         for id in retired where !fresh.contains(id) { tessellations.remove(id) }
         return batch
+    }
+
+    /// True when every shown shape of `part` has a cached tessellation, at any tolerance.
+    private func isTessellated(_ part: Part) -> Bool {
+        part.shapes.indices.allSatisfy { !part.isShown($0) || tessellations.anyTessellation(of: part.shapes[$0]) != nil }
     }
 
     /// The ids in `set` that are shapes of `part`.

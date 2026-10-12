@@ -187,6 +187,77 @@ final class TessellationCacheTests: XCTestCase {
         XCTAssertGreaterThan(compared, 300)
     }
 
+    // MARK: First frame after opening
+
+    /// The renderer's first build after opening has nothing cached: leaving out the
+    /// uncached parts, it draws nothing and tessellates nothing.
+    func testAColdBuildLeavingOutUncachedTessellatesNothing() {
+        let drawing = Self.row()
+        var builder = ArtBuilder()
+        let batch = builder.build(drawing, isolatedPart: nil, tolerance: 0.1, reusingOtherTolerances: true,
+                                  leavingOutUncached: true)
+        XCTAssertTrue(batch.steps.isEmpty)
+        XCTAssertTrue(batch.segments.isEmpty)
+        XCTAssertEqual(batch.partsLeftOut, drawing.parts.count)
+        XCTAssertEqual(builder.tessellationCount, 0)
+        XCTAssertEqual(builder.cachedShapeCount, 0)
+    }
+
+    /// With `wholeParts`, the job's first batch is every part in view, whole, so each
+    /// merge shows complete parts: first those in view, then the rest. Neither build
+    /// tessellates anything, and the last draws what a cold build draws.
+    func testTheFirstFrameShowsWholePartsAsTheJobMerges() {
+        var drawing = Self.row()
+        // A hidden shape never gets a tessellation, and doesn't hold its part back.
+        drawing.parts[0].shapes[3].isHidden = true
+        // Around the first two circles of part A only.
+        let view = Rect(minPoint: Vec2(-40, -40), maxPoint: Vec2(60, 40))
+        var builder = ArtBuilder()
+        let byShape = builder.tessellations.refinePlan(for: drawing, tolerance: 0.1, viewRect: view)
+        XCTAssertEqual(byShape.visible.count, 2)
+        let plan = builder.tessellations.refinePlan(for: drawing, tolerance: 0.1, viewRect: view, wholeParts: true)
+        XCTAssertEqual(plan.visible.map(\.id), drawing.parts[0].shapes.prefix(3).map(\.id))
+        XCTAssertEqual(plan.rest.map(\.id), drawing.parts[1].shapes.map(\.id))
+
+        builder.tessellations.merge(TessellationCache.tessellate(plan.visible, tolerance: 0.1)!, for: drawing)
+        let first = builder.build(drawing, isolatedPart: nil, tolerance: 0.1, reusingOtherTolerances: true,
+                                  leavingOutUncached: true)
+        XCTAssertEqual(first.partsLeftOut, 1)
+        var onlyA = drawing
+        onlyA.parts.removeLast()
+        var reference = ArtBuilder()
+        assertSameArt(first, reference.build(onlyA, isolatedPart: nil, tolerance: 0.1))
+
+        builder.tessellations.merge(TessellationCache.tessellate(plan.rest, tolerance: 0.1)!, for: drawing)
+        let all = builder.build(drawing, isolatedPart: nil, tolerance: 0.1, reusingOtherTolerances: true,
+                                leavingOutUncached: true)
+        XCTAssertEqual(all.partsLeftOut, 0)
+        XCTAssertEqual(builder.tessellationCount, 0)
+        var cold = ArtBuilder()
+        assertSameArt(all, cold.build(drawing, isolatedPart: nil, tolerance: 0.1))
+    }
+
+    /// A part waiting for the job keeps the slot and tessellations it had, so an edit
+    /// made before the job finishes is built as usual once the renderer stops leaving out.
+    func testAnEditedPartWaitsAndIsBuiltOnceTheJobIsDone() {
+        let drawing = Self.row()
+        var builder = ArtBuilder()
+        let plan = builder.tessellations.refinePlan(for: drawing, tolerance: 0.1, viewRect: nil, wholeParts: true)
+        builder.tessellations.merge(TessellationCache.tessellate(plan.rest, tolerance: 0.1)!, for: drawing)
+        var edited = drawing
+        edited.parts[0].shapes[1].path = Self.circle(Vec2(100, 0), 20)
+        let waiting = builder.build(edited, isolatedPart: nil, tolerance: 0.1, reusingOtherTolerances: true,
+                                    leavingOutUncached: true)
+        XCTAssertEqual(waiting.partsLeftOut, 1)
+        XCTAssertEqual(builder.tessellationCount, 0)
+
+        let done = builder.build(edited, isolatedPart: nil, tolerance: 0.1)
+        XCTAssertEqual(done.partsLeftOut, 0)
+        XCTAssertEqual(builder.tessellationCount, 1)
+        var cold = ArtBuilder()
+        assertSameArt(done, cold.build(edited, isolatedPart: nil, tolerance: 0.1))
+    }
+
     // MARK: Second tier
 
     func testASecondTierMakesABucketBackAndForthWarm() {
