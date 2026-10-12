@@ -98,16 +98,21 @@ final class PerformanceTests: XCTestCase {
     }
 
     /// As the renderer draws a drag now: the drag's starting drawing once, then only the
-    /// transform changes, and one rebuild of the moved drawing at the end.
+    /// transform changes, and at the end the moved triangles are carried into one warm
+    /// rebuild of the moved drawing.
     func testDragWithLiveTransform() {
         var built: Int?
+        var last: LiveTransform?
         measureDrag { builder, editor in
             if let live = editor.liveTransform, live.movesTessellation {
+                last = live
                 guard built != live.id else { return }
                 built = live.id
                 _ = builder.build(live.base, isolatedPart: nil, tolerance: 0.5, moving: live.shapes)
             } else {
                 built = nil
+                if let ended = last { builder.carry(ended, to: editor.drawing) }
+                last = nil
                 _ = builder.build(editor.drawing, isolatedPart: nil, tolerance: 0.5)
             }
         }
