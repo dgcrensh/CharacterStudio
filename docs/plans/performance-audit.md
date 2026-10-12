@@ -850,6 +850,26 @@ The overlay no longer turns a copy of the drawing every frame either; only the o
 reads `displayDrawing(at:)`. The renderer side (`CanvasRenderer.updateArt`) is checked only by the app build
 until a device trace (`Art rebuild` with reason `wiggle` once per wiggle, not per frame).
 
+#### Next 5: the first frame doesn't wait for the cold build
+
+Recommendation 5 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,
+median of 9, milliseconds, run back to back. "Open: first frame's art" is the art's share of the first frame on
+the main thread; before is the same workload building cold, as `updateArt` did when `artTolerance == 0`. "Open:
+first art in view" is new: the background job's first result for an iPad-sized view at 1x around the busy point
+(planning whole parts against an empty cache and tessellating them), merging it and the build that shows them.
+
+| Workload | | 300 shapes | 600 | 1,200 | 2,400 | 4,800 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Open: first frame's art | before | 6.27 | 12.9 | 25.7 | 51.5 | 103.5 |
+| | after | 0.001 | 0.002 | 0.004 | 0.008 | 0.015 |
+| Open: first art in view | after | 6.70 | 12.1 | 24.5 | 47.4 | 78.3 |
+
+At 1x most of the stress drawing is in view, so on the Mac the art arrives about when the cold build would have
+ended. The gain is that the main thread no longer blocks: the canvas, frame and references show, and the
+document can be panned or closed, while the job runs. A part with any shape in view is flattened whole, so no part
+shows with shapes missing; a part edited before the job's last result waits for it. The renderer side
+(`CanvasRenderer.updateArt`, `scheduleRefine`) is checked only by the app build until a device trace.
+
 #### Next 6: reserve the tessellation output
 
 Recommendation 6 of [performance-next.md](performance-next.md). Same Mac, `-c release`, `STRESS_DRAWING=full`,

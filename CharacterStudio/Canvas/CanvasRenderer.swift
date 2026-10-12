@@ -75,7 +75,8 @@ private struct PaintUniforms {
 /// are in world space and the
 /// camera is applied in the vertex shader, so navigation never re-tessellates in a
 /// frame: when zoom crosses a power of two, the shapes are re-flattened in a background
-/// job, visible ones first, while the current art keeps drawing (see `updateArt`).
+/// job, visible ones first, while the current art keeps drawing (see `updateArt`). The
+/// first build after opening is such a job too, so the first frame never waits for it.
 @MainActor
 final class CanvasRenderer {
     private static let sampleCount = 4
@@ -138,6 +139,10 @@ final class CanvasRenderer {
     private var artMixed = false
     /// A refine merged: rebuild the art from the cache on the next frame.
     private var artRefined = false
+    /// From the first frame until a refine's last result merges: the drawing is being
+    /// tessellated in the background for the first time, so builds leave out the parts
+    /// that aren't ready instead of flattening them in the frame.
+    private var artCold = false
 
     /// Asks the view for a frame; a refine calls it when its result is merged.
     var onNeedsRender: (@MainActor () -> Void)?
@@ -404,8 +409,13 @@ final class CanvasRenderer {
         }
         // A wiggle moves nothing when it stops, so only a drag is carried.
         lastLive = wiggle == nil ? drag : nil
-        // The first build has nothing to show meanwhile, so it flattens at the zoom's tolerance.
-        if artTolerance == 0 { artTolerance = wanted }
+        // The first frame shows the references and an empty canvas at once: a refine job
+        // flattens the drawing, the parts in view first, and each part shows as it merges.
+        if artTolerance == 0 {
+            artTolerance = wanted
+            artCold = true
+            artMixed = true
+        }
         scheduleRefine(to: wanted, drawing: drawing, navigating: navigating, viewRect: viewRect)
 
         let ghost = editor.ghostFocus
@@ -415,7 +425,7 @@ final class CanvasRenderer {
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
         // Why, for the signpost.
-        let reason = !current ? (wiggle != nil ? "wiggle" : live != nil ? "drag" : "edit")
+        let reason = artCold ? "open" : !current ? (wiggle != nil ? "wiggle" : live != nil ? "drag" : "edit")
             : artRefined ? "refine" : "focus"
         // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
         artRevision = live == nil ? editor.revision : -1
@@ -428,10 +438,11 @@ final class CanvasRenderer {
         let interval = Signposts.canvas.beginInterval("Art rebuild")
         defer { Signposts.canvas.endInterval("Art rebuild", interval, "\(reason, privacy: .public)") }
         // While a refine is under way, unchanged shapes keep whatever tessellation they
-        // have; only new and edited ones are tessellated, at the art's tolerance.
+        // have; only new and edited ones are tessellated, at the art's tolerance. Until
+        // the first refine is done, parts with a shape not yet tessellated wait for it.
         let batch = artBuilder.build(drawing, isolatedPart: editor.isolatedPart, isolatedGroup: editor.isolatedGroup,
                                      tolerance: artTolerance, ghostFocus: ghost, moving: live?.shapes ?? [],
-                                     reusingOtherTolerances: refineJob != nil || artMixed)
+                                     reusingOtherTolerances: refineJob != nil || artMixed, leavingOutUncached: artCold)
         uploadArt(batch)
     }
 
@@ -462,13 +473,15 @@ final class CanvasRenderer {
     ///   merges each result and rebuilds from the cache. Shapes cached at `wanted` in
     ///   either tier are skipped, so returning to the last bucket costs one warm build.
     /// - A newer bucket cancels the running job.
+    /// - The first job, after opening, flattens every shape. Its first result is every
+    ///   part with a shape in view, whole, and a zoom-out mid-gesture doesn't drop it.
     private func scheduleRefine(to wanted: Double, drawing: Drawing, navigating: Bool, viewRect: Rect) {
         // Where the art is headed: the running job's tolerance, or the art's own once
         // every shape is at it.
         let target = refineTolerance ?? (artMixed ? nil : artTolerance)
         guard wanted != target else { return }
         // Back at the art's own tolerance, or zooming out mid-gesture: drop the job.
-        if wanted == artTolerance && !artMixed || navigating && wanted > artTolerance {
+        if wanted == artTolerance && !artMixed || navigating && wanted > artTolerance && !artCold {
             cancelRefine()
             return
         }
@@ -477,11 +490,12 @@ final class CanvasRenderer {
         refineGeneration += 1
         let generation = refineGeneration
         let cache = artBuilder.tessellations
+        let wholeParts = artCold
         refineJob = Task.detached(priority: .userInitiated) { [weak self] in
             let interval = Signposts.canvas.beginInterval("Art refine")
             var made = 0
             defer { Signposts.canvas.endInterval("Art refine", interval, "\(made) shapes") }
-            let plan = cache.refinePlan(for: drawing, tolerance: wanted, viewRect: viewRect)
+            let plan = cache.refinePlan(for: drawing, tolerance: wanted, viewRect: viewRect, wholeParts: wholeParts)
             // An empty first result has nothing to show early.
             if !plan.visible.isEmpty {
                 guard let visible = TessellationCache.tessellate(plan.visible, tolerance: wanted,
@@ -517,6 +531,7 @@ final class CanvasRenderer {
         if final {
             refineJob = nil
             refineTolerance = nil
+            artCold = false
         }
         onNeedsRender?()
     }
