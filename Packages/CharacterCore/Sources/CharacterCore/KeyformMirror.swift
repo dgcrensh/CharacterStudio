@@ -220,3 +220,49 @@ extension Drawing {
         return (target, bestMap)
     }
 }
+
+// MARK: Onion skin
+
+extension Drawing {
+    /// The parameter values of the keys next to the keyform being edited: for each moved
+    /// parameter, the nearest key value (or default) below and above its value, with every
+    /// other value as it is. Empty at the rest and when edits are blocked.
+    public var neighbouringKeyValues: [[Int: Double]] {
+        guard let coordinate = keyformTarget.coordinate else { return [] }
+        var out: [[Int: Double]] = []
+        for id in [coordinate.parameter] + (coordinate.parameter2.map { [$0] } ?? []) {
+            guard let parameter = parameter(id) else { continue }
+            let v = value(of: id)
+            let stops = keyValues(of: id) + [parameter.defaultValue]
+            let below = stops.filter { $0 < v - Parameter.tolerance }.max()
+            let above = stops.filter { $0 > v + Parameter.tolerance }.min()
+            for stop in [below, above].compactMap({ $0 }) {
+                var values = parameterValues
+                values[id] = Parameter.same(stop, parameter.defaultValue) ? nil : stop
+                out.append(values)
+            }
+        }
+        return out
+    }
+
+    /// The onion skin of the keyform being edited: the keyed shapes `refs` (every keyed
+    /// shown shape when empty) as they are at each neighbouring key
+    /// (`neighbouringKeyValues`), to draw faintly while editing.
+    public func keyformOnionSkin(of refs: [ShapeRef] = []) -> [BezierPath] {
+        let neighbours = neighbouringKeyValues
+        guard !neighbours.isEmpty else { return [] }
+        let wanted = Set(refs)
+        var out: [BezierPath] = []
+        for part in parts where !part.isHidden {
+            for (i, shape) in part.shapes.enumerated() where shape.isKeyed && part.isShown(i) {
+                guard wanted.isEmpty || wanted.contains(ShapeRef(part: part.id, shape: shape.id)) else { continue }
+                for values in neighbours {
+                    var copy = shape
+                    copy.evaluateKeyforms(at: values, parameters: parameters)
+                    out.append(copy.path)
+                }
+            }
+        }
+        return out
+    }
+}

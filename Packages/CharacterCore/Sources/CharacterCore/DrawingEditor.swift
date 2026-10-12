@@ -198,7 +198,8 @@ public struct DrawingEditor: Sendable {
     public var outlineView = false
     /// Dims everything but the selection (see `ghostFocus`).
     public var ghostsUnselected = false
-    /// Outlines the variant part's other variants faintly, to draw one against the others.
+    /// Outlines the variant part's other variants faintly, to draw one against the others,
+    /// and while editing a keyform the keyed shapes at the neighbouring keys.
     public var showsOnionSkin = false
     public var symmetry = SymmetrySettings()
     /// The part rocking about its pivot for the wiggle preview, and when it started.

@@ -255,4 +255,26 @@ final class GridKeyformTests: XCTestCase {
         e.drawing.setParameterValues([x: 30])
         assertClose(point(e.drawing, nose), rest + Vec2(10, 0))
     }
+
+    func testOnionSkinShowsTheNeighbouringKeys() {
+        var (e, nose, x, y) = keyedHead()
+        XCTAssertTrue(e.drawing.keyformOnionSkin().isEmpty, "nothing at the rest")
+        e.setParameterValue(15, of: x)
+        // AngleX 15 lies between the rest and the key at 30.
+        XCTAssertEqual(e.drawing.neighbouringKeyValues, [[:], [x: 30]])
+        var paths = e.drawing.keyformOnionSkin()
+        XCTAssertEqual(paths.count, 2)
+        assertClose(paths[1].points[0].position, rest + Vec2(10, 0))
+        // At a grid point the neighbours run along both parameters.
+        e.setParameterValue(30, of: x)
+        e.setParameterValue(30, of: y)
+        XCTAssertEqual(e.drawing.neighbouringKeyValues, [[y: 30], [x: 30]])
+        paths = e.drawing.keyformOnionSkin(of: [nose])
+        assertClose(paths[0].points[0].position, rest + Vec2(0, 10))
+        // The overlay draws it when the onion skin is on.
+        e.showsOnionSkin = true
+        let with = EditorOverlay.vertices(for: e, zoom: 1).count
+        e.showsOnionSkin = false
+        XCTAssertGreaterThan(with, EditorOverlay.vertices(for: e, zoom: 1).count)
+    }
 }
