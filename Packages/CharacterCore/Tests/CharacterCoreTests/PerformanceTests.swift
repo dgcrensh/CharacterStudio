@@ -390,6 +390,89 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
+    // MARK: Keyforms
+
+    /// The stress drawing with every shape keyed on one parameter, `Blink` (0 to 1,
+    /// default 0): at 1 each point (anchor and handles) moves by a few points, scaled
+    /// toward the middle of its part, as a squash would.
+    static func keyed(_ drawing: Drawing) -> (drawing: Drawing, parameter: Int) {
+        var d = drawing
+        let parameter = Parameter(id: d.makeID(), name: "Blink", minimum: 0, maximum: 1, defaultValue: 0)
+        d.parameters = [parameter]
+        for p in d.parts.indices {
+            let center = d.parts[p].pivot
+            let squash = Affine2D.translation(center) * Affine2D.scale(x: 1, y: 0.7) * Affine2D.translation(-center)
+            for s in d.parts[p].shapes.indices {
+                let shape = d.parts[p].shapes[s]
+                var squashed = shape.path
+                squashed.apply(squash)
+                d.parts[p].shapes[s].setKeyforms(restPath: shape.path, restOpacity: shape.opacity,
+                                                 keys: [(parameter.id, 1, squashed, shape.opacity)])
+            }
+        }
+        return (d, parameter.id)
+    }
+
+    /// 20 frames of a slider drag over a drawing where every shape is keyed: each frame sets
+    /// the value and rebuilds the art from a builder warm with the rest drawing, so every
+    /// shape is re-evaluated and re-tessellated. The worst case for the parameter slider.
+    func testKeyformSliderEveryShapeKeyed() {
+        let (keyed, parameter) = Self.keyed(drawing)
+        var warm = ArtBuilder()
+        _ = warm.build(keyed, isolatedPart: nil, tolerance: 0.5)
+        measure {
+            var builder = warm
+            var d = keyed
+            for i in 1...20 {
+                d.setValue(Double(i) / 20, of: parameter)
+                _ = builder.build(d, isolatedPart: nil, tolerance: 0.5)
+            }
+        }
+    }
+
+    /// Only the evaluation of the slider drag above, without tessellating.
+    func testKeyformEvaluationEveryShapeKeyed() {
+        let (keyed, parameter) = Self.keyed(drawing)
+        measure {
+            var d = keyed
+            for i in 1...20 { d.setValue(Double(i) / 20, of: parameter) }
+        }
+    }
+
+    /// `testUndoGrowthOver500Commits` with every shape keyed and the slider at a keyform,
+    /// so each commit folds its edit into the keyform and each snapshot carries the
+    /// keyforms: what keyforms add to undo.
+    func testUndoGrowthOver500CommitsWithKeyforms() {
+        let (keyed, parameter) = Self.keyed(drawing)
+        var start = DrawingEditor(drawing: keyed)
+        start.drawing.setValue(1, of: parameter)
+        let refs = drawing.parts.flatMap { part in part.shapes.map { ShapeRef(part: part.id, shape: $0.id) } }
+        measure {
+            var editor = start
+            for i in 0..<500 {
+                let ref = refs[i * 7 % refs.count]
+                editor.selection = .shape(part: ref.part, shape: ref.shape)
+                editor.nudge(by: Vec2(1, 0))
+            }
+            XCTAssertEqual(editor.undoStack.undoStates.count, min(500, UndoStack<Drawing>.defaultLimit))
+        }
+    }
+
+    /// The same 500 nudges with no parameters, for comparison with the test above.
+    func testUndoGrowthOver500NudgesWithoutKeyforms() {
+        let start = DrawingEditor(drawing: drawing)
+        let refs = drawing.parts.flatMap { part in part.shapes.map { ShapeRef(part: part.id, shape: $0.id) } }
+        measure {
+            var editor = start
+            for i in 0..<500 {
+                let ref = refs[i * 7 % refs.count]
+                editor.selection = .shape(part: ref.part, shape: ref.shape)
+                editor.nudge(by: Vec2(1, 0))
+            }
+            XCTAssertEqual(editor.undoStack.undoStates.count, min(500, UndoStack<Drawing>.defaultLimit))
+        }
+    }
+
     // MARK: Workloads
 
     /// Times `workload` on the stress drawing, `calls` calls per `measure` run. The same
