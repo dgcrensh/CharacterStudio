@@ -41,6 +41,27 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses (done; see the notes below).
 6. Variants and polish: variants per part, skins, sample characters (done; see the notes below). (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below; bounded undo came with the performance audit.)
 7. Limbs: two-bone IK, rotation limits, mirror pose and Clean for Rig (done; see the notes below).
+8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
+
+## Milestone 8 notes (parameters and keyforms)
+
+Milestone 8 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format moves to 0.3: parameters and keyforms are new optional keys, and 0.2 files open and save as 0.3.
+
+**Using it**
+
+- **Parameters panel** (the dial in the tool strip): one row per parameter, such as `EyeOpen` from 0 to 1, with its name, its value and a slider over its range. Tick marks under the slider show the values any shape has a keyform at, and a taller tinted one the default. **Add Parameter** adds one; each row's menu renames it (names stay unique), shows fields for its **minimum, maximum and default**, moves it up or down, or deletes it with every keyform on it. Narrowing the range removes the keyforms outside it, keeping the shape at the new end; changing the default rebuilds the keyforms around the new rest drawing so nothing looks different at any value. Each of these is one undo step.
+- **Sliders** move the art live and snap to nearby key values, the default and the ends. They are not undo steps: undo and redo leave the sliders where they are and show the restored art at those values. **Reset All** puts every slider back at its default. The file keeps the rest drawing (every parameter at its default), and a document always opens there.
+- **Keyforms by editing at a value:** move one slider away from its default and edit the art with any tool (Direct Select, Select's move, scale and rotate, nudging, the style bar's opacity). The edit lands in a keyform at that value instead of the rest drawing, made the first time a shape is edited there. Draw the eye open at 1, set `EyeOpen` to 0, drag its lids together, and the slider blends between the two. Editing with every slider at its default changes the rest drawing, and every keyform moves with it. **Add Keyform** keys the selected shapes at the slider's value as they look now, so they hold still there when other keys change; **Delete Keyform** removes the keyform at that value from the selected shapes, or from every shape when nothing is selected.
+- **Banner:** while a slider is away from its default, a banner at the top of the canvas says where edits land: "Editing keyform EyeOpen = 0" at an existing key, or "Editing EyeOpen = 0.37: edits add a keyform here" between keys.
+- **Blending:** per parameter the art blends linearly between its keys, with the rest drawing as the key at the default, and holds the last key beyond it. Opacity blends too.
+- **Several parameters** combine by adding their offsets, so `EyeOpen` and `MouthOpen` (or a blink and a squint on the same eye) work at once. Edits need one slider away from its default: with two moved, the banner says to set all but one back, and an edit is refused with that message.
+- **Topology lock:** a shape with keyforms keeps the same points in every keyform. Commands that add, remove or reorder points (insert, delete, split, join, simplify) update every keyform where they can, and otherwise are refused with a short message over the canvas.
+
+**How it works**
+
+- **Model** (CharacterCore, `Keyforms.swift`): `Drawing.parameters` and the slider values in `Drawing.parameterValues` (kept for undo, not saved). A keyed shape keeps its rest points and opacity and its `Keyform`s (offsets of every anchor and both handles, plus an opacity offset) in `VectorShape.keys`; its `path` is always what it shows at the current values, so every tool edits what the user sees, and `DrawingEditor.commit` folds each edit into the rest or the keyform (`Drawing.foldKeyformEdits`). Tests are in `KeyformTests`.
+- **Commands** (`DrawingEditor+Parameters`, `Parameters.swift`): adding, renaming, moving and deleting parameters, the range and the default (rebasing keyforms so every shape looks the same at every value), the sliders and their snapping, Add and Delete Keyform, and the banner text (`keyformBanner`). Tests are in `ParameterTests`.
+- **Format:** 0.3 adds `parameters` at the top level and keyforms on shapes, both optional, with a migration step from 0.2; see [Schema/README.md](Schema/README.md).
 
 ## Milestone 7 notes (limbs)
 
@@ -74,7 +95,7 @@ Milestone 6 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format s
 
 - **Model** (CharacterCore, `Variants.swift`): a part keeps the art it shows in `shapes` and `groups` as before, so every tool, hit test and renderer works on it unchanged. `Part.variants` lists its variants with `activeVariant` the shown one; the others' art is stored in their entries. `Drawing.skins` are the skins besides the default and `Drawing.activeSkin` the one shown (kept for undo, not saved); each part shows its art for that skin, or its default art, and keeps its other skins' art in `otherSkinArt`. Commands that must reach art that isn't shown (moving a whole part, duplicating it, global colors, weights) go through `Part.updateAllArt`. `DrawingEditor+Variants` has the commands; tests are in `VariantTests`.
 - **Format:** each variant is an attachment named for it in the slot, and the slot's `attachment` names the one shown; a part with one drawing writes one attachment named for the slot, as before. Other skins are written after `default` under their names, holding only the slots that have art of their own there. See [Schema/README.md](Schema/README.md#variants-and-skins).
-- **Sample characters:** `Schema/examples` holds Robo (rigged, posed, weighted, with accessories) and Pip (two bones and two poses, a mouth with Closed, Open and O, eyes with a blink, and a Winter skin that swaps the top hat for a beanie and adds a scarf). The tests open, check and re-save both byte for byte, and Pip is built in code in `SampleCharacters.swift`; run the tests with `WRITE_SAMPLES=1` to write its file again after changing the builder.
+- **Sample characters:** `Schema/examples` holds Robo (rigged, posed, weighted, with accessories) and Pip (two bones and two poses, a mouth with Closed, Open and O, eyes with a blink, a Winter skin that swaps the top hat for a beanie and adds a scarf, and the parameters `EyeOpen` and `MouthOpen`, keyed to close the eyes and open the mouth). The tests open, check and re-save both byte for byte, and Pip is built in code in `SampleCharacters.swift`; run the tests with `WRITE_SAMPLES=1` to write its file again after changing the builder.
 
 ## Milestone 5 notes (binding and posing)
 
@@ -146,7 +167,7 @@ Milestone 5 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md), with the renderin
 
 **How it works**
 
-- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.2.schema.json).
+- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.3.schema.json).
 - **CharacterCore** owns the format: a small JSON reader and writer that keeps key order (`JSONValue`), the encoder, decoder and version checks (`CharacterFormat`), and the package as a map of paths to bytes (`CharacterPackage`). Damaged files fail with the JSON path of the problem, for example `skins.default.Head.Head.shapes[0].points[1].p is missing`.
 - **App:** a SwiftUI `DocumentGroup` with a `FileDocument` that reads and writes the package folder. The editor keeps its own undo stack and hands the drawing to the document after each finished gesture or command, which marks it edited for autosave. A color picker or slider drag is handed over once, half a second after it stops (`DocumentHandOff`), and before the document closes or the app leaves the foreground.
 - Ids are never reused within a session (undo no longer rewinds the id counter), which also fixes a milestone 2 bug where importing a second reference after undoing the first could show the first image.

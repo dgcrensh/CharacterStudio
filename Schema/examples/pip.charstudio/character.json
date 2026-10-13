@@ -1,5 +1,5 @@
 {
-  "formatVersion": "0.2.0",
+  "formatVersion": "0.3.0",
   "name": "Pip",
   "bones": [
     { "id": "root", "parent": null, "length": 0, "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1 },
@@ -72,6 +72,18 @@
                 { "p": [58, -12], "in": [4.4183, 0], "out": [-4.4183, 0], "symmetric": true },
                 { "p": [50, -18], "in": [0, 3.3137], "out": [0, -3.3137], "symmetric": true },
                 { "p": [58, -24], "in": [-4.4183, 0], "out": [4.4183, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "EyeOpen",
+                  "value": 0,
+                  "offsets": [
+                    { "point": 0, "p": [-8, 0], "in": [0, -0.5523], "out": [0, 0.5523] },
+                    { "point": 1, "p": [-1, 1], "in": [-3.866, 0], "out": [3.866, 0] },
+                    { "point": 2, "p": [6, 0], "in": [0, 0.5523], "out": [0, -0.5523] },
+                    { "point": 3, "p": [-1, -1], "in": [3.866, 0], "out": [-3.866, 0] }
+                  ]
+                }
               ]
             },
             {
@@ -82,6 +94,18 @@
                 { "p": [58, 24], "in": [4.4183, 0], "out": [-4.4183, 0], "symmetric": true },
                 { "p": [50, 18], "in": [0, 3.3137], "out": [0, -3.3137], "symmetric": true },
                 { "p": [58, 12], "in": [-4.4183, 0], "out": [4.4183, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "EyeOpen",
+                  "value": 0,
+                  "offsets": [
+                    { "point": 0, "p": [-8, 0], "in": [0, -0.5523], "out": [0, 0.5523] },
+                    { "point": 1, "p": [-1, 1], "in": [-3.866, 0], "out": [3.866, 0] },
+                    { "point": 2, "p": [6, 0], "in": [0, 0.5523], "out": [0, -0.5523] },
+                    { "point": 3, "p": [-1, -1], "in": [3.866, 0], "out": [-3.866, 0] }
+                  ]
+                }
               ]
             }
           ]
@@ -115,11 +139,26 @@
           "pivot": [28, 0],
           "shapes": [
             {
-              "closed": false,
+              "closed": true,
+              "fill": "#B04A4AFF",
               "stroke": { "color": "#222222FF", "width": 3 },
               "points": [
-                { "p": [28, -14], "in": [0, 0], "out": [0, 0], "smooth": false },
-                { "p": [28, 14], "in": [0, 0], "out": [0, 0], "smooth": false }
+                { "p": [28, 0], "in": [0, -7.732], "out": [0, 7.732], "symmetric": true },
+                { "p": [28, 14], "in": [0, 0], "out": [0, 0], "symmetric": true },
+                { "p": [28, 0], "in": [0, 7.732], "out": [0, -7.732], "symmetric": true },
+                { "p": [28, -14], "in": [0, 0], "out": [0, 0], "symmetric": true }
+              ],
+              "keyforms": [
+                {
+                  "parameter": "MouthOpen",
+                  "value": 1,
+                  "offsets": [
+                    { "point": 0, "p": [6, 0], "in": [0, -0.5523], "out": [0, 0.5523] },
+                    { "point": 1, "p": [-2, 1], "in": [4.4183, 0], "out": [-4.4183, 0] },
+                    { "point": 2, "p": [-10, 0], "in": [0, 0.5523], "out": [0, -0.5523] },
+                    { "point": 3, "p": [-2, -1], "in": [-4.4183, 0], "out": [4.4183, 0] }
+                  ]
+                }
               ]
             }
           ]
@@ -283,6 +322,10 @@
       "Head": { "rotation": -8 }
     }
   },
+  "parameters": [
+    { "id": "EyeOpen", "min": 0, "max": 1, "default": 1 },
+    { "id": "MouthOpen", "min": 0, "max": 1, "default": 0 }
+  ],
   "animations": {},
   "palette": [],
   "references": []

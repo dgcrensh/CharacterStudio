@@ -237,6 +237,10 @@ public struct DrawingEditor: Sendable {
     /// When on, tapping or marquee-dragging adds to (or removes from) the selection.
     public var addToSelection = false
     public var snap = SnapSettings()
+    /// A short message for the user about an edit that was refused, such as moving a
+    /// keyed shape's points while two parameters are away from their defaults. The app
+    /// shows it and clears it with `clearNotice()`.
+    public internal(set) var notice: String?
     public private(set) var undoStack = UndoStack<Drawing>()
 
     /// A pivot the user dragged for a selection that is not a part. Parts keep theirs in `Part.pivot`.
@@ -609,9 +613,11 @@ public struct DrawingEditor: Sendable {
             if let bone { finishDrawnBone(bone, mirror: mirror) }
             commit(from: before)
         case .anchors(let ref, _, let before, _):
+            // A shape with keyforms is closed the same way at every key.
             if closing != nil, let idx = drawing.indices(ref),
-               let closed = drawing.parts[idx.0].shapes[idx.1].path.closedWithStraightEdge() {
-                drawing.parts[idx.0].shapes[idx.1].path = closed
+               let closed = changingPoints(of: drawing.parts[idx.0].shapes[idx.1], refusal: Self.closeRefusal,
+                                           { $0.closedWithStraightEdge() }) {
+                drawing.parts[idx.0].shapes[idx.1] = closed
             }
             commit(from: undoBase ?? before)
             undoBase = nil
@@ -1031,6 +1037,11 @@ public struct DrawingEditor: Sendable {
     private mutating func joinOrContinuePen(_ ref: ShapeRef, _ end: PathEnd) {
         guard let other = drawing.shape(ref), !other.path.closed else { return }
         guard let pen = penPath else {
+            // Its new anchors would have nowhere to be in its keyforms.
+            if other.isKeyed {
+                notice = Self.penExtendRefusal
+                return
+            }
             penPath = PenPath(part: ref.part, shape: ref.shape, fromStart: end == .start, createdPart: false)
             let saved = style
             selection = .shape(part: ref.part, shape: ref.shape)
@@ -1160,7 +1171,15 @@ public struct DrawingEditor: Sendable {
                 guard insertsOnTap else { break }
                 narrowSelection(to: ref)
                 var inserted: Int?
-                editShape(ref) { inserted = $0.path.insertPoint(segment: segment, t: t) }
+                // A shape with keyforms gets the new anchor at the same place on its curve at every key.
+                if let shape = drawing.shape(ref),
+                   let changed = changingPoints(of: shape, refusal: Drawing.topologyMessage, { path -> BezierPath? in
+                       var p = path
+                       inserted = p.insertPoint(segment: segment, t: t)
+                       return p
+                   }) {
+                    editShape(ref) { $0 = changed }
+                }
                 selectedAnchors = inserted.map { [$0] } ?? []
             case .shape(let ref):
                 if addToSelection {
@@ -1372,6 +1391,9 @@ public struct DrawingEditor: Sendable {
     }
 
     // MARK: Commands
+
+    /// Clears `notice` once the app has shown it.
+    public mutating func clearNotice() { notice = nil }
 
     public mutating func undo() {
         cancelGesture()
@@ -1626,9 +1648,9 @@ public struct DrawingEditor: Sendable {
     /// Joins shape `b` onto shape `a` at the given ends, keeping `a`'s style and
     /// removing `b`. Does not record undo.
     mutating func joinShapes(_ a: ShapeRef, _ aEnd: PathEnd, _ b: ShapeRef, _ bEnd: PathEnd) -> Bool {
-        guard a != b, let ai = drawing.indices(a), let pathB = drawing.shape(b)?.path,
-              let joined = BezierPath.joined(drawing.parts[ai.0].shapes[ai.1].path, aEnd, pathB, bEnd) else { return false }
-        drawing.parts[ai.0].shapes[ai.1].path = joined
+        guard a != b, let ai = drawing.indices(a), let shapeB = drawing.shape(b),
+              let joined = joinedShape(drawing.parts[ai.0].shapes[ai.1], aEnd, shapeB, bEnd) else { return false }
+        drawing.parts[ai.0].shapes[ai.1] = joined
         removeShape(b)
         return true
     }
@@ -1641,7 +1663,10 @@ public struct DrawingEditor: Sendable {
         commit(from: before, key: "\(key)-\(selection)")
     }
 
-    mutating func commit(from before: Drawing, key: String? = nil) {
+    /// Records the change since `before` as an undo step. `folding` is false for
+    /// commands that rewrite keyforms themselves (the parameter commands), whose changes
+    /// must not be folded into a keyform again.
+    mutating func commit(from before: Drawing, key: String? = nil, folding: Bool = true) {
         // Any other edit ends a run of color changes.
         if key == nil { recentColorSource = nil }
         // Groups stay whole: no empty groups, and each one's shapes together.
@@ -1650,6 +1675,17 @@ public struct DrawingEditor: Sendable {
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
         // Every part shows the art its skin and variant call for.
         if !drawing.skinsAreValid { drawing.repairSkins() }
+        // Edits land in the rest drawing or in the keyform the parameters are at, and are
+        // refused when they can't.
+        if folding, !drawing.parameters.isEmpty || !before.parameters.isEmpty,
+           let refusal = drawing.foldKeyformEdits(since: before) {
+            let nextID = drawing.nextID
+            drawing = before
+            drawing.nextID = max(before.nextID, nextID)
+            validateSelection()
+            notice = refusal
+            return
+        }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }
@@ -1658,7 +1694,10 @@ public struct DrawingEditor: Sendable {
     /// session, so the app can key cached pixels and textures by id.
     private mutating func restore(_ state: Drawing) {
         let nextID = drawing.nextID
+        // The parameter sliders stay where they are: the state is shown at their values.
+        let values = drawing.parameterValues
         drawing = state
+        drawing.setParameterValues(values)
         drawing.nextID = max(state.nextID, nextID)
         validateSelection()
         if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil }

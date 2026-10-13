@@ -18,7 +18,12 @@ extension DrawingEditor {
             removeShape(ref)
             selection = .none
         } else {
-            if let idx = drawing.indices(ref) { drawing.parts[idx.0].shapes[idx.1].path.removePoints(at: doomed) }
+            // A shape with keyforms loses the same points at every key.
+            if let idx = drawing.indices(ref),
+               let changed = changingPoints(of: drawing.parts[idx.0].shapes[idx.1], refusal: Drawing.topologyMessage,
+                                            { var p = $0; p.removePoints(at: doomed); return p }) {
+                drawing.parts[idx.0].shapes[idx.1] = changed
+            }
             selectedAnchors = []
         }
         commit(from: before)
@@ -103,16 +108,17 @@ extension DrawingEditor {
     /// one). The pieces keep the shape's style and part, and are selected.
     public mutating func splitAtSelectedAnchor() {
         guard let ref = activeShape, let a = selectedAnchor, let shape = drawing.shape(ref),
-              let pieces = shape.path.split(at: a), let idx = drawing.indices(ref) else { return }
+              shape.path.split(at: a) != nil, let idx = drawing.indices(ref) else { return }
         cancelGesture()
+        // A shape with keyforms is split at the same anchor at every key.
+        guard let pieces = changingPoints(of: shape, refusal: Drawing.topologyMessage, { $0.split(at: a) }) else { return }
         let before = drawing
-        drawing.parts[idx.0].shapes[idx.1].path = pieces[0]
+        drawing.parts[idx.0].shapes[idx.1] = pieces[0]
         var refs: Set<ShapeRef> = [ref]
         var insertAt = idx.1 + 1
         for piece in pieces.dropFirst() {
-            var copy = shape
+            var copy = piece
             copy.id = drawing.makeID()
-            copy.path = piece
             drawing.parts[idx.0].shapes.insert(copy, at: insertAt)
             insertAt += 1
             refs.insert(ShapeRef(part: ref.part, shape: copy.id))
@@ -135,8 +141,16 @@ extension DrawingEditor {
         cancelGesture()
         let before = drawing
         if refs.count == 1 {
-            if let idx = drawing.indices(first), let closed = drawing.parts[idx.0].shapes[idx.1].path.closedByJoiningEnds() {
-                drawing.parts[idx.0].shapes[idx.1].path = closed
+            // Whether the ends merge is decided where they are shown, so every key of a
+            // shape with keyforms gets the same points.
+            if let idx = drawing.indices(first) {
+                let shape = drawing.parts[idx.0].shapes[idx.1]
+                let ends = (shape.path.endPoint(.start), shape.path.endPoint(.end))
+                let merge = ends.0.flatMap { a in ends.1.map { a.distance(to: $0) <= 1e-6 } } ?? false
+                if let closed = changingPoints(of: shape, refusal: Self.closeRefusal,
+                                               { $0.closedByJoiningEnds(mergeWithin: merge ? .infinity : -1) }) {
+                    drawing.parts[idx.0].shapes[idx.1] = closed
+                }
             }
         } else {
             var remaining = refs.dropFirst().filter { drawing.shape($0).map { !$0.path.closed } == true }
