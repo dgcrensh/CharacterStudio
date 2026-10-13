@@ -324,6 +324,17 @@ private struct Builder {
             }
         }
 
+        // Onion skin of the keyform being edited: the keyed shapes (the selected ones, when
+        // any) at the neighbouring keys.
+        if editor.showsOnionSkin, !editor.isPosing {
+            for path in drawing.keyformOnionSkin(of: drawing.shapeRefs(in: editor.selection)) {
+                let poly = path.flattened(tolerance: 0.5 * px)
+                guard !poly.isEmpty else { continue }
+                CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                          width: 1.5, color: Overlay.onionColor, screenSpace: true, to: &out)
+            }
+        }
+
         // The skeleton, in the bone tool or when bones are shown everywhere.
         if editor.tool == .bone || editor.showsBones {
             let hover = editor.hoverBone

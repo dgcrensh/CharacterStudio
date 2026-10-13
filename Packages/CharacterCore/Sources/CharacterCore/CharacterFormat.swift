@@ -64,7 +64,9 @@ public struct DecodedCharacter: Sendable {
 /// alignment, per-point outline width, gradients, opacity, clipping and global colors.
 /// An accessory is a slot of its own whose `accessoryOf` names its owner's slot.
 /// 0.3 adds parameters and per-shape keyforms; the file holds the rest drawing (every
-/// parameter at its default), never the values the editor's sliders are at.
+/// parameter at its default), never the values the editor's sliders are at. A slot's
+/// optional `switches` (`PartSwitch`) change its attachment or draw place over ranges of
+/// parameter values; the slot's `attachment` still names the part's own variant.
 public enum CharacterFormat {
     public static let version = FormatVersion(0, 3, 0)
     /// The oldest version this build can open.
@@ -76,8 +78,9 @@ public enum CharacterFormat {
 
     /// `referenceFiles` names the package file holding each reference image's pixels.
     public static func encode(_ drawing: Drawing, referenceFiles: [Int: String] = [:]) -> JSONValue {
-        // The file holds the rest drawing, whatever values the parameters are at.
-        let drawing = drawing.atRest()
+        // The file holds the rest drawing, whatever values the parameters are at, with
+        // each part's own variant named rather than one a switch chose.
+        let drawing = drawing.atRest().unswitched()
         let names = slotNames(for: drawing.parts)
         let parameters = fileParameters(drawing.parameters)
         let bones = boneNames(for: drawing.bones)
@@ -110,6 +113,8 @@ public enum CharacterFormat {
                     slot.append((key: "behindSlot", value: .string(behind)))
                 }
             }
+            let switches = self.switches(part.switches, parameters: parameters, slots: slotOf)
+            if !switches.isEmpty { slot.append((key: "switches", value: .array(switches))) }
             slots.append(.object(slot))
             // Attachments are stored in their bone's space.
             var local = part
@@ -175,8 +180,16 @@ public enum CharacterFormat {
         // The parameters are written only when the character has some.
         if !parameters.list.isEmpty {
             members.append((key: "parameters", value: .array(parameters.list.map { parameter in
-                obj(["id": .string(parameter.name), "min": num(parameter.minimum), "max": num(parameter.maximum),
-                     "default": num(parameter.defaultValue)])
+                var fields: [(key: String, value: JSONValue)] = [
+                    (key: "id", value: .string(parameter.name)), (key: "min", value: num(parameter.minimum)),
+                    (key: "max", value: num(parameter.maximum)), (key: "default", value: num(parameter.defaultValue)),
+                ]
+                // A bone driver is written only when set, on a bone the file has.
+                if let driver = parameter.driver, let bone = bones[driver.bone] {
+                    fields.append((key: "driver", value: obj(["bone": .string(bone), "min": num(driver.minimumAngle),
+                                                               "max": num(driver.maximumAngle)])))
+                }
+                return .object(fields)
             })))
         }
         members += [
@@ -204,6 +217,27 @@ public enum CharacterFormat {
             out.list.append(parameter)
         }
         return out
+    }
+
+    /// A part's switches on the file's parameters, in order: the parameter by name, the
+    /// range, the variant's name and the slot it draws behind or in front of (left out
+    /// when that slot isn't in the file).
+    private static func switches(_ switches: [PartSwitch], parameters: FileParameters,
+                                 slots: [Int: String]) -> [JSONValue] {
+        switches.compactMap { s in
+            guard let i = parameters.order[s.parameter] else { return nil }
+            var members: [(key: String, value: JSONValue)] = [
+                (key: "parameter", value: .string(parameters.list[i].name)),
+                (key: "min", value: num(s.minimum)), (key: "max", value: num(s.maximum)),
+            ]
+            if let variant = s.variant { members.append((key: "attachment", value: .string(variant))) }
+            switch s.placement {
+            case .behind(let id): if let slot = slots[id] { members.append((key: "drawBehind", value: .string(slot))) }
+            case .inFront(let id): if let slot = slots[id] { members.append((key: "drawInFront", value: .string(slot))) }
+            case nil: break
+            }
+            return .object(members)
+        }
     }
 
     private static func frame(_ frame: CharacterFrame) -> JSONValue {
@@ -370,19 +404,33 @@ public enum CharacterFormat {
         return .object(members)
     }
 
-    /// The shape's keyforms on the file's parameters, by parameter order then value. The
-    /// offsets are sparse: zero points, zero members and a zero opacity are left out.
-    /// Keyforms that don't match the shape's points can't be read back, so none are written.
+    /// The shape's keyforms on the file's parameters, by parameter order then value, each
+    /// grid's after its first parameter's own. A grid keyform names first the parameter
+    /// that comes first in the file. The offsets are sparse: zero points, zero members
+    /// and a zero opacity are left out. Keyforms that don't match the shape's points can't
+    /// be read back, so none are written.
     private static func keyforms(_ shape: VectorShape, parameters: FileParameters) -> [JSONValue] {
         guard let keys = shape.keys, keys.isConsistent, keys.restPoints.count == shape.path.points.count else { return [] }
-        let written = keys.keyforms.filter { key in
-            guard let i = parameters.order[key.parameter] else { return false }
-            return !Parameter.same(key.value, parameters.list[i].defaultValue)
-        }.sorted { a, b in
-            let pa = parameters.order[a.parameter]!, pb = parameters.order[b.parameter]!
-            return pa != pb ? pa < pb : a.value < b.value
+        // Each keyform's parameters as (place in the file, value), in file order.
+        typealias Place = (order: Int, value: Double)
+        func places(_ key: Keyform) -> (Place, Place?)? {
+            guard let i = parameters.order[key.parameter],
+                  !Parameter.same(key.value, parameters.list[i].defaultValue) else { return nil }
+            guard let second = key.parameter2 else { return ((i, key.value), nil) }
+            guard let j = parameters.order[second], !Parameter.same(key.value2, parameters.list[j].defaultValue)
+            else { return nil }
+            return i < j ? ((i, key.value), (j, key.value2)) : ((j, key.value2), (i, key.value))
         }
-        return written.map { key in
+        let written = keys.keyforms.compactMap { key in places(key).map { (key: key, first: $0.0, second: $0.1) } }
+            .sorted { a, b in
+                if a.first.order != b.first.order { return a.first.order < b.first.order }
+                let sa = a.second?.order ?? -1, sb = b.second?.order ?? -1
+                if sa != sb { return sa < sb }
+                if a.first.value != b.first.value { return a.first.value < b.first.value }
+                return (a.second?.value ?? 0) < (b.second?.value ?? 0)
+            }
+        return written.map { entry in
+            let key = entry.key
             var offsets: [JSONValue] = []
             for (i, offset) in key.offsets.enumerated() {
                 var point: [(key: String, value: JSONValue)] = []
@@ -394,10 +442,14 @@ public enum CharacterFormat {
                 offsets.append(.object([(key: "point", value: .number(Double(i)))] + point))
             }
             var members: [(key: String, value: JSONValue)] = [
-                (key: "parameter", value: .string(parameters.list[parameters.order[key.parameter]!].name)),
-                (key: "value", value: num(key.value)),
-                (key: "offsets", value: .array(offsets)),
+                (key: "parameter", value: .string(parameters.list[entry.first.order].name)),
+                (key: "value", value: num(entry.first.value)),
             ]
+            if let second = entry.second {
+                members.append((key: "parameter2", value: .string(parameters.list[second.order].name)))
+                members.append((key: "value2", value: num(second.value)))
+            }
+            members.append((key: "offsets", value: .array(offsets)))
             if num(key.opacity) != 0 { members.append((key: "opacity", value: num(key.opacity))) }
             return .object(members)
         }
@@ -484,13 +536,16 @@ public enum CharacterFormat {
         if let name = try root.field("name")?.string() { drawing.name = name }
 
         let skeleton = try bones(root.field("bones")?.array() ?? [])
-        // Parameters are read before the art, whose keyforms name them.
-        drawing.parameters = try parameters(root.field("parameters")?.array() ?? [], drawing: &drawing)
+        // Parameters are read before the art, whose keyforms name them, and the slots,
+        // whose switches do.
+        let readParameters = try parameters(root.field("parameters")?.array() ?? [], drawing: &drawing)
+        drawing.parameters = readParameters.parameters
         let parameters = Dictionary(drawing.parameters.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
 
         // Slots, in draw order.
         let slotNodes = try root.field("slots")?.array() ?? []
-        typealias Slot = (id: String, attachment: String?, bone: String?, accessoryOf: String?, behindSlot: String?)
+        typealias Slot = (id: String, attachment: String?, bone: String?, accessoryOf: String?, behindSlot: String?,
+                          switches: [FileSwitch])
         var slots: [Slot] = []
         for node in slotNodes {
             let id = try node.require("id").string()
@@ -500,7 +555,8 @@ public enum CharacterFormat {
             let attachment = try node.field("attachment")?.string()
             slots.append((id: id, attachment: attachment, bone: try node.field("bone")?.string(),
                           accessoryOf: try node.field("accessoryOf")?.string(),
-                          behindSlot: try node.field("behindSlot")?.string()))
+                          behindSlot: try node.field("behindSlot")?.string(),
+                          switches: try switches(node.field("switches"), parameters: parameters)))
         }
         var ordered: [Slot] = []
         for node in try root.field("drawOrder")?.array() ?? [] {
@@ -542,6 +598,7 @@ public enum CharacterFormat {
         var partIDs: [String: Int] = [:]
         var owners: [Int: String] = [:]
         var behindSlots: [Int: String] = [:]
+        var slotSwitches: [Int: [FileSwitch]] = [:]
         for slot in ordered {
             // The slot's vector attachments in each skin, in file order. Other types are skipped.
             var found: [(skin: Int, attachments: [(name: String, node: Node)])] = []
@@ -611,6 +668,7 @@ public enum CharacterFormat {
             partIDs[slot.id] = part.id
             if let owner = slot.accessoryOf { owners[part.id] = owner }
             if let behind = slot.behindSlot { behindSlots[part.id] = behind }
+            if !slot.switches.isEmpty { slotSwitches[part.id] = slot.switches }
             drawing.parts.append(part)
         }
 
@@ -627,6 +685,12 @@ public enum CharacterFormat {
             drawing.parts[p].secondBone = secondBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
         }
         drawing.poses = try poses(root.field("poses"), boneIDs: boneIDs, drawing: &drawing)
+        // Parameter drivers find their bones by name; an unknown bone drops the driver.
+        for (i, driver) in readParameters.drivers {
+            guard let bone = boneIDs[driver.bone] else { continue }
+            drawing.parameters[i].driver = ParameterDriver(bone: bone, minimumAngle: driver.minimum,
+                                                           maximumAngle: driver.maximum)
+        }
         // Accessories find their owners by slot id. An unknown owner leaves a plain part;
         // an accessory of an accessory belongs to that one's owner, on the owner's bone.
         for p in drawing.parts.indices {
@@ -635,6 +699,19 @@ public enum CharacterFormat {
             drawing.parts[p].behindLayer = behindSlots[drawing.parts[p].id].flatMap { partIDs[$0] }
         }
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
+        // Switches find the slots they place their parts next to; an unknown slot (or the
+        // part's own) drops the placement. Switches covering a parameter's default show at once.
+        for p in drawing.parts.indices {
+            drawing.parts[p].switches = (slotSwitches[drawing.parts[p].id] ?? []).map { file in
+                var s = file.value
+                s.placement = file.placement.flatMap { placement in
+                    partIDs[placement.slot].map { placement.behind ? .behind($0) : .inFront($0) }
+                }
+                return s
+            }
+        }
+        if !drawing.switchesAreValid { drawing.repairSwitches() }
+        drawing.applySwitches()
         // A group whose shapes aren't together is read as one group per run; unused groups go.
         if !drawing.groupsAreValid { drawing.repairGroups() }
 
@@ -727,10 +804,38 @@ public enum CharacterFormat {
         return min(max(pairs.filter { $0.bone == second }.reduce(0) { $0 + $1.weight } / total, 0), 1)
     }
 
+    /// A switch as read from a slot, with the slot it draws behind or in front of by id.
+    struct FileSwitch {
+        var value: PartSwitch
+        var placement: (slot: String, behind: Bool)?
+    }
+
+    /// A slot's switches. A switch on an unknown parameter is skipped; `min` and `max`
+    /// default to the parameter's ends, are taken in either order and brought into its
+    /// range. `drawBehind` wins over `drawInFront` when a switch has both.
+    private static func switches(_ node: Node?, parameters: [String: Parameter]) throws -> [FileSwitch] {
+        guard let node else { return [] }
+        var out: [FileSwitch] = []
+        for switchNode in try node.array() {
+            let name = try switchNode.require("parameter").string()
+            let lo = try switchNode.number("min"), hi = try switchNode.number("max")
+            let variant = try switchNode.string("attachment")
+            let behind = try switchNode.string("drawBehind"), inFront = try switchNode.string("drawInFront")
+            guard let parameter = parameters[name] else { continue }
+            let a = parameter.clamped(lo ?? parameter.minimum), b = parameter.clamped(hi ?? parameter.maximum)
+            out.append(FileSwitch(value: PartSwitch(parameter: parameter.id, minimum: a, maximum: b, variant: variant),
+                                  placement: behind.map { ($0, true) } ?? inFront.map { ($0, false) }))
+        }
+        return out
+    }
+
     /// The parameters, in panel order. A missing range is 0 to 1 and a missing default the
-    /// minimum; a default outside the range is brought into it.
-    private static func parameters(_ nodes: [Node], drawing: inout Drawing) throws -> [Parameter] {
+    /// minimum; a default outside the range is brought into it. Drivers come back by
+    /// parameter index with their bone's name, to resolve once the bones have ids.
+    private static func parameters(_ nodes: [Node], drawing: inout Drawing) throws
+        -> (parameters: [Parameter], drivers: [(index: Int, driver: (bone: String, minimum: Double, maximum: Double))]) {
         var out: [Parameter] = []
+        var drivers: [(index: Int, driver: (bone: String, minimum: Double, maximum: Double))] = []
         for node in nodes {
             let name = try node.require("id").string()
             guard !out.contains(where: { $0.name == name }) else {
@@ -740,10 +845,15 @@ public enum CharacterFormat {
             guard minimum <= maximum else {
                 throw CharacterFileError.invalid(path: node.childPath("min"), problem: "is greater than max")
             }
+            if let driver = try node.field("driver") {
+                drivers.append((out.count, (bone: try driver.require("bone").string(),
+                                            minimum: try driver.require("min").number(),
+                                            maximum: try driver.require("max").number())))
+            }
             out.append(Parameter(id: drawing.makeID(), name: name, minimum: minimum, maximum: maximum,
                                  defaultValue: try node.number("default") ?? minimum))
         }
-        return out
+        return (out, drivers)
     }
 
     /// The test poses: by name, each bone's turn. Unknown bones are skipped.
@@ -887,8 +997,9 @@ public enum CharacterFormat {
     }
 
     /// A shape's keyforms, offsets from its points (the rest drawing). A keyform on an
-    /// unknown parameter, or at its parameter's default, is skipped; a value outside the
-    /// range is brought into it, and of two keyforms at one value the first is kept.
+    /// unknown parameter, or at its parameter's default, is skipped (a grid keyform also
+    /// when its two parameters are the same); a value outside the range is brought into
+    /// it, and of two keyforms at one place the first is kept.
     private static func keyforms(_ node: Node, pointCount: Int, parameters: [String: Parameter]) throws -> [Keyform] {
         var out: [Keyform] = []
         for keyNode in try node.array() {
@@ -909,11 +1020,20 @@ public enum CharacterFormat {
                                                outHandle: try offsetNode.vec2("out") ?? .zero)
             }
             let opacity = try keyNode.number("opacity") ?? 0
+            let second = try keyNode.string("parameter2")
+            let value2 = second == nil ? 0 : try keyNode.requireNumber("value2")
             guard let parameter = parameters[name] else { continue }
             let clamped = parameter.clamped(value)
-            guard !Parameter.same(clamped, parameter.defaultValue),
-                  !out.contains(where: { $0.parameter == parameter.id && Parameter.same($0.value, clamped) }) else { continue }
-            out.append(Keyform(parameter: parameter.id, value: clamped, offsets: offsets, opacity: opacity))
+            guard !Parameter.same(clamped, parameter.defaultValue) else { continue }
+            var coordinate = KeyCoordinate(parameter: parameter.id, value: clamped)
+            if let second {
+                guard let other = parameters[second], other.id != parameter.id else { continue }
+                let clamped2 = other.clamped(value2)
+                guard !Parameter.same(clamped2, other.defaultValue) else { continue }
+                coordinate = KeyCoordinate(parameter.id, clamped, other.id, clamped2)
+            }
+            guard !out.contains(where: { $0.coordinate.matches(coordinate) }) else { continue }
+            out.append(Keyform(at: coordinate, offsets: offsets, opacity: opacity))
         }
         return out
     }

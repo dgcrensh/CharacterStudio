@@ -26,12 +26,22 @@ extension Drawing {
     /// accessory's id, name and flags) drawn just behind its owner's art, or behind its
     /// `behindLayer` when that is set, after any other behind shapes already there.
     /// Clipping and group clipping work within each side, so a shape drawn behind clips
-    /// only to shapes drawn behind with it.
+    /// only to shapes drawn behind with it. A part an applying switch places
+    /// (`PartSwitch.placement`) draws just behind or in front of its target instead.
     public var drawStack: [Part] { drawStackPieces.map(\.part) }
 
     /// `drawStack`, with each entry flagged when it is an accessory's behind shapes
     /// rather than a whole layer or the rest of a split accessory.
     public var drawStackPieces: [(part: Part, isBehind: Bool)] {
+        let pieces = unswitchedDrawStackPieces
+        let placements = switchPlacements
+        guard !placements.isEmpty else { return pieces }
+        return Self.placing(pieces, placements)
+    }
+
+    /// `drawStackPieces` as the layers stack with no switch placing them: the order the
+    /// layers panel shows and reorders, whatever the parameters are at.
+    public var unswitchedDrawStackPieces: [(part: Part, isBehind: Bool)] {
         let ids = Set(parts.map(\.id))
         let owners = Set(parts.filter { $0.accessoryOf == nil }.map(\.id))
         func splits(_ part: Part) -> Bool {

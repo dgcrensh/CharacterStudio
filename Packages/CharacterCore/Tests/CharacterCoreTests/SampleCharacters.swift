@@ -128,4 +128,131 @@ enum SampleCharacters {
                    NamedPose(id: d.makeID(), name: "Lean", pose: Pose(rotations: [bodyBone.id: -10, headBone.id: -8]))]
         return d
     }
+
+    /// Tam, built in code like Pip (`Schema/examples/tam.charstudio`): a head that turns.
+    ///
+    /// `AngleX` and `AngleY` run -30 to 30 with the rest at 0. Positive `AngleX` turns the
+    /// face to the viewer's right, and positive `AngleY` tips it down. The right turn is
+    /// drawn as keyforms at `AngleX` 30, with grid keyforms at (30, -30) and (30, 30) where
+    /// the features also narrow; `AngleY` has keyforms at -30 and 30. Past `AngleX` 10 the
+    /// far ear (Ear.L, on the viewer's right) tucks behind the head, and past 15 the nose
+    /// swaps to its side-on variant. With `mirrored` (the default) the left turn is then
+    /// made with one Mirror Keyforms on `AngleX`, as the sample file has it.
+    static func tam(mirrored: Bool = true) -> Drawing {
+        var d = Drawing()
+        d.name = "Tam"
+        let ink = StrokeStyle(color: .ink, width: 3)
+        let skin = RGBAColor(hex: "#E8B48AFF")!
+        let hairColor = RGBAColor(hex: "#3B2A20FF")!
+        func shape(_ path: BezierPath, fill: RGBAColor?, stroke: StrokeStyle? = ink) -> VectorShape {
+            VectorShape(id: d.makeID(), path: path, fill: fill, stroke: stroke)
+        }
+        func ellipse(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double) -> BezierPath {
+            ShapePrimitives.ellipse(Rect(minPoint: Vec2(cx - rx, cy - ry), maxPoint: Vec2(cx + rx, cy + ry)))
+        }
+
+        let bodyBone = Bone(id: d.makeID(), name: "Body", head: Vec2(0, 0), tail: Vec2(0, -60))
+        let headBone = Bone(id: d.makeID(), name: "Head", parent: bodyBone.id, head: Vec2(0, -60), tail: Vec2(0, -160))
+        d.bones = [bodyBone, headBone]
+        let angleX = Parameter(id: d.makeID(), name: "AngleX", minimum: -30, maximum: 30, defaultValue: 0)
+        let angleY = Parameter(id: d.makeID(), name: "AngleY", minimum: -30, maximum: 30, defaultValue: 0)
+        d.parameters = [angleX, angleY]
+        let x = angleX.id, y = angleY.id
+
+        /// `rest` keyed at each coordinate with its path moved by the transform there.
+        func keyed(_ rest: VectorShape, _ keys: [(KeyCoordinate, Affine2D)]) -> VectorShape {
+            var out = rest
+            out.setKeyforms(restPath: rest.path, restOpacity: rest.opacity, keys: keys.map { coordinate, t in
+                var path = rest.path
+                path.apply(t)
+                return (coordinate: coordinate, path: path, opacity: rest.opacity)
+            })
+            return out
+        }
+        func move(_ dx: Double, _ dy: Double) -> Affine2D { .translation(Vec2(dx, dy)) }
+        /// Moved, and narrowed about `center` as the face turns side-on.
+        func narrowed(_ dx: Double, _ dy: Double, about center: Vec2) -> Affine2D {
+            .translation(Vec2(dx, dy)) * .translation(center) * .scale(x: 0.82, y: 1) * .translation(-center)
+        }
+        /// The keys every facial feature has: the right turn, up and down, and the corners.
+        func feature(_ rest: VectorShape, center: Vec2) -> VectorShape {
+            keyed(rest, [
+                (KeyCoordinate(parameter: x, value: 30), narrowed(14, 0, about: center)),
+                (KeyCoordinate(parameter: y, value: -30), move(0, -9)),
+                (KeyCoordinate(parameter: y, value: 30), move(0, 9)),
+                (KeyCoordinate(x, 30, y, -30), narrowed(12, -8, about: center) * .translation(center) *
+                    .scale(x: 1, y: 0.9) * .translation(-center)),
+                (KeyCoordinate(x, 30, y, 30), narrowed(12, 8, about: center) * .translation(center) *
+                    .scale(x: 1, y: 0.9) * .translation(-center)),
+            ])
+        }
+
+        let body = Part(id: d.makeID(), name: "Body",
+                        shapes: [shape(ShapePrimitives.rectangle(Rect(minPoint: Vec2(-36, -66), maxPoint: Vec2(36, 20)),
+                                                                 cornerRadius: 22), fill: RGBAColor(hex: "#5C8DD6FF")!)],
+                        pivot: Vec2(0, 0), bone: bodyBone.id)
+        let headShape = keyed(shape(ellipse(0, -110, 48, 52), fill: skin), [
+            (KeyCoordinate(parameter: x, value: 30), move(4, 0)),
+            (KeyCoordinate(parameter: y, value: -30), move(0, -3)),
+            (KeyCoordinate(parameter: y, value: 30), move(0, 3)),
+        ])
+        let head = Part(id: d.makeID(), name: "Head", shapes: [headShape], pivot: Vec2(0, -60), bone: headBone.id)
+        func accessory(_ name: String, _ shapes: [VectorShape], pivot: Vec2) -> Part {
+            var part = Part(id: d.makeID(), name: name, shapes: shapes, pivot: pivot, bone: headBone.id)
+            part.accessoryOf = head.id
+            return part
+        }
+        // The ears: on the right turn the far one (Ear.L) slides in behind the head and the
+        // near one (Ear.R) comes forward; tipping the head down lifts them.
+        func ear(_ cx: Double, slide: Double) -> VectorShape {
+            keyed(shape(ellipse(cx, -108, 9, 14), fill: skin), [
+                (KeyCoordinate(parameter: x, value: 30), move(slide, 0)),
+                (KeyCoordinate(parameter: y, value: -30), move(0, 6)),
+                (KeyCoordinate(parameter: y, value: 30), move(0, -6)),
+            ])
+        }
+        let earR = accessory("Ear.R", [ear(-48, slide: 8)], pivot: Vec2(-48, -108))
+        var earL = accessory("Ear.L", [ear(48, slide: -16)], pivot: Vec2(48, -108))
+        earL.switches = [PartSwitch(parameter: x, minimum: 10, maximum: 30, placement: .behind(head.id))]
+        let eyes = accessory("Eyes", [feature(shape(ellipse(-17, -116, 5, 7), fill: .ink, stroke: nil), center: Vec2(-17, -116)),
+                                      feature(shape(ellipse(17, -116, 5, 7), fill: .ink, stroke: nil), center: Vec2(17, -116))],
+                             pivot: Vec2(0, -116))
+        // The nose: a small oval from the front, a wedge pointing right past AngleX 15.
+        var nose = accessory("Nose", [], pivot: Vec2(0, -100))
+        let front = feature(shape(ellipse(0, -100, 4, 6), fill: nil), center: Vec2(0, -100))
+        let wedge = BezierPath(points: [PathPoint(Vec2(10, -110), smooth: false), PathPoint(Vec2(22, -96), smooth: false),
+                                        PathPoint(Vec2(12, -93), smooth: false)], closed: false)
+        let side = keyed(shape(wedge, fill: nil), [
+            (KeyCoordinate(parameter: y, value: -30), move(0, -9)),
+            (KeyCoordinate(parameter: y, value: 30), move(0, 9)),
+        ])
+        let frontID = d.makeID(), sideID = d.makeID()
+        nose.variants = [PartVariant(id: frontID, name: "Front", shapes: [front]), PartVariant(id: sideID, name: "Side", shapes: [side])]
+        nose.activateVariant(frontID)
+        nose.switches = [PartSwitch(parameter: x, minimum: 15, maximum: 30, variant: "Side")]
+        let mouth = accessory("Mouth", [feature(shape(ellipse(0, -84, 11, 3), fill: RGBAColor(hex: "#A8453FFF")!, stroke: nil),
+                                                center: Vec2(0, -84))], pivot: Vec2(0, -84))
+        // A fringe across the forehead.
+        let fringePath = BezierPath(points: [
+            PathPoint(Vec2(-46, -124), in: Vec2(0, 0), out: Vec2(4, -26)),
+            PathPoint(Vec2(0, -163), in: Vec2(-30, 0), out: Vec2(30, 0)),
+            PathPoint(Vec2(46, -124), in: Vec2(-4, -26), out: Vec2(0, 0)),
+            PathPoint(Vec2(0, -136), in: Vec2(24, -2), out: Vec2(-24, -2)),
+        ], closed: true)
+        let hair = accessory("Hair", [keyed(shape(fringePath, fill: hairColor, stroke: nil), [
+            (KeyCoordinate(parameter: x, value: 30), move(9, 0)),
+            (KeyCoordinate(parameter: y, value: -30), move(0, -5)),
+            (KeyCoordinate(parameter: y, value: 30), move(0, 6)),
+        ])], pivot: Vec2(0, -140))
+
+        d.parts = [body, head, earR, earL, eyes, nose, mouth, hair]
+        guard mirrored else { return d }
+        // The left turn: one Mirror Keyforms across the middle of the face.
+        var e = DrawingEditor(drawing: d)
+        e.symmetry = SymmetrySettings(isEnabled: true, axis: 0)
+        e.setParameterValue(30, of: x)
+        e.mirrorKeyforms(of: x)
+        e.resetParameters()
+        return e.drawing
+    }
 }

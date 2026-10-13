@@ -484,6 +484,7 @@ extension DrawingEditor {
         for p in clip.parts.indices {
             clip.parts[p].variants = []
             clip.parts[p].activeVariant = nil
+            clip.parts[p].switchedFrom = nil
             clip.parts[p].otherSkinArt = [:]
             clip.parts[p].shownSkin = Skin.defaultID
         }

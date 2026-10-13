@@ -148,7 +148,25 @@
         "bone": { "type": "string" },
         "attachment": { "description": "The attachment shown by default (the shown variant, for a part with several), or absent for an empty slot.", "type": "string" },
         "accessoryOf": { "description": "The id of the slot this one is an accessory of (hair or a hat on the head). Written only for accessories. An accessory is on its owner's bone and has its own place in drawOrder.", "type": "string" },
-        "behindSlot": { "description": "For an accessory with behindOwner shapes: the id of the slot those shapes draw just behind instead of the owner (the neck, for long back hair on the head). Written only when it isn't the owner. An unknown slot reads as the owner.", "type": "string" }
+        "behindSlot": { "description": "For an accessory with behindOwner shapes: the id of the slot those shapes draw just behind instead of the owner (the neck, for long back hair on the head). Written only when it isn't the owner. An unknown slot reads as the owner.", "type": "string" },
+        "switches": {
+          "description": "Format 0.3: what the slot does over ranges of parameter values, for changes too big to morph (a nose seen side-on, the far ear tucking behind the head as it turns). Of the switches that apply, the first naming an attachment the slot has decides the attachment shown, and the first with a placement decides where the slot draws. Written only when the slot has some.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/switch" }
+        }
+      }
+    },
+    "switch": {
+      "type": "object",
+      "required": ["parameter"],
+      "not": { "required": ["drawBehind", "drawInFront"] },
+      "properties": {
+        "parameter": { "description": "The id of a parameter. A switch on an unknown parameter is ignored.", "type": "string" },
+        "min": { "description": "The lowest value where the switch applies, included. Defaults to the parameter's min; brought into its range.", "type": "number" },
+        "max": { "description": "The highest value where the switch applies, included. Defaults to the parameter's max; brought into its range. min and max are read in either order.", "type": "number" },
+        "attachment": { "description": "The name of the slot's attachment (variant) shown while the switch applies, in whichever skin is shown. Ignored where the slot has no attachment of that name. Switching to an empty attachment hides the slot.", "type": "string" },
+        "drawBehind": { "description": "The id of a slot the whole slot draws just behind while the switch applies, wherever that slot is in drawOrder. An unknown slot, or the slot itself, is ignored.", "type": "string" },
+        "drawInFront": { "description": "The id of a slot the whole slot draws just in front of while the switch applies. Not with drawBehind.", "type": "string" }
       }
     },
     "attachment": {
@@ -228,15 +246,28 @@
         "id": { "description": "The parameter's name, unique among the parameters. Keyforms refer to it.", "type": "string" },
         "min": { "description": "The lowest value. Defaults to 0; not more than max.", "type": "number" },
         "max": { "description": "The highest value. Defaults to 1.", "type": "number" },
-        "default": { "description": "The value the rest drawing shows, brought into min to max. Defaults to min.", "type": "number" }
+        "default": { "description": "The value the rest drawing shows, brought into min to max. Defaults to min.", "type": "number" },
+        "driver": {
+          "description": "A bone whose turn sets the value as the skeleton is posed: its turn from its rest rotation (degrees clockwise, as in poses) at min gives the parameter's min and at max its max, linearly between and held beyond. min and max may be in either order; equal angles drive nothing. A driver on an unknown bone is ignored. Absent means none.",
+          "type": "object",
+          "required": ["bone", "min", "max"],
+          "properties": {
+            "bone": { "description": "The id of a bone (not root).", "type": "string" },
+            "min": { "description": "The turn, in degrees, that gives the parameter's min.", "type": "number" },
+            "max": { "description": "The turn, in degrees, that gives the parameter's max.", "type": "number" }
+          }
+        }
       }
     },
     "keyform": {
       "type": "object",
       "required": ["parameter", "value"],
+      "dependentRequired": { "parameter2": ["value2"], "value2": ["parameter2"] },
       "properties": {
         "parameter": { "description": "The id of a parameter. A keyform on an unknown parameter is ignored.", "type": "string" },
         "value": { "description": "The parameter value the keyform is at, brought into its range. A keyform at the default is ignored (the rest drawing is the key there); of two at one value the first is used.", "type": "number" },
+        "parameter2": { "description": "For a keyform on a grid of two parameters (such as AngleX × AngleY): the id of the second parameter, which comes after parameter in parameters. Its offsets are the whole offset from the rest drawing at that point of the grid. A grid keyform on an unknown parameter, on parameter itself, or with either value at its default, is ignored.", "type": "string" },
+        "value2": { "description": "The second parameter's value, brought into its range. Required with parameter2.", "type": "number" },
         "offsets": {
           "description": "How far each point moves from the rest drawing here, in the attachment's bone space like the points. Points that don't move are left out.",
           "type": "array",

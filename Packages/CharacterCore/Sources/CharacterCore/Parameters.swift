@@ -33,6 +33,10 @@ extension ShapeKeyforms {
     /// as the rest stands for it), and the old default becomes an explicit keyform unless
     /// the blend between the other keys already gives the same shape there. Keyforms on
     /// other parameters are offsets that add on top, so they stay as they are.
+    ///
+    /// Grid keyforms on the parameter keep their shapes at their own points (their offsets
+    /// move with the rest); those at the new default go, as that line of the grid is now
+    /// the other parameter's own keyforms. Between grid points the blend can change.
     mutating func rebase(parameter id: Int, from oldDefault: Double, to newDefault: Double) {
         guard isConsistent, parameters.contains(id), !Parameter.same(oldDefault, newDefault) else { return }
         let shift = blended(parameter: id, at: newDefault, defaultValue: oldDefault)
@@ -40,8 +44,8 @@ extension ShapeKeyforms {
         restOpacity += shift.opacity
         var rebased: [Keyform] = []
         for var key in keyforms {
-            if key.parameter == id {
-                if Parameter.same(key.value, newDefault) { continue }
+            if let value = key.coordinate.value(of: id) {
+                if Parameter.same(value, newDefault) { continue }
                 key.offsets = zip(key.offsets, shift.points).map { $0 - $1 }
                 key.opacity -= shift.opacity
             }
@@ -57,16 +61,18 @@ extension ShapeKeyforms {
     }
 
     /// Removes parameter `id`'s keyforms outside `minimum...maximum`. Where that would
-    /// change the shape at either end of the range, a keyform there keeps it.
+    /// change the shape at either end of the range, a keyform there keeps it (grid
+    /// keyforms outside the range just go).
     mutating func clip(parameter id: Int, minimum: Double, maximum: Double, defaultValue: Double) {
-        guard isConsistent, keyforms.contains(where: { $0.parameter == id && ($0.value < minimum - Parameter.tolerance ||
-                                                                 $0.value > maximum + Parameter.tolerance) }) else { return }
+        func outside(_ v: Double) -> Bool { v < minimum - Parameter.tolerance || v > maximum + Parameter.tolerance }
+        keyforms.removeAll { $0.isGrid && $0.coordinate.value(of: id).map(outside) == true }
+        guard isConsistent, keyforms.contains(where: { $0.parameter2 == nil && $0.parameter == id && outside($0.value) })
+        else { return }
         let ends = [minimum, maximum].filter {
             !Parameter.same($0, defaultValue) && keyformIndex(parameter: id, value: $0) == nil
         }
         let before = ends.map { blended(parameter: id, at: $0, defaultValue: defaultValue) }
-        keyforms.removeAll { $0.parameter == id && ($0.value < minimum - Parameter.tolerance ||
-                                                    $0.value > maximum + Parameter.tolerance) }
+        keyforms.removeAll { $0.parameter2 == nil && $0.parameter == id && outside($0.value) }
         for (end, wanted) in zip(ends, before)
         where !Self.sameOffsets(blended(parameter: id, at: end, defaultValue: defaultValue), wanted) {
             keyforms.append(Keyform(parameter: id, value: end, offsets: wanted.points, opacity: wanted.opacity))
@@ -99,26 +105,30 @@ extension VectorShape {
         evaluateKeyforms(at: values, parameters: parameters)
     }
 
-    /// Adds a keyform at (`parameter`, `value`) equal to what the shape shows there now
-    /// with every other parameter at its default, so it becomes keyed without moving.
-    /// Nothing changes when it already has one there, or its keyforms don't match its points.
-    mutating func addKeyform(parameter: Parameter, value: Double, values: [Int: Double], parameters: [Parameter]) {
-        guard !Parameter.same(value, parameter.defaultValue) else { return }
-        guard var keys else {
-            keys = ShapeKeyforms(restPoints: pointGeometry, restOpacity: opacity, keyforms: [
-                Keyform(parameter: parameter.id, value: value,
-                        offsets: Array(repeating: .zero, count: path.points.count)),
-            ])
-            evaluateKeyforms(at: values, parameters: parameters)
-            return
+    /// Adds a keyform at `coordinate` equal to what the shape shows there now with every
+    /// other parameter at its default, so it becomes keyed without moving. Nothing
+    /// changes when it already has one there, its keyforms don't match its points, or the
+    /// coordinate is at a default (`parameters` gives the defaults).
+    mutating func addKeyform(at coordinate: KeyCoordinate, values: [Int: Double], parameters: [Parameter]) {
+        let atDefault = coordinate.values.contains { id, v in
+            parameters.first { $0.id == id }.map { Parameter.same(v, $0.defaultValue) } ?? true
         }
+        guard !atDefault else { return }
+        let rest = keys?.restPoints ?? pointGeometry
+        var keys = self.keys ?? ShapeKeyforms(restPoints: pointGeometry, restOpacity: opacity)
         guard keys.isConsistent, keys.restPoints.count == path.points.count,
-              keys.keyformIndex(parameter: parameter.id, value: value) == nil else { return }
-        let here = keys.blended(parameter: parameter.id, at: value, defaultValue: parameter.defaultValue)
-        keys.keyforms.append(Keyform(parameter: parameter.id, value: value, offsets: here.points, opacity: here.opacity))
+              keys.keyformIndex(at: coordinate) == nil else { return }
+        let here = geometry(at: coordinate, parameters: parameters)
+        keys.keyforms.append(Keyform(at: coordinate, offsets: zip(here.path.points, rest).map { PointGeometry($0) - $1 },
+                                     opacity: here.opacity - keys.restOpacity))
         keys.sortKeyforms()
         self.keys = keys
         evaluateKeyforms(at: values, parameters: parameters)
+    }
+
+    /// Adds a keyform at (`parameter`, `value`) (see `addKeyform(at:values:parameters:)`).
+    mutating func addKeyform(parameter: Parameter, value: Double, values: [Int: Double], parameters: [Parameter]) {
+        addKeyform(at: KeyCoordinate(parameter: parameter.id, value: value), values: values, parameters: parameters)
     }
 }
 
@@ -188,7 +198,7 @@ extension Drawing {
         values[id] = nil
         updateKeyedShapes { shape in
             if var keys = shape.keys {
-                keys.keyforms.removeAll { $0.parameter == id }
+                keys.keyforms.removeAll { $0.coordinate.involves(id) }
                 shape.keys = keys
             }
             shape.settleKeys()
@@ -217,13 +227,18 @@ extension Drawing {
             return nil
         case .blocked:
             return Self.blockedMessage
-        case .keyform(let id, let value):
-            let name = parameter(id)?.name ?? "Parameter"
-            let text = Parameter.text(value)
-            if keyValues(of: id).contains(where: { Parameter.same($0, value) }) {
-                return "Editing keyform \(name) = \(text)"
+        case .keyform, .grid:
+            let coordinate = keyformTarget.coordinate!
+            func named(_ id: Int, _ value: Double) -> String { "\(parameter(id)?.name ?? "Parameter") = \(Parameter.text(value))" }
+            var text = named(coordinate.parameter, coordinate.value)
+            if let second = coordinate.parameter2 {
+                // In panel order.
+                let first = named(coordinate.parameter, coordinate.value), other = named(second, coordinate.value2)
+                let firstIndex = parameterIndex(coordinate.parameter) ?? 0, otherIndex = parameterIndex(second) ?? 0
+                text = firstIndex <= otherIndex ? "\(first), \(other)" : "\(other), \(first)"
             }
-            return "Editing \(name) = \(text): edits add a keyform here"
+            if hasKeyform(at: coordinate) { return "Editing keyform \(text)" }
+            return "Editing \(text): edits add a keyform here"
         }
     }
 }

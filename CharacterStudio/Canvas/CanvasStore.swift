@@ -21,6 +21,15 @@ struct ParameterRow: Identifiable, Equatable {
     let defaultValue: Double
     let value: Double
     let keyValues: [Double]
+    /// The bone whose turn sets the value, if any.
+    let driver: ParameterDriver?
+    let canMirrorKeyforms: Bool
+}
+
+/// A layer a part switch can place the selected part behind or in front of.
+struct LayerChoice: Identifiable, Equatable {
+    let id: Int
+    let name: String
 }
 
 /// The editor state SwiftUI controls show. Refreshed from the session after each
@@ -183,6 +192,16 @@ final class EditorUIState {
     var canAddKeyform = false
     var canDeleteKeyform = false
 
+    // Part switches
+    /// The selected layer, whose switches the parameters panel shows, and its name.
+    var switchPart: Int?
+    var switchPartName = ""
+    var switches: [PartSwitch] = []
+    /// The selected layer's variant names, for a switch's variant.
+    var switchVariantNames: [String] = []
+    /// The other layers, for a switch's placement.
+    var switchTargets: [LayerChoice] = []
+
     // Workspace
     var outlineView = false
     var ghostsUnselected = false
@@ -335,7 +354,7 @@ final class CanvasStore {
             update(\.frame, editor.drawing.frame)
             update(\.canExport, editor.drawing.exportArea() != nil)
             update(\.layers, LayerTree(drawing: editor.drawing))
-            refreshParameters(editor.drawing)
+            refreshParameters(editor)
         }
         update(\.tool, editor.tool)
         update(\.canUndo, editor.canUndo)
@@ -457,6 +476,14 @@ final class CanvasStore {
         } else {
             update(\.selectedPart, nil)
         }
+        let switchPart = ui.selectedPart.flatMap { editor.drawing.part($0) }
+        update(\.switchPart, switchPart?.id)
+        update(\.switchPartName, switchPart?.name ?? "")
+        update(\.switches, switchPart?.switches ?? [])
+        update(\.switchVariantNames, switchPart?.variants.map(\.name) ?? [])
+        update(\.switchTargets, switchPart.map { part in
+            editor.drawing.parts.filter { $0.id != part.id }.map { LayerChoice(id: $0.id, name: $0.name) }
+        } ?? [])
 
         if session.tapCommandCount != seenTapCommands {
             seenTapCommands = session.tapCommandCount
@@ -487,7 +514,7 @@ final class CanvasStore {
         update(\.palette, editor.drawing.palette)
         update(\.globalColors, editor.drawing.globalColors)
         // An opacity change at a slider's value can make a keyform there.
-        refreshParameters(editor.drawing)
+        refreshParameters(editor)
         if refreshedRevision != nil { refreshedRevision = editor.revision }
         if let notice = editor.notice {
             session.editor.clearNotice()
@@ -498,11 +525,13 @@ final class CanvasStore {
     }
 
     /// The parameters panel's rows and the keyform banner.
-    private func refreshParameters(_ drawing: Drawing) {
+    private func refreshParameters(_ editor: DrawingEditor) {
+        let drawing = editor.drawing
         update(\.parameters, drawing.parameters.map {
             ParameterRow(id: $0.id, name: $0.name, minimum: $0.minimum, maximum: $0.maximum,
                          defaultValue: $0.defaultValue, value: drawing.value(of: $0.id),
-                         keyValues: drawing.keyValues(of: $0.id))
+                         keyValues: drawing.keyValues(of: $0.id), driver: $0.driver,
+                         canMirrorKeyforms: editor.canMirrorKeyforms(of: $0.id))
         })
         update(\.keyformBanner, drawing.keyformBanner)
     }
@@ -725,6 +754,18 @@ final class CanvasStore {
     func resetParameters() { edit { $0.editor.resetParameters() } }
     func addKeyform() { edit { $0.editor.addKeyform() } }
     func deleteKeyform() { edit { $0.editor.deleteCurrentKeyform() } }
+    func mirrorKeyforms(of id: Int) { edit { $0.editor.mirrorKeyforms(of: id) } }
+    func setParameterDriver(_ id: Int, bone: Int, minimumAngle: Double, maximumAngle: Double) {
+        edit { $0.editor.setParameterDriver(id, bone: bone, minimumAngle: minimumAngle, maximumAngle: maximumAngle) }
+    }
+    func clearParameterDriver(_ id: Int) { edit { $0.editor.clearParameterDriver(id) } }
+
+    // MARK: Part switches
+
+    func addSwitch(to id: Int) { edit { _ = $0.editor.addSwitch(to: id) } }
+    func updateSwitch(_ index: Int, of id: Int, to value: PartSwitch) { edit { $0.editor.updateSwitch(index, of: id, to: value) } }
+    func deleteSwitch(_ index: Int, of id: Int) { edit { $0.editor.deleteSwitch(index, of: id) } }
+    func moveSwitch(_ index: Int, of id: Int, to newIndex: Int) { edit { $0.editor.moveSwitch(index, of: id, to: newIndex) } }
 
     /// A slider tick: moves the parameter, snapping onto nearby keys, and redraws the art.
     /// Not an undo step; the document hears of it once the slider stops.

@@ -113,7 +113,8 @@ public struct LayerTree: Hashable, Sendable {
     /// the skeleton and the ownership tree.
     public var drawOrder: [PartLayer]
     /// `drawOrder` with a row of its own for each accessory's behind shapes, front to
-    /// back as they draw.
+    /// back as they draw with no switch placing a part elsewhere (see
+    /// `Drawing.unswitchedDrawStackPieces`), so reordering isn't confused by a turned head.
     public var stack: [StackRow]
     /// Top to bottom.
     public var references: [ReferenceImage]
@@ -155,7 +156,7 @@ public struct LayerTree: Hashable, Sendable {
         bones = [layer(nil, name: CharacterFormat.rootBone)]
         drawOrder = layers
         let byID = Dictionary(layers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        stack = drawing.drawStackPieces.reversed().compactMap { piece in
+        stack = drawing.unswitchedDrawStackPieces.reversed().compactMap { piece in
             guard var layer = byID[piece.part.id] else { return nil }
             guard piece.isBehind else { return StackRow(layer: layer, isBehind: false) }
             layer.shapeCount = piece.part.shapes.count

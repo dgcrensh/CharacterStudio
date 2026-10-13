@@ -197,6 +197,13 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// The part's art in the skins it isn't showing, by skin id. It has default art
     /// whatever it shows, so while it shows another skin its default art is in here.
     public var otherSkinArt: [Int: PartArt] = [:]
+    /// What the part does over chosen ranges of parameter values (show another variant,
+    /// draw behind or in front of another layer), first match first; see `PartSwitch`.
+    public var switches: [PartSwitch] = []
+    /// While a switch shows one of the part's variants: the variant the part showed
+    /// before, which it goes back to when no switch applies. Not saved (the file names
+    /// this one); see `Drawing.applySwitches`.
+    public var switchedFrom: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -644,25 +651,42 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             break
         case .layer(let id):
-            // Accessories move with their part, and every variant and skin's art with it.
-            for p in family(of: id) {
-                parts[p].updateAllShapes { $0.apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, family(of: id))
         case .layers(let ids):
-            for p in families(of: ids) {
-                parts[p].updateAllShapes { $0.apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, families(of: ids))
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
-            parts[idx.0].shapes[idx.1].apply(t)
+            applyToShown(t, &parts[idx.0].shapes[idx.1])
         case .shapes:
-            for (p, s) in shapeIndices(in: selection) { parts[p].shapes[s].apply(t) }
+            for (p, s) in shapeIndices(in: selection) { applyToShown(t, &parts[p].shapes[s]) }
         case .reference(let id):
             guard let r = referenceIndex(id) else { return }
             references[r].apply(t)
         }
+    }
+
+    /// Transforms whole layers (part indices). At the rest every variant and skin's art
+    /// and the pivot move with them. Away from the rest only the shown shapes move, so the
+    /// move folds into the keyform being edited and the rest drawing stays.
+    private mutating func applyToLayers(_ t: Affine2D, _ indices: [Int]) {
+        for p in indices {
+            if parameterValues.isEmpty {
+                parts[p].updateAllShapes { $0.apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            } else {
+                for s in parts[p].shapes.indices { applyToShown(t, &parts[p].shapes[s]) }
+            }
+        }
+    }
+
+    /// Transforms a selected shape. At the rest its keyforms turn with it; away from the
+    /// rest only what it shows moves, so the edit folds into the keyform being edited.
+    private func applyToShown(_ t: Affine2D, _ shape: inout VectorShape) {
+        guard shape.keys != nil, !parameterValues.isEmpty else { return shape.apply(t) }
+        let keys = shape.keys
+        shape.keys = nil
+        shape.apply(t)
+        shape.keys = keys
     }
 
     public func applying(_ t: Affine2D, to selection: Selection) -> Drawing {
