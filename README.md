@@ -44,6 +44,24 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
 9. Head turns: keyforms on grids of two parameters (`AngleX` × `AngleY`), draw order and variant swaps by parameter, Mirror Keyforms, keyform onion skin and bone-driven parameters (done; see the notes below).
 
+## Milestone 10 notes (deformers)
+
+Milestone 10 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.3: deformers are new optional keys. The design is in [docs/plans/deformers.md](docs/plans/deformers.md); the sample is `Schema/examples/tam.charstudio`, whose face now turns with one warp.
+
+**Using it**
+
+- **Deformers section** of the layers panel: the deformers as a tree, each with the layers attached to it and then the deformers inside it. Select layers, then **Add Warp** (a 3 × 3 lattice; long-press for 2 × 2 up to 5 × 5) or **Add Rotation** (pivot at the first layer's pivot). The new deformer wraps the selected layers, nests inside the selected deformer (or the one the layers share), and is selected. Long-press a deformer to rename it, **Attach Selected Layers**, **Fit Lattice to Layers**, **Move Into** another deformer or the top level, or delete it (its layers and deformers go to its parent). Long-press an attached layer to **Detach** it.
+- **Keying a deformer:** tap it to show its handles on the canvas (a lattice of dots for a warp, a crosshair and an angle knob for a rotation). Move one or two parameter sliders and drag the lattice points or the knob: every point and handle of the attached layers bends or turns with it, and the change is keyed at those values, blending like shapes' keyforms. At rest the lattice and angle can't be changed (a notice says to move a slider first); the pivot can be dragged anywhere. A selected rotation also gets an **Angle** slider in the parameters panel. **Add Keyform** and **Delete Keyform** act on the selected deformer, and Mirror Keyforms mirrors deformers too.
+- **Nesting:** a deformer inside another moves with it, so Tam's face warp turns with the head rotation on `AngleZ`.
+- **Editing deformed art:** every tool works on the art as it is shown; edits land in the undeformed drawing (or its keyforms), so they stay put as the deformer moves.
+
+**How it works**
+
+- **Model** (CharacterCore, `Deformers.swift`): `Drawing.deformers` and `Part.deformer`. A deformer's keys reuse `ShapeKeyforms` (a displacement per lattice point, or the angle), so parameters, grids, default changes and mirroring treat them like shapes. Shapes still show what they look like in `path`; the fold in `DrawingEditor.commit` undoes the deformation (with Newton's method for a warp) before landing an edit. Tests: `DeformerTests`.
+- **Commands** (`DrawingEditor+Deformers.swift`): adding, nesting, attaching and deleting deformers, the handles and their drags, and the angle. The canvas overlay draws the selected deformer.
+- **Done when:** `HeadTurnTests.testOneFaceWarpTurnsEveryFacialFeature`: on Tam only the two ears keep per-shape keyforms, down from nine shapes in milestone 9.
+- **Format:** top-level `deformers` and `deformer` on slots; see [Schema/README.md](Schema/README.md#deformers).
+
 ## Milestone 9 notes (head turns)
 
 Milestone 9 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.3: everything new is optional keys. The design and what was measured are in [docs/plans/head-turns.md](docs/plans/head-turns.md); the sample is `Schema/examples/tam.charstudio`, a head that turns ±30 degrees both ways.

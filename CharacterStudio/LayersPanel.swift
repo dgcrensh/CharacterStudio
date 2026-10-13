@@ -5,7 +5,8 @@ import UniformTypeIdentifiers
 
 /// The layers: the character at the root, then its parts as a tree (each with its
 /// accessories and groups) or as the flat draw order, then the skeleton with the parts
-/// under the bones they belong to, then the reference image layers.
+/// under the bones they belong to, then the deformers with the layers attached to them, then
+/// the reference image layers.
 struct LayersPanel: View {
     let store: CanvasStore
     let ui: EditorUIState
@@ -19,6 +20,7 @@ struct LayersPanel: View {
     @State private var renaming: LayerTree.PartLayer?
     @State private var renamingBone: LayerTree.BoneLayer?
     @State private var renamingGroup: LayerTree.GroupLayer?
+    @State private var renamingDeformer: LayerTree.DeformerLayer?
     @State private var newName = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var importingFile = false
@@ -68,6 +70,8 @@ struct LayersPanel: View {
                     Text("Each part sits under the bone it moves with, and its accessories under it. Tap a bone to select it with the Bones tool; long-press a bone or part to rename, re-parent or move it.")
                 }
 
+                deformersSection
+
                 Section {
                     HStack {
                         PhotosPicker(selection: $photoItem, matching: .images) {
@@ -113,6 +117,13 @@ struct LayersPanel: View {
             TextField("Name", text: $newName)
             Button("Rename") {
                 if let group = renamingGroup { store.renameGroup(group.id, inPart: group.part, to: newName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Deformer", isPresented: Binding(get: { renamingDeformer != nil }, set: { if !$0 { renamingDeformer = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                if let deformer = renamingDeformer { store.renameDeformer(deformer.id, to: newName) }
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -566,6 +577,128 @@ struct LayersPanel: View {
         }
     }
 
+    // MARK: Deformers
+
+    /// The deformers as a tree, each followed by the layers attached to it and then the
+    /// deformers inside it.
+    private var deformersSection: some View {
+        Section {
+            ForEach(Self.deformerRows(ui.layers.deformers)) { row in
+                switch row {
+                case .deformer(let deformer, let depth):
+                    deformerRow(deformer)
+                        .padding(.leading, CGFloat(depth) * 18)
+                case .layer(let layer, _, let depth):
+                    attachedLayerRow(layer)
+                        .padding(.leading, CGFloat(depth) * 18)
+                }
+            }
+            if ui.layers.deformers.isEmpty {
+                Text("Select layers, then add a warp or rotation deformer.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Deformers")
+                Spacer()
+                Menu {
+                    ForEach(Array(Deformer.latticeSizes.dropFirst()), id: \.self) { size in
+                        Button("\(size) × \(size)") { store.addWarpDeformer(size: size) }
+                    }
+                } label: {
+                    Label("Add Warp", systemImage: "squareshape.split.3x3")
+                } primaryAction: {
+                    store.addWarpDeformer(size: 3)
+                }
+                Button("Add Rotation", systemImage: "arrow.triangle.2.circlepath") { store.addRotationDeformer() }
+            }
+            .font(.subheadline)
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .textCase(nil)
+        } footer: {
+            Text("A warp bends the layers attached to it with a lattice; a rotation turns them about a pivot. Tap a deformer to show its handles on the canvas, then move a parameter's slider and drag them to key it there. Add Warp makes a 3 × 3 lattice; long-press it for another size. Long-press a deformer to rename, nest or delete it.")
+        }
+    }
+
+    private func deformerRow(_ deformer: LayerTree.DeformerLayer) -> some View {
+        Button {
+            store.selectDeformer(ui.selectedDeformer == deformer.id ? nil : deformer.id)
+        } label: {
+            HStack {
+                Label(deformer.name, systemImage: deformer.isWarp ? "squareshape.split.3x3" : "arrow.triangle.2.circlepath")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                Text(deformerDetail(deformer))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if ui.selectedDeformer == deformer.id {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu { deformerMenu(deformer) }
+    }
+
+    @ViewBuilder
+    private func deformerMenu(_ deformer: LayerTree.DeformerLayer) -> some View {
+        Button("Rename", systemImage: "pencil") {
+            newName = deformer.name
+            renamingDeformer = deformer
+        }
+        Button("Attach Selected Layers", systemImage: "link") { store.attachSelectedLayers(toDeformer: deformer.id) }
+            .disabled(ui.selection != .layer && ui.selection != .shape)
+        if deformer.isWarp {
+            Button("Fit Lattice to Layers", systemImage: "arrow.up.left.and.arrow.down.right") {
+                store.fitDeformerToLayers(deformer.id)
+            }
+        }
+        let toTop = store.canMoveDeformer(deformer.id, into: nil)
+        let targets = Self.allDeformers(ui.layers.deformers).filter { store.canMoveDeformer(deformer.id, into: $0.id) }
+        if toTop || !targets.isEmpty {
+            Menu("Move Into", systemImage: "arrow.turn.down.right") {
+                if toTop {
+                    Button("Top Level") { store.moveDeformer(deformer.id, into: nil) }
+                }
+                ForEach(targets) { target in
+                    Button(target.name) { store.moveDeformer(deformer.id, into: target.id) }
+                }
+            }
+        }
+        Button("Delete", systemImage: "trash", role: .destructive) { store.deleteDeformer(deformer.id) }
+    }
+
+    /// A layer attached to a deformer: tap to select it, long-press to detach it.
+    private func attachedLayerRow(_ layer: LayerTree.AttachedLayer) -> some View {
+        Button {
+            store.selectPart(layer.id)
+        } label: {
+            HStack {
+                Label(layer.name, systemImage: "square.on.circle")
+                    .lineLimit(1)
+                Spacer()
+                if ui.selectedPart == layer.id {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isEditing)
+        .contextMenu {
+            Button("Detach", systemImage: "arrow.uturn.left") { store.attachLayers([layer.id], toDeformer: nil) }
+        }
+    }
+
+    /// "3 × 3 · 2 keyforms" for a warp, "2 keyforms" for a rotation.
+    private func deformerDetail(_ deformer: LayerTree.DeformerLayer) -> String {
+        let keyforms = deformer.keyformCount == 1 ? "1 keyform" : "\(deformer.keyformCount) keyforms"
+        return deformer.latticeSize.isEmpty ? keyforms : "\(deformer.latticeSize) · \(keyforms)"
+    }
+
     /// Adding accessories to a part, or making it an accessory of another part (or a
     /// plain part again).
     @ViewBuilder
@@ -616,6 +749,33 @@ struct LayersPanel: View {
             case .part(let part, _): "part-\(part.id)"
             }
         }
+    }
+
+    private enum DeformerRow: Identifiable {
+        case deformer(LayerTree.DeformerLayer, depth: Int)
+        case layer(LayerTree.AttachedLayer, deformer: Int, depth: Int)
+
+        var id: String {
+            switch self {
+            case .deformer(let deformer, _): "deformer-\(deformer.id)"
+            case .layer(let layer, let deformer, _): "deformer-\(deformer)-layer-\(layer.id)"
+            }
+        }
+    }
+
+    /// The deformer tree flattened into indented rows: each deformer, then the layers
+    /// attached to it, then the deformers inside it.
+    private static func deformerRows(_ deformers: [LayerTree.DeformerLayer], depth: Int = 0) -> [DeformerRow] {
+        deformers.flatMap { deformer -> [DeformerRow] in
+            [DeformerRow.deformer(deformer, depth: depth)] +
+                deformer.layers.map { DeformerRow.layer($0, deformer: deformer.id, depth: depth + 1) } +
+                deformerRows(deformer.children, depth: depth + 1)
+        }
+    }
+
+    /// Every deformer in the tree, parents before children.
+    private static func allDeformers(_ deformers: [LayerTree.DeformerLayer]) -> [LayerTree.DeformerLayer] {
+        deformers.flatMap { [$0] + allDeformers($0.children) }
     }
 
     /// The skeleton flattened into indented rows: each bone, then its parts (each

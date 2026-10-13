@@ -30,17 +30,27 @@ struct ParametersPanel: View {
                     Text("Move one slider and edit the art to make a keyform at that value, or two to make one at that point of their grid; with three or more moved the art can't be edited. Between keys the art blends. Mirror Keyforms copies the keyforms and switches on the side of the default the slider is on to the other side, mirrored across the symmetry axis (or the middle of the frame when symmetry is off).")
                 }
                 Section {
-                    Button("Add Keyform", systemImage: "plus.diamond") { store.addKeyform() }
-                        .disabled(!ui.canAddKeyform)
-                    Button("Delete Keyform", systemImage: "trash", role: .destructive) { store.deleteKeyform() }
-                        .disabled(!ui.canDeleteKeyform)
+                    if ui.keysSelectedDeformer {
+                        Button("Add Deformer Keyform", systemImage: "plus.diamond") { store.addDeformerKeyform() }
+                            .disabled(!ui.canAddDeformerKeyform)
+                        Button("Delete Deformer Keyform", systemImage: "trash", role: .destructive) {
+                            store.deleteDeformerKeyform()
+                        }
+                        .disabled(!ui.canDeleteDeformerKeyform)
+                    } else {
+                        Button("Add Keyform", systemImage: "plus.diamond") { store.addKeyform() }
+                            .disabled(!ui.canAddKeyform)
+                        Button("Delete Keyform", systemImage: "trash", role: .destructive) { store.deleteKeyform() }
+                            .disabled(!ui.canDeleteKeyform)
+                    }
                     Button("Reset All", systemImage: "arrow.uturn.backward") { store.resetParameters() }
                         .disabled(ui.keyformBanner == nil)
                     Toggle("Onion Skin", systemImage: "square.3.layers.3d.down.right",
                            isOn: Binding(get: { ui.showsOnionSkin }, set: { store.setShowsOnionSkin($0) }))
                 } footer: {
-                    Text("Add and Delete Keyform act on the selected shapes at the moved sliders' values; with nothing selected, Delete Keyform removes that keyform from every shape. Onion Skin outlines the keyed shapes at the neighbouring keys.")
+                    Text("Add and Delete Keyform act on the selected shapes at the moved sliders' values; with nothing selected, Delete Keyform removes that keyform from every shape. With a deformer selected in the layers panel they act on it instead. Onion Skin outlines the keyed shapes at the neighbouring keys.")
                 }
+                rotationSection
                 switchesSection
             }
             Section {
@@ -123,6 +133,30 @@ struct ParametersPanel: View {
             }
             numberRow("Turn at Maximum (°)", driver.maximumAngle) {
                 store.setParameterDriver(row.id, bone: driver.bone, minimumAngle: driver.minimumAngle, maximumAngle: $0)
+            }
+        }
+    }
+
+    // MARK: Rotation deformer
+
+    /// The selected rotation deformer's angle where the sliders are, keyed there when moved.
+    @ViewBuilder
+    private var rotationSection: some View {
+        if ui.selectedDeformerIsRotation, let id = ui.selectedDeformer {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Angle") {
+                        Text("\(ui.selectedDeformerAngle, format: .number.precision(.fractionLength(0...1)))°")
+                            .monospacedDigit()
+                    }
+                    Slider(value: Binding(get: { ui.selectedDeformerAngle }, set: { store.setDeformerAngle($0, of: id) }),
+                           in: -90...90)
+                }
+                .disabled(!ui.canKeyDeformer)
+            } header: {
+                Text(ui.selectedDeformerName)
+            } footer: {
+                Text("Move one or two parameter sliders, then turn the rotation to key its angle there.")
             }
         }
     }

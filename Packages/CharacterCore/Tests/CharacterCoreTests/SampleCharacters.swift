@@ -131,13 +131,17 @@ enum SampleCharacters {
 
     /// Tam, built in code like Pip (`Schema/examples/tam.charstudio`): a head that turns.
     ///
-    /// `AngleX` and `AngleY` run -30 to 30 with the rest at 0. Positive `AngleX` turns the
-    /// face to the viewer's right, and positive `AngleY` tips it down. The right turn is
-    /// drawn as keyforms at `AngleX` 30, with grid keyforms at (30, -30) and (30, 30) where
-    /// the features also narrow; `AngleY` has keyforms at -30 and 30. Past `AngleX` 10 the
-    /// far ear (Ear.L, on the viewer's right) tucks behind the head, and past 15 the nose
-    /// swaps to its side-on variant. With `mirrored` (the default) the left turn is then
-    /// made with one Mirror Keyforms on `AngleX`, as the sample file has it.
+    /// `AngleX`, `AngleY` and `AngleZ` run -30 to 30 with the rest at 0. Positive `AngleX`
+    /// turns the face to the viewer's right, positive `AngleY` tips it down and positive
+    /// `AngleZ` tilts the head clockwise. One warp deformer, Face, over the head and its
+    /// features does the turn: its lattice is keyed at `AngleX` 30 (the middle column slides
+    /// right, so the far side of the face narrows and the near side widens), at `AngleY` -30
+    /// and 30, and at the grid corners (30, -30) and (30, 30), where the face also squashes.
+    /// The face's shapes have no keyforms of their own. A rotation deformer, Head, turns the
+    /// face and the ears about the neck for `AngleZ`. The ears keep keyforms: on the turn the
+    /// far one (Ear.L, on the viewer's right) slides in behind the head past `AngleX` 10, and
+    /// past 15 the nose swaps to its side-on variant. With `mirrored` (the default) the left
+    /// turn is then made with one Mirror Keyforms on `AngleX`, as the sample file has it.
     static func tam(mirrored: Bool = true) -> Drawing {
         var d = Drawing()
         d.name = "Tam"
@@ -156,7 +160,8 @@ enum SampleCharacters {
         d.bones = [bodyBone, headBone]
         let angleX = Parameter(id: d.makeID(), name: "AngleX", minimum: -30, maximum: 30, defaultValue: 0)
         let angleY = Parameter(id: d.makeID(), name: "AngleY", minimum: -30, maximum: 30, defaultValue: 0)
-        d.parameters = [angleX, angleY]
+        let angleZ = Parameter(id: d.makeID(), name: "AngleZ", minimum: -30, maximum: 30, defaultValue: 0)
+        d.parameters = [angleX, angleY, angleZ]
         let x = angleX.id, y = angleY.id
 
         /// `rest` keyed at each coordinate with its path moved by the transform there.
@@ -170,40 +175,20 @@ enum SampleCharacters {
             return out
         }
         func move(_ dx: Double, _ dy: Double) -> Affine2D { .translation(Vec2(dx, dy)) }
-        /// Moved, and narrowed about `center` as the face turns side-on.
-        func narrowed(_ dx: Double, _ dy: Double, about center: Vec2) -> Affine2D {
-            .translation(Vec2(dx, dy)) * .translation(center) * .scale(x: 0.82, y: 1) * .translation(-center)
-        }
-        /// The keys every facial feature has: the right turn, up and down, and the corners.
-        func feature(_ rest: VectorShape, center: Vec2) -> VectorShape {
-            keyed(rest, [
-                (KeyCoordinate(parameter: x, value: 30), narrowed(14, 0, about: center)),
-                (KeyCoordinate(parameter: y, value: -30), move(0, -9)),
-                (KeyCoordinate(parameter: y, value: 30), move(0, 9)),
-                (KeyCoordinate(x, 30, y, -30), narrowed(12, -8, about: center) * .translation(center) *
-                    .scale(x: 1, y: 0.9) * .translation(-center)),
-                (KeyCoordinate(x, 30, y, 30), narrowed(12, 8, about: center) * .translation(center) *
-                    .scale(x: 1, y: 0.9) * .translation(-center)),
-            ])
-        }
 
         let body = Part(id: d.makeID(), name: "Body",
                         shapes: [shape(ShapePrimitives.rectangle(Rect(minPoint: Vec2(-36, -66), maxPoint: Vec2(36, 20)),
                                                                  cornerRadius: 22), fill: RGBAColor(hex: "#5C8DD6FF")!)],
                         pivot: Vec2(0, 0), bone: bodyBone.id)
-        let headShape = keyed(shape(ellipse(0, -110, 48, 52), fill: skin), [
-            (KeyCoordinate(parameter: x, value: 30), move(4, 0)),
-            (KeyCoordinate(parameter: y, value: -30), move(0, -3)),
-            (KeyCoordinate(parameter: y, value: 30), move(0, 3)),
-        ])
-        let head = Part(id: d.makeID(), name: "Head", shapes: [headShape], pivot: Vec2(0, -60), bone: headBone.id)
+        let head = Part(id: d.makeID(), name: "Head", shapes: [shape(ellipse(0, -110, 48, 52), fill: skin)],
+                        pivot: Vec2(0, -60), bone: headBone.id)
         func accessory(_ name: String, _ shapes: [VectorShape], pivot: Vec2) -> Part {
             var part = Part(id: d.makeID(), name: name, shapes: shapes, pivot: pivot, bone: headBone.id)
             part.accessoryOf = head.id
             return part
         }
-        // The ears: on the right turn the far one (Ear.L) slides in behind the head and the
-        // near one (Ear.R) comes forward; tipping the head down lifts them.
+        // The ears, outside the face: on the right turn the far one (Ear.L) slides in behind
+        // the head and the near one (Ear.R) comes forward; tipping the head down lifts them.
         func ear(_ cx: Double, slide: Double) -> VectorShape {
             keyed(shape(ellipse(cx, -108, 9, 14), fill: skin), [
                 (KeyCoordinate(parameter: x, value: 30), move(slide, 0)),
@@ -214,24 +199,22 @@ enum SampleCharacters {
         let earR = accessory("Ear.R", [ear(-48, slide: 8)], pivot: Vec2(-48, -108))
         var earL = accessory("Ear.L", [ear(48, slide: -16)], pivot: Vec2(48, -108))
         earL.switches = [PartSwitch(parameter: x, minimum: 10, maximum: 30, placement: .behind(head.id))]
-        let eyes = accessory("Eyes", [feature(shape(ellipse(-17, -116, 5, 7), fill: .ink, stroke: nil), center: Vec2(-17, -116)),
-                                      feature(shape(ellipse(17, -116, 5, 7), fill: .ink, stroke: nil), center: Vec2(17, -116))],
+        let eyes = accessory("Eyes", [shape(ellipse(-17, -116, 5, 7), fill: .ink, stroke: nil),
+                                      shape(ellipse(17, -116, 5, 7), fill: .ink, stroke: nil)],
                              pivot: Vec2(0, -116))
-        // The nose: a small oval from the front, a wedge pointing right past AngleX 15.
+        // The nose: a small oval from the front, a wedge pointing right past AngleX 15 (drawn
+        // where the face warp takes it from: the turn slides it right).
         var nose = accessory("Nose", [], pivot: Vec2(0, -100))
-        let front = feature(shape(ellipse(0, -100, 4, 6), fill: nil), center: Vec2(0, -100))
-        let wedge = BezierPath(points: [PathPoint(Vec2(10, -110), smooth: false), PathPoint(Vec2(22, -96), smooth: false),
-                                        PathPoint(Vec2(12, -93), smooth: false)], closed: false)
-        let side = keyed(shape(wedge, fill: nil), [
-            (KeyCoordinate(parameter: y, value: -30), move(0, -9)),
-            (KeyCoordinate(parameter: y, value: 30), move(0, 9)),
-        ])
+        let front = shape(ellipse(0, -100, 4, 6), fill: nil)
+        let wedge = BezierPath(points: [PathPoint(Vec2(-3, -110), smooth: false), PathPoint(Vec2(9, -96), smooth: false),
+                                        PathPoint(Vec2(-1, -93), smooth: false)], closed: false)
+        let side = shape(wedge, fill: nil)
         let frontID = d.makeID(), sideID = d.makeID()
         nose.variants = [PartVariant(id: frontID, name: "Front", shapes: [front]), PartVariant(id: sideID, name: "Side", shapes: [side])]
         nose.activateVariant(frontID)
         nose.switches = [PartSwitch(parameter: x, minimum: 15, maximum: 30, variant: "Side")]
-        let mouth = accessory("Mouth", [feature(shape(ellipse(0, -84, 11, 3), fill: RGBAColor(hex: "#A8453FFF")!, stroke: nil),
-                                                center: Vec2(0, -84))], pivot: Vec2(0, -84))
+        let mouth = accessory("Mouth", [shape(ellipse(0, -84, 11, 3), fill: RGBAColor(hex: "#A8453FFF")!, stroke: nil)],
+                              pivot: Vec2(0, -84))
         // A fringe across the forehead.
         let fringePath = BezierPath(points: [
             PathPoint(Vec2(-46, -124), in: Vec2(0, 0), out: Vec2(4, -26)),
@@ -239,13 +222,43 @@ enum SampleCharacters {
             PathPoint(Vec2(46, -124), in: Vec2(-4, -26), out: Vec2(0, 0)),
             PathPoint(Vec2(0, -136), in: Vec2(24, -2), out: Vec2(-24, -2)),
         ], closed: true)
-        let hair = accessory("Hair", [keyed(shape(fringePath, fill: hairColor, stroke: nil), [
-            (KeyCoordinate(parameter: x, value: 30), move(9, 0)),
-            (KeyCoordinate(parameter: y, value: -30), move(0, -5)),
-            (KeyCoordinate(parameter: y, value: 30), move(0, 6)),
-        ])], pivot: Vec2(0, -140))
+        let hair = accessory("Hair", [shape(fringePath, fill: hairColor, stroke: nil)], pivot: Vec2(0, -140))
+
+        // The head's rotation about the neck, and the face's warp inside it: a 3 × 3 lattice
+        // over the head, its rows at y -172, -112 and -52 and columns at x -60, 0 and 60.
+        var headTurn = Deformer.rotation(id: d.makeID(), name: "Head", pivot: Vec2(0, -60))
+        headTurn.keys.keyforms = [-30.0, 30].map { v in
+            Keyform(parameter: angleZ.id, value: v, offsets: [PointGeometry(position: Vec2(v / 3, 0))])
+        }
+        var face = Deformer.warp(id: d.makeID(), name: "Face",
+                                 bounds: Rect(minPoint: Vec2(-60, -172), maxPoint: Vec2(60, -52)), parent: headTurn.id)
+        /// A lattice keyform from its displacements, in rows from the top.
+        func lattice(_ coordinate: KeyCoordinate, _ rows: [[(Double, Double)]]) -> Keyform {
+            Keyform(at: coordinate, offsets: rows.flatMap { $0 }.map { PointGeometry(position: Vec2($0.0, $0.1)) })
+        }
+        // The right turn: the middle column slides furthest, the far (right) side least.
+        let turn: [[(Double, Double)]] = [[(3, 0), (8, 0), (1, 0)], [(6, 0), (16, 0), (3, 0)], [(4, 0), (10, 0), (2, 0)]]
+        // Tipping down: the middle row drops furthest.
+        let tip: [[(Double, Double)]] = [[(0, 5), (0, 9), (0, 5)], [(0, 5), (0, 10), (0, 5)], [(0, 4), (0, 8), (0, 4)]]
+        func sum(_ a: [[(Double, Double)]], _ b: [[(Double, Double)]], k: Double,
+                 squash: [Double]) -> [[(Double, Double)]] {
+            (0..<3).map { r in (0..<3).map { c in (a[r][c].0 + k * b[r][c].0, a[r][c].1 + k * b[r][c].1 + squash[r]) } }
+        }
+        face.keys.keyforms = [
+            lattice(KeyCoordinate(parameter: x, value: 30), turn),
+            lattice(KeyCoordinate(parameter: y, value: -30), tip.map { $0.map { (0, -$0.1) } }),
+            lattice(KeyCoordinate(parameter: y, value: 30), tip),
+            // Turned and tipped, the face squashes: the top row drops and the middle rises.
+            lattice(KeyCoordinate(x, 30, y, -30), sum(turn, tip, k: -1, squash: [5, -6, -2])),
+            lattice(KeyCoordinate(x, 30, y, 30), sum(turn, tip, k: 1, squash: [5, -6, -2])),
+        ]
+        face.keys.sortKeyforms()
+        d.deformers = [headTurn, face]
 
         d.parts = [body, head, earR, earL, eyes, nose, mouth, hair]
+        for p in d.parts.indices where d.parts[p].accessoryOf == head.id || d.parts[p].id == head.id {
+            d.parts[p].deformer = d.parts[p].name.hasPrefix("Ear") ? headTurn.id : face.id
+        }
         guard mirrored else { return d }
         // The left turn: one Mirror Keyforms across the middle of the face.
         var e = DrawingEditor(drawing: d)

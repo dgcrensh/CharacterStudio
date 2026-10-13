@@ -192,6 +192,21 @@ final class EditorUIState {
     var canAddKeyform = false
     var canDeleteKeyform = false
 
+    // Deformers
+    /// The deformer picked in the layers panel, whose lattice (or pivot and angle knob)
+    /// shows on the canvas, and its name.
+    var selectedDeformer: Int?
+    var selectedDeformerName = ""
+    /// The selected deformer is a rotation, and its angle at the current values in degrees.
+    var selectedDeformerIsRotation = false
+    var selectedDeformerAngle = 0.0
+    /// One or two parameters are moved, so a deformer edit keys it there.
+    var canKeyDeformer = false
+    /// Add and Delete Keyform act on the selected deformer rather than the shapes.
+    var keysSelectedDeformer = false
+    var canAddDeformerKeyform = false
+    var canDeleteDeformerKeyform = false
+
     // Part switches
     /// The selected layer, whose switches the parameters panel shows, and its name.
     var switchPart: Int?
@@ -460,6 +475,17 @@ final class CanvasStore {
         update(\.canUseDefaultArt, editor.canUseDefaultArt)
         update(\.canAddKeyform, editor.canAddKeyform)
         update(\.canDeleteKeyform, editor.canDeleteKeyform)
+        let deformer = editor.selectedDeformer.flatMap { editor.drawing.deformer($0) }
+        let coordinate = editor.drawing.keyformTarget.coordinate
+        let deformerKeyed = deformer.flatMap { d in coordinate.flatMap { d.keys.keyformIndex(at: $0) } } != nil
+        update(\.selectedDeformer, deformer?.id)
+        update(\.selectedDeformerName, deformer?.name ?? "")
+        update(\.selectedDeformerIsRotation, deformer.map { !$0.isWarp } ?? false)
+        update(\.selectedDeformerAngle, deformer.map { editor.deformerAngle($0.id) } ?? 0)
+        update(\.canKeyDeformer, coordinate != nil)
+        update(\.keysSelectedDeformer, editor.keysSelectedDeformer)
+        update(\.canAddDeformerKeyform, editor.keysSelectedDeformer && !deformerKeyed)
+        update(\.canDeleteDeformerKeyform, editor.keysSelectedDeformer && deformerKeyed)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -759,6 +785,30 @@ final class CanvasStore {
         edit { $0.editor.setParameterDriver(id, bone: bone, minimumAngle: minimumAngle, maximumAngle: maximumAngle) }
     }
     func clearParameterDriver(_ id: Int) { edit { $0.editor.clearParameterDriver(id) } }
+
+    // MARK: Deformers
+
+    /// Picks a deformer (nil for none), showing its handles on the canvas.
+    func selectDeformer(_ id: Int?) { edit { $0.editor.selectedDeformer = id } }
+    /// Adds a warp with a `size` × `size` lattice over the selected layers.
+    func addWarpDeformer(size: Int) { edit { _ = $0.editor.addWarpDeformer(columns: size, rows: size) } }
+    func addRotationDeformer() { edit { _ = $0.editor.addRotationDeformer() } }
+    func deleteDeformer(_ id: Int) { edit { $0.editor.deleteDeformer(id) } }
+    func renameDeformer(_ id: Int, to name: String) { edit { $0.editor.renameDeformer(id, to: name) } }
+    func attachLayers(_ ids: [Int], toDeformer id: Int?) { edit { $0.editor.attachLayers(ids, toDeformer: id) } }
+    func attachSelectedLayers(toDeformer id: Int?) { edit { $0.editor.attachSelectedLayers(toDeformer: id) } }
+    func canMoveDeformer(_ id: Int, into parent: Int?) -> Bool { session.editor.canMoveDeformer(id, into: parent) }
+    func moveDeformer(_ id: Int, into parent: Int?) { edit { $0.editor.moveDeformer(id, into: parent) } }
+    func fitDeformerToLayers(_ id: Int) { edit { $0.editor.fitDeformerToLayers(id) } }
+    func addDeformerKeyform() { edit { $0.editor.addDeformerKeyform() } }
+    func deleteDeformerKeyform() { edit { $0.editor.deleteDeformerKeyform() } }
+
+    /// A slider tick turning a rotation deformer; ticks of one drag are one undo step, and
+    /// the document hears of it once the slider stops.
+    func setDeformerAngle(_ degrees: Double, of id: Int) {
+        Signposts.canvas.withIntervalSignpost("Edit") { session.editor.setDeformerAngle(degrees, of: id) }
+        refresh(continuous: true)
+    }
 
     // MARK: Part switches
 
