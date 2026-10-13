@@ -165,7 +165,7 @@ public enum CharacterFormat {
         }
         var references: [JSONValue] = []
         for ref in drawing.references {
-            if let file = referenceFiles[ref.id] { references.append(reference(ref, file: file)) }
+            if let file = referenceFiles[ref.id] { references.append(reference(ref, file: file, parameters: parameters)) }
         }
         let drawOrder: [JSONValue] = names.map { .string($0) }
         // Plain colors, then the named global colors.
@@ -578,19 +578,30 @@ public enum CharacterFormat {
         return .object(members)
     }
 
-    private static func reference(_ ref: ReferenceImage, file: String) -> JSONValue {
-        obj([
-            "name": .string(ref.name),
-            "file": .string(file),
-            "width": num(ref.size.x),
-            "height": num(ref.size.y),
-            "x": num(ref.center.x),
-            "y": num(ref.center.y),
-            "rotation": num(ref.rotation * 180 / .pi),
-            "scale": num(ref.scale),
-            "opacity": num(ref.opacity),
-            "hidden": .bool(ref.isHidden),
-        ])
+    private static func reference(_ ref: ReferenceImage, file: String, parameters: FileParameters) -> JSONValue {
+        var members: [(key: String, value: JSONValue)] = [
+            (key: "name", value: .string(ref.name)),
+            (key: "file", value: .string(file)),
+            (key: "width", value: num(ref.size.x)),
+            (key: "height", value: num(ref.size.y)),
+            (key: "x", value: num(ref.center.x)),
+            (key: "y", value: num(ref.center.y)),
+            (key: "rotation", value: num(ref.rotation * 180 / .pi)),
+            (key: "scale", value: num(ref.scale)),
+            (key: "opacity", value: num(ref.opacity)),
+            (key: "hidden", value: .bool(ref.isHidden)),
+        ]
+        // The parameter values it shows near, written only when set, on parameters the file has.
+        if let tag = ref.shownNear, let first = parameters.order[tag.parameter] {
+            var near: [(key: String, value: JSONValue)] = [
+                (key: "parameter", value: .string(parameters.list[first].name)), (key: "value", value: num(tag.value)),
+            ]
+            if let id = tag.parameter2, let second = parameters.order[id] {
+                near += [(key: "parameter2", value: .string(parameters.list[second].name)), (key: "value2", value: num(tag.value2))]
+            }
+            members.append((key: "shownNear", value: .object(near)))
+        }
+        return .object(members)
     }
 
     /// Numbers are written rounded to 4 decimal places.
@@ -808,6 +819,17 @@ public enum CharacterFormat {
             ref.scale = try node.field("scale")?.number() ?? 1
             ref.opacity = min(max(try node.field("opacity")?.number() ?? 0.5, 0), 1)
             ref.isHidden = try node.field("hidden")?.bool() ?? false
+            // A tag on an unknown parameter is dropped; one on a known parameter is kept even
+            // when its second parameter is unknown.
+            if let near = try node.field("shownNear"),
+               let first = parameters[try near.require("parameter").string()] {
+                let value = first.clamped(try near.require("value").number())
+                if let name = try near.string("parameter2"), let second = parameters[name], second.id != first.id {
+                    ref.shownNear = KeyCoordinate(first.id, value, second.id, second.clamped(try near.require("value2").number()))
+                } else {
+                    ref.shownNear = KeyCoordinate(parameter: first.id, value: value)
+                }
+            }
             drawing.references.append(ref)
             files[id] = try node.require("file").string()
         }

@@ -44,8 +44,27 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
 9. Head turns: keyforms on grids of two parameters (`AngleX` × `AngleY`), draw order and variant swaps by parameter, Mirror Keyforms, keyform onion skin and bone-driven parameters (done; see the notes below).
 10. Deformers: warp lattices and rotation deformers, keyed on parameters and nested in a tree in the Layers panel (done; see the notes below).
+11. Turnaround aids: a head-turn warp seeded from a sphere or cylinder, Seed Keyform from the rest or a neighbouring key, lattice resizing, and reference images shown by angle (done; see the notes below).
 
 Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
+
+## Milestone 11 notes (turnaround aids)
+
+Milestone 11 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md): making head turns fast to author. The file format stays 0.3: the reference tag is a new optional key. The design is in [docs/plans/turnaround-aids.md](docs/plans/turnaround-aids.md).
+
+**Using it**
+
+- **Head turn helper:** select a face's layers, then long-press **Add Warp** in the layers panel's Deformers section and pick **Head Turn on a Sphere** (or **Turn on a Cylinder** for a neck, body or hair). It adds a 5 × 5 warp called Turn over the layers and seeds its `AngleX` and `AngleY` keyforms (made, -30 to 30, if the character has none) as if the art were painted on a sphere filling the lattice and turned 30 degrees: at each end of both sliders and at the four corners of their grid. The features slide across the front, the far side narrows, the near side widens and the outline holds. One undo step. Then touch up at the ends: drag lattice points, or edit a feature (the nose usually wants to slide a little further than the sphere takes it). To seed an existing warp, long-press it and pick **Seed Head Turn**; this replaces its `AngleX` and `AngleY` keyforms, keeps the rest, and grows a smaller lattice to 5 × 5.
+- **Lattice Size** (a warp's long-press menu) sets 2 × 2 up to 5 × 5, keeping what the warp does at every key (exactly when growing 2 or 3 to 5).
+- **Seed Keyform** (parameters panel): with one or two sliders moved, makes the keyform there a copy of the **Rest** or of a neighbouring key (such as "AngleX 30" while at a grid corner), replacing the one there, to start touching up from. It acts on the selected deformer, else the selected shapes, else every keyed shape and deformer. One undo step.
+- **References by angle:** each reference image's dial menu in the layers panel picks **Near** a slider's value (such as "Near AngleX 30", or a grid point with two sliders moved) or **Always**. A tagged reference shows fully at its value and fades out over a sixth of the slider's range, or by the next reference tagged on that slider, so a front view at `AngleX` 0 and a side view at 30 cross-fade as the head turns. The row says what it is shown near.
+
+**How it works**
+
+- **Surfaces** (CharacterCore, `Turnaround.swift`): `TurnSurface.turn` moves a point over the lattice's ellipse by a yaw and a pitch, turning it further the nearer it is to the front so the outline holds; depth 0.5 (a flattened sphere) moves the middle about a quarter of the half width on a 30 degree turn. `Deformer.seedingTurn` keys the control points with it; `Deformer.resizingLattice` resamples a lattice's rest and keyforms.
+- **Commands** (`DrawingEditor+Turnaround.swift`): `addTurnWarp`, `seedTurn`, `setLatticeSize`, `keyformSeeds` and `seedKeyform`, `referenceTagChoices` and `tagReference`. `Drawing.referenceVisibility` gives a reference's fade, which the canvas multiplies into its opacity. Tests: `TurnaroundTests`.
+- **Done when:** `TurnaroundTests.testANewFaceTurnsBothWaysOnBothAxesOnceTheHelperSeedsIt` seeds a fresh face with one command and checks it turns both ways on both axes, and that a touch-up lands in one keyform.
+- **Format:** `shownNear` on references; see [Schema/README.md](Schema/README.md).
 
 ## Milestone 10 notes (deformers)
 

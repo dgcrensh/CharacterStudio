@@ -207,6 +207,13 @@ final class EditorUIState {
     var canAddDeformerKeyform = false
     var canDeleteDeformerKeyform = false
 
+    // Turnaround aids
+    /// Where Seed Keyform can copy from now (the rest, then the neighbouring keys).
+    var keyformSeeds: [KeyformSeed] = []
+    var canSeedKeyform = false
+    /// The parameter values a reference image can be tagged with now.
+    var referenceTagChoices: [KeyCoordinate] = []
+
     // Part switches
     /// The selected layer, whose switches the parameters panel shows, and its name.
     var switchPart: Int?
@@ -486,6 +493,9 @@ final class CanvasStore {
         update(\.keysSelectedDeformer, editor.keysSelectedDeformer)
         update(\.canAddDeformerKeyform, editor.keysSelectedDeformer && !deformerKeyed)
         update(\.canDeleteDeformerKeyform, editor.keysSelectedDeformer && deformerKeyed)
+        update(\.keyformSeeds, editor.keyformSeeds)
+        update(\.canSeedKeyform, editor.canSeedKeyform)
+        update(\.referenceTagChoices, editor.referenceTagChoices)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -801,6 +811,10 @@ final class CanvasStore {
     func moveDeformer(_ id: Int, into parent: Int?) { edit { $0.editor.moveDeformer(id, into: parent) } }
     func fitDeformerToLayers(_ id: Int) { edit { $0.editor.fitDeformerToLayers(id) } }
     func addDeformerKeyform() { edit { $0.editor.addDeformerKeyform() } }
+    func addTurnWarp(on surface: TurnSurface) { edit { _ = $0.editor.addTurnWarp(on: surface) } }
+    func seedTurn(of id: Int, on surface: TurnSurface) { edit { $0.editor.seedTurn(of: id, on: surface) } }
+    func setLatticeSize(of id: Int, size: Int) { edit { $0.editor.setLatticeSize(of: id, columns: size, rows: size) } }
+    func seedKeyform(from values: [Int: Double]) { edit { $0.editor.seedKeyform(from: values) } }
     func deleteDeformerKeyform() { edit { $0.editor.deleteDeformerKeyform() } }
 
     /// A slider tick turning a rotation deformer; ticks of one drag are one undo step, and
@@ -1068,6 +1082,14 @@ final class CanvasStore {
     func setReferenceOpacity(_ id: Int, _ opacity: Double) {
         edit { $0.editor.updateReference(id, coalescingKey: "opacity") { $0.opacity = opacity } }
     }
+
+    /// Shows a reference only near `coordinate`'s parameter values, or with nil always.
+    func tagReference(_ id: Int, near coordinate: KeyCoordinate?) {
+        edit { $0.editor.tagReference(id, near: coordinate) }
+    }
+
+    /// Parameter values as the panels name them, such as "AngleX 30".
+    func coordinateName(_ coordinate: KeyCoordinate) -> String { session.editor.drawing.coordinateName(coordinate) }
 
     func setReferenceHidden(_ id: Int, _ hidden: Bool) {
         edit { $0.editor.updateReference(id) { $0.isHidden = hidden } }

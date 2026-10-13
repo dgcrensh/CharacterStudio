@@ -187,6 +187,7 @@ extension Drawing {
         parameters[i].minimum = lo
         parameters[i].maximum = hi
         parameters[i].defaultValue = newDefault
+        clampReferenceTags(of: id)
         var values = parameterValues
         values[id] = min(max(current, lo), hi)
         parameterValues = [:]
@@ -208,6 +209,7 @@ extension Drawing {
             shape.settleKeys()
         }
         for d in deformers.indices { deformers[d].keys.keyforms.removeAll { $0.coordinate.involves(id) } }
+        untagReferences(from: id)
         parameterValues = [:]
         setParameterValues(values)
         evaluateKeyforms()
