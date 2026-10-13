@@ -49,4 +49,4 @@ Notes:
 
 ## In the cloud (no Xcode)
 
-Cloud sessions run on Linux with no Xcode, so only the core tests and the schema check can run there, and only if a Swift toolchain is installed. The app target cannot be built off a Mac; CI's `app-build` job is the check for it. Say so plainly rather than claiming an app change was built.
+Cloud sessions run on Linux with no Xcode, so only the core tests and the schema check can run there. A SessionStart hook (`.claude/hooks/session-start.sh`) installs Swift 6.1 at session start, taken from the official `swift` image on Docker Hub because download.swift.org is blocked there, so `swift test` works without setup. The app target cannot be built off a Mac; CI's `app-build` job is the check for it. Say so plainly rather than claiming an app change was built.
