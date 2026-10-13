@@ -401,7 +401,19 @@
         "rotation": { "type": "number" },
         "scale": { "type": "number", "exclusiveMinimum": 0 },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
-        "hidden": { "type": "boolean" }
+        "hidden": { "type": "boolean" },
+        "shownNear": {
+          "description": "Editor hint, written only when set: the parameter values the reference was drawn for, such as a side view at AngleX 30. The editor shows it fully there and fades it out over a sixth of each parameter's range, or by the nearest value another reference is tagged with on that parameter. A tag on an unknown parameter is ignored; values are brought into the parameter's range.",
+          "type": "object",
+          "required": ["parameter", "value"],
+          "dependentRequired": { "parameter2": ["value2"], "value2": ["parameter2"] },
+          "properties": {
+            "parameter": { "description": "The id of a parameter.", "type": "string" },
+            "value": { "type": "number" },
+            "parameter2": { "description": "For a point of a grid of two parameters: the id of the second parameter, which comes after parameter in parameters.", "type": "string" },
+            "value2": { "type": "number" }
+          }
+        }
       }
     }
   }

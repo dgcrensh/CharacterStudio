@@ -74,7 +74,7 @@ public struct PointGeometry: Hashable, Sendable, Codable {
 /// Where a keyform sits: a value of one parameter, or for a keyform on a grid of two
 /// parameters (such as `AngleX` × `AngleY`) a value of each. A grid coordinate keeps the
 /// parameter with the lower id first, so each point of a grid has one coordinate.
-public struct KeyCoordinate: Hashable, Sendable {
+public struct KeyCoordinate: Hashable, Sendable, Codable {
     public var parameter: Int
     public var value: Double
     /// The grid's second parameter (a higher id than `parameter`), nil on one parameter.

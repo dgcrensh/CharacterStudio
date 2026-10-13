@@ -83,7 +83,8 @@ struct LayersPanel: View {
                     }
                     .buttonStyle(.bordered)
                     ForEach(ui.layers.references) { reference in
-                        ReferenceRow(store: store, reference: reference, isSelected: ui.selectedReference == reference.id) {
+                        ReferenceRow(store: store, reference: reference, isSelected: ui.selectedReference == reference.id,
+                                     tagChoices: ui.referenceTagChoices) {
                             store.adjustReference(reference.id)
                             dismiss()
                         }
@@ -605,6 +606,9 @@ struct LayersPanel: View {
                     ForEach(Array(Deformer.latticeSizes.dropFirst()), id: \.self) { size in
                         Button("\(size) × \(size)") { store.addWarpDeformer(size: size) }
                     }
+                    Divider()
+                    Button("Head Turn on a Sphere", systemImage: "globe") { store.addTurnWarp(on: .sphere) }
+                    Button("Turn on a Cylinder", systemImage: "cylinder") { store.addTurnWarp(on: .cylinder) }
                 } label: {
                     Label("Add Warp", systemImage: "squareshape.split.3x3")
                 } primaryAction: {
@@ -617,7 +621,7 @@ struct LayersPanel: View {
             .buttonStyle(.borderless)
             .textCase(nil)
         } footer: {
-            Text("A warp bends the layers attached to it with a lattice; a rotation turns them about a pivot. Tap a deformer to show its handles on the canvas, then move a parameter's slider and drag them to key it there. Add Warp makes a 3 × 3 lattice; long-press it for another size. Long-press a deformer to rename, nest or delete it.")
+            Text("A warp bends the layers attached to it with a lattice; a rotation turns them about a pivot. Tap a deformer to show its handles on the canvas, then move a parameter's slider and drag them to key it there. Add Warp makes a 3 × 3 lattice; long-press it for another size, or for a head turn: a 5 × 5 warp wrapped over a sphere (or cylinder) with its AngleX and AngleY keyforms seeded, ready to touch up. Long-press a deformer to rename, nest, resize, seed a turn or delete it.")
         }
     }
 
@@ -654,6 +658,15 @@ struct LayersPanel: View {
         if deformer.isWarp {
             Button("Fit Lattice to Layers", systemImage: "arrow.up.left.and.arrow.down.right") {
                 store.fitDeformerToLayers(deformer.id)
+            }
+            Menu("Lattice Size", systemImage: "squareshape.split.3x3") {
+                ForEach(Array(Deformer.latticeSizes), id: \.self) { size in
+                    Button("\(size) × \(size)") { store.setLatticeSize(of: deformer.id, size: size) }
+                }
+            }
+            Menu("Seed Head Turn", systemImage: "globe") {
+                Button("On a Sphere", systemImage: "globe") { store.seedTurn(of: deformer.id, on: .sphere) }
+                Button("On a Cylinder", systemImage: "cylinder") { store.seedTurn(of: deformer.id, on: .cylinder) }
             }
         }
         let toTop = store.canMoveDeformer(deformer.id, into: nil)
@@ -808,6 +821,8 @@ private struct ReferenceRow: View {
     let store: CanvasStore
     let reference: ReferenceImage
     let isSelected: Bool
+    /// The parameter values it can be shown near, at the sliders' values now.
+    let tagChoices: [KeyCoordinate]
     let adjust: () -> Void
 
     var body: some View {
@@ -820,9 +835,27 @@ private struct ReferenceRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(reference.name).lineLimit(1)
+                if let near = reference.shownNear {
+                    Text("Shown near \(store.coordinateName(near))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Slider(value: Binding(get: { reference.opacity }, set: { store.setReferenceOpacity(reference.id, $0) }),
                        in: 0.05...1)
             }
+
+            Menu {
+                ForEach(tagChoices, id: \.self) { choice in
+                    Button("Near \(store.coordinateName(choice))") { store.tagReference(reference.id, near: choice) }
+                }
+                Button("Always", systemImage: "infinity") { store.tagReference(reference.id, near: nil) }
+                    .disabled(reference.shownNear == nil)
+            } label: {
+                Label("Show by Angle", systemImage: reference.shownNear == nil ? "dial.low" : "dial.high.fill")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
 
             Button("Move, Scale, Rotate", systemImage: "arrow.up.and.down.and.arrow.left.and.right", action: adjust)
                 .labelStyle(.iconOnly)

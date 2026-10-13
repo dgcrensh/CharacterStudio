@@ -43,6 +43,13 @@ extension DrawingEditor {
     /// The new deformer is selected. Returns its id.
     @discardableResult
     public mutating func addWarpDeformer(columns: Int = 3, rows: Int = 3) -> Int? {
+        addWarpDeformer(columns: columns, rows: rows, named: "Warp")
+    }
+
+    /// `addWarpDeformer`, with the new warp's name based on `base` and `finish` run on the
+    /// drawing in the same undo step.
+    mutating func addWarpDeformer(columns: Int, rows: Int, named base: String,
+                                  finish: ((inout Drawing, Int) -> Void)? = nil) -> Int? {
         let layers = selectedLayerIDs
         let rest = drawing.atRest().undeformed()
         let parts = layers.isEmpty ? rest.parts : rest.parts.filter { layers.contains($0.id) }
@@ -52,8 +59,8 @@ extension DrawingEditor {
             return nil
         }
         let margin = max(max(bounds.width, bounds.height) * 0.08, 4)
-        let name = drawing.uniqueDeformerName("Warp")
-        return addDeformer(layers) { id, parent in
+        let name = drawing.uniqueDeformerName(base)
+        return addDeformer(layers, finish: finish) { id, parent in
             .warp(id: id, name: name, bounds: bounds.outset(by: margin), columns: columns,
                   rows: rows, parent: parent)
         }
@@ -79,7 +86,10 @@ extension DrawingEditor {
         }
     }
 
-    private mutating func addDeformer(_ layers: [Int], _ make: (Int, Int?) -> Deformer) -> Int {
+    /// Adds the deformer `make` gives (from its id and parent) and attaches `layers` to it,
+    /// then runs `finish` on the drawing, all as one undo step.
+    mutating func addDeformer(_ layers: [Int], finish: ((inout Drawing, Int) -> Void)? = nil,
+                              _ make: (Int, Int?) -> Deformer) -> Int {
         cancelGesture()
         let before = drawing
         let shared = Set(layers.map { drawing.part($0)?.deformer })
@@ -89,6 +99,7 @@ extension DrawingEditor {
             d.deformers.append(deformer)
             for id in layers { if let p = d.partIndex(id) { d.parts[p].deformer = deformer.id } }
         }
+        finish?(&drawing, deformer.id)
         commit(from: before, folding: false)
         selectedDeformer = deformer.id
         return deformer.id

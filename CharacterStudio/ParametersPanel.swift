@@ -43,12 +43,18 @@ struct ParametersPanel: View {
                         Button("Delete Keyform", systemImage: "trash", role: .destructive) { store.deleteKeyform() }
                             .disabled(!ui.canDeleteKeyform)
                     }
+                    Menu("Seed Keyform", systemImage: "square.on.square.dashed") {
+                        ForEach(ui.keyformSeeds, id: \.self) { seed in
+                            Button("From \(seed.name)") { store.seedKeyform(from: seed.values) }
+                        }
+                    }
+                    .disabled(!ui.canSeedKeyform)
                     Button("Reset All", systemImage: "arrow.uturn.backward") { store.resetParameters() }
                         .disabled(ui.keyformBanner == nil)
                     Toggle("Onion Skin", systemImage: "square.3.layers.3d.down.right",
                            isOn: Binding(get: { ui.showsOnionSkin }, set: { store.setShowsOnionSkin($0) }))
                 } footer: {
-                    Text("Add and Delete Keyform act on the selected shapes at the moved sliders' values; with nothing selected, Delete Keyform removes that keyform from every shape. With a deformer selected in the layers panel they act on it instead. Onion Skin outlines the keyed shapes at the neighbouring keys.")
+                    Text("Add and Delete Keyform act on the selected shapes at the moved sliders' values; with nothing selected, Delete Keyform removes that keyform from every shape. With a deformer selected in the layers panel they act on it instead. Seed Keyform makes the keyform here a copy of the rest or of a neighbouring key, to touch up; with nothing selected it seeds every keyed shape and deformer. Onion Skin outlines the keyed shapes at the neighbouring keys.")
                 }
                 rotationSection
                 switchesSection

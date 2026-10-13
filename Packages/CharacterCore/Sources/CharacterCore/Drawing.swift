@@ -344,9 +344,14 @@ public struct ReferenceImage: Hashable, Sendable, Codable, Identifiable {
     public var scale: Double
     public var opacity: Double
     public var isHidden: Bool
+    /// The parameter values (one parameter's, or a point of two parameters' grid) the
+    /// reference is drawn for, such as a side view at `AngleX` 30: it shows when the sliders
+    /// are near them and fades out away from them (see `Drawing.referenceVisibility`). Nil
+    /// shows it at every value.
+    public var shownNear: KeyCoordinate?
 
     public init(id: Int, name: String, size: Vec2, center: Vec2, rotation: Double = 0, scale: Double = 1,
-                opacity: Double = 0.5, isHidden: Bool = false) {
+                opacity: Double = 0.5, isHidden: Bool = false, shownNear: KeyCoordinate? = nil) {
         self.id = id
         self.name = name
         self.size = size
@@ -355,6 +360,7 @@ public struct ReferenceImage: Hashable, Sendable, Codable, Identifiable {
         self.scale = scale
         self.opacity = opacity
         self.isHidden = isHidden
+        self.shownNear = shownNear
     }
 
     /// Maps image space (0...width, 0...height, y-down) to world space.

@@ -309,7 +309,7 @@ final class CanvasRenderer {
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
-        drawReferences(editor.drawing.references, encoder: encoder, uniforms: &uniforms)
+        drawReferences(of: editor.drawing, encoder: encoder, uniforms: &uniforms)
         if !editor.outlineView {
             Signposts.canvas.withIntervalSignpost("Art draw") {
                 drawArt(encoder: encoder, uniforms: &uniforms, viewRect: Rect(points: screen))
@@ -712,14 +712,17 @@ final class CanvasRenderer {
 
     // MARK: Reference images
 
-    private func drawReferences(_ references: [ReferenceImage], encoder: any MTLRenderCommandEncoder,
+    /// Draws the drawing's reference images, each faded by how near the sliders are to the
+    /// values it is tagged with (see `Drawing.shownOpacity(of:)`).
+    private func drawReferences(of drawing: Drawing, encoder: any MTLRenderCommandEncoder,
                                 uniforms: inout CanvasUniforms) {
-        let visible = references.filter { !$0.isHidden && $0.opacity > 0 && textures[$0.id] != nil }
+        let visible = drawing.references.map { ($0, drawing.shownOpacity(of: $0)) }
+            .filter { $0.1 > 0 && textures[$0.0.id] != nil }
         guard !visible.isEmpty else { return }
         encoder.setRenderPipelineState(imagePipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
         encoder.setFragmentSamplerState(sampler, index: 0)
-        for ref in visible {
+        for (ref, shown) in visible {
             guard let texture = textures[ref.id] else { continue }
             let c = ref.corners
             let uv = [Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)]
@@ -727,7 +730,7 @@ final class CanvasRenderer {
             for i in [0, 1, 2, 0, 2, 3] {
                 floats += [Float(c[i].x), Float(c[i].y), Float(uv[i].x), Float(uv[i].y)]
             }
-            var opacity = Float(ref.opacity)
+            var opacity = Float(shown)
             encoder.setVertexBytes(floats, length: floats.count * MemoryLayout<Float>.stride, index: 0)
             encoder.setFragmentTexture(texture, index: 0)
             encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 0)

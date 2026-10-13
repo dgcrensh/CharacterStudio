@@ -28,7 +28,7 @@ A character is a `.charstudio` package (a folder that Files shows as one documen
 - `poses`: saved test poses (see [Poses and weights](#poses-and-weights)). `animations` is reserved and empty so far.
 - `parameters` (0.3, optional): the values the art can change with, and shapes' `keyforms`; see [Parameters and keyforms](#parameters-and-keyforms).
 - `palette`: the character's reusable colors. Plain `#RRGGBBAA` strings come first, then global colors as `{ "name", "color" }` (0.2).
-- `references`: editor-only reference images, bottom to top, with placement (`x`, `y` center, `rotation`, `scale`), `opacity` and `hidden`. Animation tools should ignore them.
+- `references`: editor-only reference images, bottom to top, with placement (`x`, `y` center, `rotation`, `scale`), `opacity` and `hidden`. Animation tools should ignore them. `shownNear` (0.3, optional, written only when set) tags a reference with the parameter values it was drawn for, as `{ "parameter", "value" }` or with `parameter2`/`value2` for a point of a grid: a side view at `AngleX` 30. The editor shows it there and fades it out over a sixth of the range (or by the next reference tagged on that parameter). A tag on an unknown parameter is ignored.
 - `frame` (optional): the character frame, an editor hint written only when set. `x`, `y` (top-left), `width` and `height` give the target box in world space, `ground` the y of the line the character stands on (the box's bottom when missing), and `hidden: true` when the editor isn't showing it. The editor exports this box when it is shown. Added after 0.2 shipped, as an optional key, so the version stays 0.2.
 
 ## Variants and skins
