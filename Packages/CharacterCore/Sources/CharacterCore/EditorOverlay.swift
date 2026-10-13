@@ -21,6 +21,8 @@ public enum EditorOverlay {
     /// IK targets (the tips of bones with IK chains) while posing.
     public static let ikColor = RGBAColor(r: 0.95, g: 0.55, b: 0.1)
     public static let onionColor = RGBAColor(r: 0.55, g: 0.35, b: 0.85, a: 0.55)
+    /// The selected deformer's lattice, pivot and angle knob.
+    public static let deformerColor = RGBAColor(r: 0.1, g: 0.66, b: 0.82)
 
     /// The color of an anchor whose second-bone weight is `weight`.
     public static func weightColor(_ weight: Double) -> RGBAColor {
@@ -514,6 +516,40 @@ private struct Builder {
         if let marquee = editor.marquee {
             let c = marquee.corners
             for i in 0..<4 { line(c[i], c[(i + 1) % 4], width: 1) }
+        }
+        if !editor.isPosing, let id = editor.selectedDeformer { deformer(id) }
+    }
+
+    /// The selected deformer: a warp's lattice as it bends, or a rotation's pivot and the
+    /// knob it turns by.
+    mutating func deformer(_ id: Int) {
+        guard let deformer = editor.drawing.deformer(id) else { return }
+        let handles = editor.deformerHandles(of: id, zoom: 1 / px)
+        let color = Overlay.deformerColor
+        if deformer.isWarp {
+            let points = handles.map(\.position), columns = deformer.columns, rows = deformer.rows
+            guard points.count == columns * rows else { return }
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let i = row * columns + column
+                    if column + 1 < columns { line(points[i], points[i + 1], width: 1.5, color: color) }
+                    if row + 1 < rows { line(points[i], points[i + columns], width: 1.5, color: color) }
+                }
+            }
+            for p in points {
+                dot(p, radius: 5.5, color: color)
+                dot(p, radius: 3.5, color: Overlay.handleFill)
+            }
+        } else {
+            guard let pivot = handles.first(where: { $0.handle == .pivot })?.position,
+                  let knob = handles.first(where: { $0.handle == .angle })?.position else { return }
+            line(pivot, knob, width: 1.5, color: color)
+            line(pivot - Vec2(10 * px, 0), pivot + Vec2(10 * px, 0), width: 1.5, color: color)
+            line(pivot - Vec2(0, 10 * px), pivot + Vec2(0, 10 * px), width: 1.5, color: color)
+            dot(pivot, radius: 5, color: color)
+            dot(pivot, radius: 3, color: Overlay.handleFill)
+            dot(knob, radius: 7, color: color)
+            dot(knob, radius: 4.5, color: Overlay.handleFill)
         }
     }
 }

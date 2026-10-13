@@ -95,10 +95,84 @@ extension Drawing {
             shape.evaluateKeyforms(at: parameterValues, parameters: parameters)
             out.parts[p].shapes[s] = shape
         }
+        let deformerResult = out.mirrorDeformers(of: parameter, onSource: onSource, mirror: mirror)
+        mirrored += deformerResult.mirrored
+        unmatched += deformerResult.unmatched
         let switches = out.mirrorSwitches(of: parameter, fromAbove: fromAbove, mirror: mirror)
         out.applySwitches()
         guard mirrored > 0 || unmatched > 0 || switches > 0 else { return nil }
         return KeyformMirrorResult(drawing: out, mirrored: mirrored, unmatched: unmatched, switches: switches)
+    }
+
+    /// Mirrors the deformers' keyforms that `onSource` picks onto the other side of
+    /// `parameter`'s default. A deformer named for a side (`Cheek.L`) lands on the other
+    /// side's, any other on itself. A warp's control point lands on the one in the same row
+    /// and the mirrored column, which must sit near its mirror image (the lattices are mirror
+    /// images of each other); a rotation turns the other way.
+    private mutating func mirrorDeformers(of parameter: Parameter, onSource: (Keyform) -> Bool,
+                                          mirror: Affine2D) -> (mirrored: Int, unmatched: Int) {
+        let id = parameter.id, d = parameter.defaultValue
+        var writes: [Int: [(coordinate: KeyCoordinate, displacements: [Vec2])]] = [:]
+        var mirrored = 0, unmatched = 0
+        for source in deformers {
+            let sources = source.keys.keyforms.filter(onSource)
+            guard !sources.isEmpty else { continue }
+            let target = SideName.flipped(source.name).flatMap { deformer(named: $0) } ?? source
+            guard target.kind == source.kind, target.isConsistent, source.isConsistent,
+                  Self.latticesMirror(source, target, mirror: mirror) else {
+                unmatched += 1
+                continue
+            }
+            for key in sources {
+                let v = key.coordinate.value(of: id)!
+                let mirroredValue = 2 * d - v
+                guard mirroredValue >= parameter.minimum - Parameter.tolerance,
+                      mirroredValue <= parameter.maximum + Parameter.tolerance else {
+                    unmatched += 1
+                    continue
+                }
+                let shown = source.displacements(at: key.coordinate.values, parameters: parameters)
+                var out: [Vec2]
+                if source.isWarp {
+                    let grid = source.gridPoints, targetGrid = target.gridPoints, columns = target.columns
+                    out = targetGrid.indices.map { i in
+                        let m = (i / columns) * columns + (columns - 1 - i % columns)
+                        return mirror.apply(grid[m] + shown[m]) - targetGrid[i]
+                    }
+                } else {
+                    out = [Vec2(-(shown.first?.x ?? 0), 0)]
+                }
+                let coordinate = key.coordinate.setting(id, to: parameter.clamped(mirroredValue))
+                writes[target.id, default: []].removeAll { $0.coordinate.matches(coordinate) }
+                writes[target.id, default: []].append((coordinate, out))
+                mirrored += 1
+            }
+        }
+        for (target, keys) in writes {
+            guard let i = deformerIndex(target) else { continue }
+            let rest = deformers[i].keys.restPoints
+            deformers[i].keys.keyforms.removeAll { old in keys.contains { $0.coordinate.matches(old.coordinate) } }
+            for key in keys {
+                deformers[i].keys.keyforms.append(Keyform(at: key.coordinate, offsets: key.displacements.indices.map {
+                    PointGeometry(position: key.displacements[$0] - rest[$0].position)
+                }))
+            }
+            deformers[i].keys.sortKeyforms()
+        }
+        return (mirrored, unmatched)
+    }
+
+    /// True when `target`'s lattice is `source`'s mirror image (each control point within a
+    /// quarter of a cell of the mirrored one), or for rotations, always.
+    static func latticesMirror(_ source: Deformer, _ target: Deformer, mirror: Affine2D) -> Bool {
+        guard source.isWarp else { return true }
+        guard source.columns == target.columns, source.rows == target.rows else { return false }
+        let grid = source.gridPoints, targetGrid = target.gridPoints, columns = target.columns
+        let reach = min(target.bounds.width / Double(columns - 1), target.bounds.height / Double(target.rows - 1)) / 4
+        return targetGrid.indices.allSatisfy { i in
+            let m = (i / columns) * columns + (columns - 1 - i % columns)
+            return mirror.apply(grid[m]).distance(to: targetGrid[i]) <= reach
+        }
     }
 
     /// Mirrors the switches on `parameter` from one side of its default to the other (see
@@ -268,11 +342,15 @@ extension Drawing {
         let wanted = Set(refs)
         var out: [BezierPath] = []
         for part in parts where !part.isHidden {
-            for (i, shape) in part.shapes.enumerated() where shape.isKeyed && part.isShown(i) {
+            // A part on a keyed deformer moves at the neighbouring keys whether or not its shapes are keyed.
+            let deformed = deformerChain(from: part.deformer).contains { !$0.keys.keyforms.isEmpty }
+            let deformations = neighbours.map { deformation(from: part.deformer, at: $0) }
+            for (i, shape) in part.shapes.enumerated() where (shape.isKeyed || deformed) && part.isShown(i) {
                 guard wanted.isEmpty || wanted.contains(ShapeRef(part: part.id, shape: shape.id)) else { continue }
-                for values in neighbours {
+                for (values, deformation) in zip(neighbours, deformations) {
                     var copy = shape
                     copy.evaluateKeyforms(at: values, parameters: parameters)
+                    if let deformation { copy.deform(deformation) }
                     out.append(copy.path)
                 }
             }

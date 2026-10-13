@@ -140,6 +140,7 @@ extension DrawingEditor {
         let targets = drawing.shapeIndices(in: selection)
         if targets.isEmpty {
             drawing.updateKeyedShapes { $0.removeKeyforms(where: remove, values: values, parameters: parameters) }
+            for d in drawing.deformers.indices { drawing.deformers[d].keys.keyforms.removeAll(where: remove) }
         } else {
             for (p, s) in targets {
                 drawing.parts[p].shapes[s].removeKeyforms(where: remove, values: values, parameters: parameters)

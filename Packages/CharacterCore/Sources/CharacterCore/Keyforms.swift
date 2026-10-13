@@ -569,12 +569,10 @@ extension Drawing {
         return name
     }
 
-    /// Shows every keyed shape (in every variant and skin) at the current parameter values.
+    /// Shows every keyed shape (in every variant and skin) at the current parameter values,
+    /// through its part's deformers.
     public mutating func evaluateKeyforms() {
-        let values = parameterValues, parameters = parameters
-        for p in parts.indices where parts[p].holdsKeyforms {
-            parts[p].updateAllShapes { $0.evaluateKeyforms(at: values, parameters: parameters) }
-        }
+        showArt()
         applySwitches()
     }
 
@@ -621,12 +619,16 @@ extension Drawing {
                 }
             }
         }
+        for key in deformers.flatMap(\.keys.keyforms) {
+            guard let value = key.coordinate.value(of: id), !out.contains(where: { Parameter.same($0, value) }) else { continue }
+            out.append(value)
+        }
         return out.sorted()
     }
 
-    /// True when some shape (in any variant or skin) has a keyform at `coordinate`.
+    /// True when some shape (in any variant or skin) or deformer has a keyform at `coordinate`.
     public func hasKeyform(at coordinate: KeyCoordinate) -> Bool {
-        parts.contains { part in
+        deformersHaveKeyform(at: coordinate) || parts.contains { part in
             part.holdsKeyforms && part.allShapes.contains { $0.keys?.keyformIndex(at: coordinate) != nil }
         }
     }
@@ -637,19 +639,37 @@ extension Drawing {
     /// changes nothing, when the edits can't be kept: they move existing shapes while
     /// several parameters are away from their defaults, or they change the number of
     /// points of a keyed shape without updating its keyforms.
+    ///
+    /// A shape of a deformed part is folded in what its keyforms work in, undeformed (see
+    /// `Drawing.undeformed(_:_:values:parameters:)`), and shown deformed again; a new shape
+    /// there was drawn where it shows, so its rest is that, undeformed.
     public mutating func foldKeyformEdits(since before: Drawing) -> String? {
         let target = keyformTarget
         let parameters = parameters, values = parameterValues
         var refusal: String?
         var changed = parts
+        var reshown: [Int] = []
         for p in changed.indices {
             guard let b = before.partIndex(changed[p].id) else { continue }
             let old = before.parts[b].shapes
             guard changed[p].shapes != old else { continue }
+            let deformation = self.deformation(ofPart: p)
+            if deformation != nil { reshown.append(p) }
             let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for s in changed[p].shapes.indices {
-                let shape = changed[p].shapes[s]
-                guard let was = oldByID[shape.id], shape != was else { continue }
+                var shape = changed[p].shapes[s]
+                guard var was = oldByID[shape.id] else {
+                    if let deformation {
+                        changed[p].shapes[s] = Self.undeformed(shape, deformation, values: values, parameters: parameters)
+                    }
+                    continue
+                }
+                guard shape != was else { continue }
+                if let deformation {
+                    shape = Self.undeformed(shape, deformation, values: values, parameters: parameters)
+                    was = Self.undeformed(was, deformation, values: values, parameters: parameters)
+                    changed[p].shapes[s] = shape
+                }
                 switch Self.fold(shape, was: was, target: target, values: values, parameters: parameters) {
                 case .unchanged: break
                 case .folded(let folded): changed[p].shapes[s] = folded
@@ -659,6 +679,17 @@ extension Drawing {
         }
         if let refusal { return refusal }
         parts = changed
+        // The deformed parts' changed shapes are undeformed now: show them deformed again.
+        for p in reshown {
+            guard let deformation = self.deformation(ofPart: p) else { continue }
+            parts[p].shapes = parts[p].shapes.map { shape in
+                var out = shape
+                if out.keys == nil { out.keys = ShapeKeyforms(restPoints: out.pointGeometry, restOpacity: out.opacity) }
+                out.evaluateKeyforms(at: values, parameters: parameters)
+                out.deform(deformation)
+                return out
+            }
+        }
         return nil
     }
 
