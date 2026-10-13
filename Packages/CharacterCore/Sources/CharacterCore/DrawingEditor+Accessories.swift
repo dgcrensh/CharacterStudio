@@ -229,8 +229,7 @@ extension DrawingEditor {
             var part = original
             part.id = drawing.makeID()
             part.accessoryOf = copy
-            for s in part.shapes.indices { part.shapes[s].id = drawing.makeID() }
-            drawing.renewGroups(of: &part)
+            drawing.renewArtIDs(of: &part)
             change(&part)
             part.name = drawing.uniquePartName(part.name)
             guard let i = drawing.partIndex(original.id) else { continue }

@@ -308,15 +308,14 @@ extension DrawingEditor {
         guard let i = drawing.globalColors.firstIndex(where: { $0.id == id }) else { return }
         let before = drawing
         drawing.globalColors[i].color = color
+        // Art in other variants and skins follows too.
         for p in drawing.parts.indices {
-            for s in drawing.parts[p].shapes.indices {
-                var shape = drawing.parts[p].shapes[s]
+            drawing.parts[p].updateAllShapes { shape in
                 if shape.fillGlobal == id, shape.fill != nil {
                     shape.fill = color
                     if shape.gradient != nil { shape.gradient!.stops[0].color = color }
                 }
                 if shape.stroke?.global == id { shape.stroke!.color = color }
-                drawing.parts[p].shapes[s] = shape
             }
         }
         if let selected = selectionStyle { style = selected }
@@ -329,9 +328,9 @@ extension DrawingEditor {
         let before = drawing
         drawing.globalColors.removeAll { $0.id == id }
         for p in drawing.parts.indices {
-            for s in drawing.parts[p].shapes.indices {
-                if drawing.parts[p].shapes[s].fillGlobal == id { drawing.parts[p].shapes[s].fillGlobal = nil }
-                if drawing.parts[p].shapes[s].stroke?.global == id { drawing.parts[p].shapes[s].stroke!.global = nil }
+            drawing.parts[p].updateAllShapes { shape in
+                if shape.fillGlobal == id { shape.fillGlobal = nil }
+                if shape.stroke?.global == id { shape.stroke!.global = nil }
             }
         }
         commit(from: before)

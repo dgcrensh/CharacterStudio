@@ -91,7 +91,8 @@ These bridge directly into milestones 4-5 and are where the app earns its purpos
 20. **Swappable variants per part (M, format already allows it).** A part can hold several drawings (mouth
     shapes, hand poses, eye blinks) with one active; the format's `skins` and attachments already model this.
     Editor needs Add Variant, a variant strip on the part, and onion-skinning of the other variants. *Rig:*
-    lip sync and hand poses are the most common animation swaps.
+    lip sync and hand poses are the most common animation swaps. *Shipped with milestone 6, along with skins
+    (see the README's milestone 6 notes).*
 21. **Pivot and bone handoff (S-M).** Pivot snaps to anchors, to the other part's pivot, and later to bone
     heads; shows the pivot in every tool when the part is selected. Makes milestone 4 bone placement fall out
     of work already done.

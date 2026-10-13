@@ -39,7 +39,24 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
 5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses (done; see the notes below).
-6. Polish and export: slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below.)
+6. Variants and polish: variants per part, skins, sample characters (done; see the notes below). (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below; bounded undo came with the performance audit.)
+
+## Milestone 6 notes (variants and skins)
+
+Milestone 6 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.2: variants and skins are attachments and skins the format already allowed.
+
+**Using it**
+
+- **Variants** are several drawings of one part with one shown, such as mouth shapes, hand poses or an eye blink. Select a part (or its shapes) and choose **Edit > Add Variant**: the part gets a second drawing, a copy of the first, and shows it. Change it with any tool; only the shown drawing is edited.
+- **Variant strip:** while the selected part has variants, a strip above the style bar shows one chip per variant. Tap a chip to show that variant (one undo step). Touch and hold a chip to rename it, move it left or right, or delete it; with one left the part goes back to a single drawing. **+** adds another, and the layers button turns on the **onion skin**, which outlines the other variants faintly so a new one can be drawn against them.
+- Moving or duplicating a whole part takes every variant with it; moving its shapes moves only the shown variant's. Erasing a variant's last shape leaves the part, and a part with variants can't be merged down.
+- **Skins** menu (the shirt in the tool strip): pick the skin to show. **New Skin** adds one (Skin, Skin 2...; **Rename** and **Delete** act on the shown one). In a skin, every part shows its default art until you select it and choose **Own Art for [part]**, which starts the skin's art as a copy to change, or **[part] Only in [skin]**, which moves the art into the skin and leaves the part empty everywhere else (a scarf only the winter outfit has). **Default Art for [part]** drops the skin's art. Switching skins is one undo step, and a document always opens on the default skin.
+
+**How it works**
+
+- **Model** (CharacterCore, `Variants.swift`): a part keeps the art it shows in `shapes` and `groups` as before, so every tool, hit test and renderer works on it unchanged. `Part.variants` lists its variants with `activeVariant` the shown one; the others' art is stored in their entries. `Drawing.skins` are the skins besides the default and `Drawing.activeSkin` the one shown (kept for undo, not saved); each part shows its art for that skin, or its default art, and keeps its other skins' art in `otherSkinArt`. Commands that must reach art that isn't shown (moving a whole part, duplicating it, global colors, weights) go through `Part.updateAllArt`. `DrawingEditor+Variants` has the commands; tests are in `VariantTests`.
+- **Format:** each variant is an attachment named for it in the slot, and the slot's `attachment` names the one shown; a part with one drawing writes one attachment named for the slot, as before. Other skins are written after `default` under their names, holding only the slots that have art of their own there. See [Schema/README.md](Schema/README.md#variants-and-skins).
+- **Sample characters:** `Schema/examples` holds Robo (rigged, posed, weighted, with accessories) and Pip (two bones and two poses, a mouth with Closed, Open and O, eyes with a blink, and a Winter skin that swaps the top hat for a beanie and adds a scarf). The tests open, check and re-save both byte for byte, and Pip is built in code in `SampleCharacters.swift`; run the tests with `WRITE_SAMPLES=1` to write its file again after changing the builder.
 
 ## Milestone 5 notes (binding and posing)
 

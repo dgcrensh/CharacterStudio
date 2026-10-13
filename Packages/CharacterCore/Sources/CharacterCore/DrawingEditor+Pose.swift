@@ -165,8 +165,8 @@ extension DrawingEditor {
         cancelGesture()
         let before = drawing
         drawing.parts[p].secondBone = nil
-        for s in drawing.parts[p].shapes.indices {
-            for i in drawing.parts[p].shapes[s].path.points.indices { drawing.parts[p].shapes[s].path.points[i].weight = 0 }
+        drawing.parts[p].updateAllShapes { shape in
+            for i in shape.path.points.indices { shape.path.points[i].weight = 0 }
         }
         commit(from: before)
     }

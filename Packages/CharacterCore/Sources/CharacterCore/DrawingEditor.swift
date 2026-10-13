@@ -198,6 +198,8 @@ public struct DrawingEditor: Sendable {
     public var outlineView = false
     /// Dims everything but the selection (see `ghostFocus`).
     public var ghostsUnselected = false
+    /// Outlines the variant part's other variants faintly, to draw one against the others.
+    public var showsOnionSkin = false
     public var symmetry = SymmetrySettings()
     /// The part rocking about its pivot for the wiggle preview, and when it started.
     public internal(set) var wigglePart: Int?
@@ -1606,7 +1608,8 @@ public struct DrawingEditor: Sendable {
     mutating func removeShape(_ ref: ShapeRef) {
         guard let idx = drawing.indices(ref) else { return }
         drawing.parts[idx.0].shapes.remove(at: idx.1)
-        if drawing.parts[idx.0].shapes.isEmpty { drawing.parts.remove(at: idx.0) }
+        // A part with other variants or skins keeps them when its shown art is gone.
+        if drawing.parts[idx.0].shapes.isEmpty, !drawing.parts[idx.0].holdsOtherArt { drawing.parts.remove(at: idx.0) }
     }
 
     /// Joins shape `b` onto shape `a` at the given ends, keeping `a`'s style and
@@ -1634,6 +1637,8 @@ public struct DrawingEditor: Sendable {
         if !drawing.groupsAreValid { drawing.repairGroups() }
         // Accessories stay on their owners' bones, and owners exist.
         if !drawing.accessoriesAreValid { drawing.repairAccessories() }
+        // Every part shows the art its skin and variant call for.
+        if !drawing.skinsAreValid { drawing.repairSkins() }
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }

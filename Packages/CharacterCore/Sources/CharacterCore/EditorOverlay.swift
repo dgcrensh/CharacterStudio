@@ -17,6 +17,8 @@ public enum EditorOverlay {
     /// Weight painting: anchors that follow only the part's own bone, and only its second bone.
     public static let firstBoneWeightColor = RGBAColor(r: 0.2, g: 0.45, b: 0.95)
     public static let secondBoneWeightColor = RGBAColor(r: 0.95, g: 0.35, b: 0.2)
+    /// The onion skin of a part's other variants.
+    public static let onionColor = RGBAColor(r: 0.55, g: 0.35, b: 0.85, a: 0.55)
 
     /// The color of an anchor whose second-bone weight is `weight`.
     public static func weightColor(_ weight: Double) -> RGBAColor {
@@ -305,6 +307,18 @@ private struct Builder {
                 let poly = path.flattened(tolerance: 0.5 * px)
                 CapsuleTessellator.append(points: path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
                                           width: 1.5, color: Overlay.symmetryColor, screenSpace: true, to: &out)
+            }
+        }
+
+        // Onion skin: the variant part's other variants as faint outlines, in the rest pose.
+        if editor.showsOnionSkin, !editor.isPosing, let id = editor.variantPart, let part = drawing.part(id), !part.isHidden {
+            for variant in part.variants where variant.id != part.activeVariant {
+                for shape in variant.shapes where !shape.isHidden {
+                    let poly = shape.path.flattened(tolerance: 0.5 * px)
+                    guard !poly.isEmpty else { continue }
+                    CapsuleTessellator.append(points: shape.path.closed && poly.count > 2 ? poly + [poly[0]] : poly,
+                                              width: 1.5, color: Overlay.onionColor, screenSpace: true, to: &out)
+                }
             }
         }
 
