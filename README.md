@@ -38,8 +38,124 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 2. **Vector shapes**: curve fitting, filled shapes with outlines, point editing, selection, undo, solid colors, reference images.
 3. **Document**: JSON model, save and open in Files, layer tree, schema v0.1. (Appearance, below, moved the format to 0.2.)
 4. Skeleton: draw and chain bones with the Pencil, Setup mode, rename and re-parent, pivots and draw order, with mirror drawing, joint checks and pivot snapping (done).
-5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses.
-6. Polish and export: slots and skins in the file, sample characters. (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below.)
+5. Binding and posing: rigid binding, two-bone weight blending, Pose mode with forward kinematics, saved test poses (done; see the notes below).
+6. Variants and polish: variants per part, skins, sample characters (done; see the notes below). (Pencil double tap, squeeze and hover came early, with editor completeness below; SVG import, SVG and PNG export came early with the workspace notes below; bounded undo came with the performance audit.)
+7. Limbs: two-bone IK, rotation limits, mirror pose and Clean for Rig (done; see the notes below).
+8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
+9. Head turns: keyforms on grids of two parameters (`AngleX` × `AngleY`), draw order and variant swaps by parameter, Mirror Keyforms, keyform onion skin and bone-driven parameters (done; see the notes below).
+
+## Milestone 10 notes (deformers)
+
+Milestone 10 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.3: deformers are new optional keys. The design is in [docs/plans/deformers.md](docs/plans/deformers.md); the sample is `Schema/examples/tam.charstudio`, whose face now turns with one warp.
+
+**Using it**
+
+- **Deformers section** of the layers panel: the deformers as a tree, each with the layers attached to it and then the deformers inside it. Select layers, then **Add Warp** (a 3 × 3 lattice; long-press for 2 × 2 up to 5 × 5) or **Add Rotation** (pivot at the first layer's pivot). The new deformer wraps the selected layers, nests inside the selected deformer (or the one the layers share), and is selected. Long-press a deformer to rename it, **Attach Selected Layers**, **Fit Lattice to Layers**, **Move Into** another deformer or the top level, or delete it (its layers and deformers go to its parent). Long-press an attached layer to **Detach** it.
+- **Keying a deformer:** tap it to show its handles on the canvas (a lattice of dots for a warp, a crosshair and an angle knob for a rotation). Move one or two parameter sliders and drag the lattice points or the knob: every point and handle of the attached layers bends or turns with it, and the change is keyed at those values, blending like shapes' keyforms. At rest the lattice and angle can't be changed (a notice says to move a slider first); the pivot can be dragged anywhere. A selected rotation also gets an **Angle** slider in the parameters panel. **Add Keyform** and **Delete Keyform** act on the selected deformer, and Mirror Keyforms mirrors deformers too.
+- **Nesting:** a deformer inside another moves with it, so Tam's face warp turns with the head rotation on `AngleZ`.
+- **Editing deformed art:** every tool works on the art as it is shown; edits land in the undeformed drawing (or its keyforms), so they stay put as the deformer moves.
+
+**How it works**
+
+- **Model** (CharacterCore, `Deformers.swift`): `Drawing.deformers` and `Part.deformer`. A deformer's keys reuse `ShapeKeyforms` (a displacement per lattice point, or the angle), so parameters, grids, default changes and mirroring treat them like shapes. Shapes still show what they look like in `path`; the fold in `DrawingEditor.commit` undoes the deformation (with Newton's method for a warp) before landing an edit. Tests: `DeformerTests`.
+- **Commands** (`DrawingEditor+Deformers.swift`): adding, nesting, attaching and deleting deformers, the handles and their drags, and the angle. The canvas overlay draws the selected deformer.
+- **Done when:** `HeadTurnTests.testOneFaceWarpTurnsEveryFacialFeature`: on Tam only the two ears keep per-shape keyforms, down from nine shapes in milestone 9.
+- **Format:** top-level `deformers` and `deformer` on slots; see [Schema/README.md](Schema/README.md#deformers).
+
+## Milestone 9 notes (head turns)
+
+Milestone 9 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.3: everything new is optional keys. The design and what was measured are in [docs/plans/head-turns.md](docs/plans/head-turns.md); the sample is `Schema/examples/tam.charstudio`, a head that turns ±30 degrees both ways.
+
+**Using it**
+
+- **Grids of two parameters:** move two sliders, such as `AngleX` to 30 and `AngleY` to -30, and edit the art: the edit lands in a keyform at that point of the two parameters' grid, and the banner says "Editing keyform AngleX = 30, AngleY = -30". Between the points the art blends bilinearly; where a point has no keyform of its own, the two parameters' own keyforms just add up, so a grid only needs corners where the sum looks wrong (a face that should narrow as it turns up and sideways at once). **Add Keyform** and **Delete Keyform** work at grid points too. With three or more sliders moved, edits are refused as before.
+- **Draw order and swaps by parameter (part switches):** the **Switches** section of the parameters panel lists the selected layer's switches. A switch applies while one parameter is between two values (ends included) and does either or both of: show one of the part's variants (a side-on nose past `AngleX` 15), and draw just behind or just in front of another layer (the far ear tucking behind the head past `AngleX` 10). **Add Switch** starts one on the moved slider, from its value to that end of the range. To hide a part past a threshold, switch it to an empty variant. Where several apply, the first decides. The canvas follows the sliders live; the layers panel keeps the order as set. Accessories' behind shapes work as before.
+- **Mirror Keyforms** (each parameter's menu): with the slider on one side of the default, copies every keyform and switch on that side to the other, mirrored across the symmetry axis (or the middle of the frame, else the art, when symmetry is off), and moves the slider there to show it. A part named for a side (`Ear.L`) gives its keyforms to the other side's part (`Ear.R`); any other part to itself (the other eye of an Eyes part, or its own mirror image for a face outline). A switched variant becomes the variant named for the other side if there is one, or a mirrored copy named "… Mirrored" (a nose pointing the other way). Shapes with no mirror image to land on are counted in a notice so they can be keyed by hand. One undo step; touch-ups at the new side land in its keyforms.
+- **Onion skin:** the **Onion Skin** toggle (in the parameters panel and the variant strip) also outlines the keyed shapes, or just the selected ones, as they are at the neighbouring keys while a slider is moved: along both parameters at a grid point.
+- **Bone-driven parameters:** under **Edit Range and Default**, **Driven by Bone** picks a bone and the turns from rest (in degrees) that give the parameter's minimum and maximum, so posing the neck turns the head. Whenever the pose changes (dragging in Pose mode, IK, the rotation field, Reset, applying a saved pose, undo and redo) the slider follows, and the art with it; a driven slider can still be moved by hand until the next pose change. The driver is saved; the value it gives is not.
+- **Select at a keyform:** moving, scaling or turning shapes or whole layers with Select while a slider is moved now keys the move there, as Direct Select edits do, rather than moving the rest drawing (and with it every keyform).
+
+**How it works**
+
+- **Grids** (`Keyforms.swift`): a `Keyform` with `parameter2`/`value2` (a `KeyCoordinate`) holds the whole offset from the rest at its grid point; `ShapeKeyforms.offsets(at:parameters:)` adds each grid's bilinear correction on top of the per-parameter blends. `KeyformTarget.grid` is where edits land with two sliders moved. Tests: `GridKeyformTests`.
+- **Switches** (`Switches.swift`, `DrawingEditor+Switches.swift`): `Part.switches`; as with keyforms the shown state is stored, so `Drawing.applySwitches` activates the switched variant (remembering the part's own in `Part.switchedFrom`, not saved) and `drawStackPieces` places parts. Tests: `SwitchTests`.
+- **Mirror Keyforms and onion skin** (`KeyformMirror.swift`): points are matched to the mirror image by the rotation and direction of the path that lines them up. Tests: `KeyformMirrorTests`, `GridKeyformTests`.
+- **Drivers** (`ParameterDrivers.swift`): `Parameter.driver`, followed by the editor on every pose change. Tests: `ParameterDriverTests`.
+- **Done when:** `HeadTurnTests` checks it on Tam, built in code by `SampleCharacters.tam()`.
+- **Format:** grid keyforms (`parameter2`, `value2`), `switches` on slots and `driver` on parameters; see [Schema/README.md](Schema/README.md).
+
+## Milestone 8 notes (parameters and keyforms)
+
+Milestone 8 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format moves to 0.3: parameters and keyforms are new optional keys, and 0.2 files open and save as 0.3.
+
+**Using it**
+
+- **Parameters panel** (the dial in the tool strip): one row per parameter, such as `EyeOpen` from 0 to 1, with its name, its value and a slider over its range. Tick marks under the slider show the values any shape has a keyform at, and a taller tinted one the default. **Add Parameter** adds one; each row's menu renames it (names stay unique), shows fields for its **minimum, maximum and default**, moves it up or down, or deletes it with every keyform on it. Narrowing the range removes the keyforms outside it, keeping the shape at the new end; changing the default rebuilds the keyforms around the new rest drawing so nothing looks different at any value. Each of these is one undo step.
+- **Sliders** move the art live and snap to nearby key values, the default and the ends. They are not undo steps: undo and redo leave the sliders where they are and show the restored art at those values. **Reset All** puts every slider back at its default. The file keeps the rest drawing (every parameter at its default), and a document always opens there.
+- **Keyforms by editing at a value:** move one slider away from its default and edit the art with any tool (Direct Select, Select's move, scale and rotate, nudging, the style bar's opacity). The edit lands in a keyform at that value instead of the rest drawing, made the first time a shape is edited there. Draw the eye open at 1, set `EyeOpen` to 0, drag its lids together, and the slider blends between the two. Editing with every slider at its default changes the rest drawing, and every keyform moves with it. **Add Keyform** keys the selected shapes at the slider's value as they look now, so they hold still there when other keys change; **Delete Keyform** removes the keyform at that value from the selected shapes, or from every shape when nothing is selected.
+- **Banner:** while a slider is away from its default, a banner at the top of the canvas says where edits land: "Editing keyform EyeOpen = 0" at an existing key, or "Editing EyeOpen = 0.37: edits add a keyform here" between keys.
+- **Blending:** per parameter the art blends linearly between its keys, with the rest drawing as the key at the default, and holds the last key beyond it. Opacity blends too.
+- **Several parameters** combine by adding their offsets, so `EyeOpen` and `MouthOpen` (or a blink and a squint on the same eye) work at once. With two sliders moved, edits land in a keyform at that point of their grid (milestone 9); with three or more, the banner says to set the others back, and an edit is refused with that message.
+- **Topology lock:** a shape with keyforms keeps the same points in every keyform. Commands that add, remove or reorder points (insert, delete, split, join, simplify) update every keyform where they can, and otherwise are refused with a short message over the canvas.
+
+**How it works**
+
+- **Model** (CharacterCore, `Keyforms.swift`): `Drawing.parameters` and the slider values in `Drawing.parameterValues` (kept for undo, not saved). A keyed shape keeps its rest points and opacity and its `Keyform`s (offsets of every anchor and both handles, plus an opacity offset) in `VectorShape.keys`; its `path` is always what it shows at the current values, so every tool edits what the user sees, and `DrawingEditor.commit` folds each edit into the rest or the keyform (`Drawing.foldKeyformEdits`). Tests are in `KeyformTests`.
+- **Commands** (`DrawingEditor+Parameters`, `Parameters.swift`): adding, renaming, moving and deleting parameters, the range and the default (rebasing keyforms so every shape looks the same at every value), the sliders and their snapping, Add and Delete Keyform, and the banner text (`keyformBanner`). Tests are in `ParameterTests`.
+- **Format:** 0.3 adds `parameters` at the top level and keyforms on shapes, both optional, with a migration step from 0.2; see [Schema/README.md](Schema/README.md).
+
+## Milestone 7 notes (limbs)
+
+Milestone 7 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.2: the limb constraints are new optional keys on bones.
+
+**Using it**
+
+- **IK targets** (Pose > Turn): select a limb's end bone (a forearm or shin, on a parent to bend with) and choose **Limb > Add IK Target**. An orange target appears at its tip; drag it and the bone and its parent bend so the tip follows the Pencil, the joint keeping the way it already bends. **Flip Bend** folds the joint the other way with the tip held still, and **Remove IK Target** turns the bone back into a plain FK bone. Dragging the middle of the bone still turns just that bone. Each drag is one undo step.
+- **Rotation limits** (Limb menu): **Set Minimum to Current Angle** and **Set Maximum to Current Angle** limit how far the selected bone turns from rest, taken from its turn in the pose; the menu shows the range, and **Clear Limits** frees it. For a knee, set the minimum with the leg straight and it can't bend backwards. Turning by drag, the angle field, IK, applying a saved pose and mirroring all stay inside the limits.
+- **Mirror Pose** (Pose, shown when bones have `.L`/`.R` partners): **Left to Right** copies the turns of the character's left bones (`.L`, on the right of the screen) to their right partners, mirrored, so a raised arm raises the other the same way; **Right to Left** goes back. Bones in the middle keep their turns. Mirror Bone in Setup also mirrors limits and IK bends.
+- **Clean for Rig** (More menu): lists outlines whose ends almost meet without joining, outlines that run the other way round from their layer's largest one, and segments too long to bend well on parts bound to two bones (longer than half the shorter bone). **Fix** one, or **Fix All** as one undo step: gaps close (touching ends merge), outlines turn round, and long segments get anchors at even steps that keep the curve and blend the weights. Hidden and locked art is left alone.
+
+**How it works**
+
+- **Model** (CharacterCore, `Limbs.swift`): `Bone.limit` (a `RotationLimit`, degrees from rest) and `Bone.ik` (an `IKConstraint` with its bend direction). `Drawing.solvingIK` solves the two-bone chain analytically in posed space (law of cosines for the joint, then the end bone aims at the target), clamping each turn to its limit and re-aiming the end bone from wherever its parent stopped. `Drawing.mirroringPose` copies turns to the partner named by `SideName`, negated. `DrawingEditor+Limbs` has the commands and the IK drag in `DrawingEditor`; tests are in `LimbTests`.
+- **Clean for Rig** (`RigCheck.swift`): `RigCheck.issues` and `RigCheck.fixing`; the editor's `rigIssues` and `cleanForRig(_:)`. The robot sample shows it: its chest panel and button run the other way from its torso.
+- **Format:** a bone may carry `limits` (`min`, `max`) and `ik` (`bend`: `clockwise` or `counterclockwise`), written only when set; see [Schema/README.md](Schema/README.md#skeleton). The robot's neck now has a ±30 degree limit as the example.
+
+## Milestone 6 notes (variants and skins)
+
+Milestone 6 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md). The file format stays 0.2: variants and skins are attachments and skins the format already allowed.
+
+**Using it**
+
+- **Variants** are several drawings of one part with one shown, such as mouth shapes, hand poses or an eye blink. Select a part (or its shapes) and choose **Edit > Add Variant**: the part gets a second drawing, a copy of the first, and shows it. Change it with any tool; only the shown drawing is edited.
+- **Variant strip:** while the selected part has variants, a strip above the style bar shows one chip per variant. Tap a chip to show that variant (one undo step). Touch and hold a chip to rename it, move it left or right, or delete it; with one left the part goes back to a single drawing. **+** adds another, and the layers button turns on the **onion skin**, which outlines the other variants faintly so a new one can be drawn against them.
+- Moving or duplicating a whole part takes every variant with it; moving its shapes moves only the shown variant's. Erasing a variant's last shape leaves the part, and a part with variants can't be merged down.
+- **Skins** menu (the shirt in the tool strip): pick the skin to show. **New Skin** adds one (Skin, Skin 2...; **Rename** and **Delete** act on the shown one). In a skin, every part shows its default art until you select it and choose **Own Art for [part]**, which starts the skin's art as a copy to change, or **[part] Only in [skin]**, which moves the art into the skin and leaves the part empty everywhere else (a scarf only the winter outfit has). **Default Art for [part]** drops the skin's art. Switching skins is one undo step, and a document always opens on the default skin.
+
+**How it works**
+
+- **Model** (CharacterCore, `Variants.swift`): a part keeps the art it shows in `shapes` and `groups` as before, so every tool, hit test and renderer works on it unchanged. `Part.variants` lists its variants with `activeVariant` the shown one; the others' art is stored in their entries. `Drawing.skins` are the skins besides the default and `Drawing.activeSkin` the one shown (kept for undo, not saved); each part shows its art for that skin, or its default art, and keeps its other skins' art in `otherSkinArt`. Commands that must reach art that isn't shown (moving a whole part, duplicating it, global colors, weights) go through `Part.updateAllArt`. `DrawingEditor+Variants` has the commands; tests are in `VariantTests`.
+- **Format:** each variant is an attachment named for it in the slot, and the slot's `attachment` names the one shown; a part with one drawing writes one attachment named for the slot, as before. Other skins are written after `default` under their names, holding only the slots that have art of their own there. See [Schema/README.md](Schema/README.md#variants-and-skins).
+- **Sample characters:** `Schema/examples` holds Robo (rigged, posed, weighted, with accessories) and Pip (two bones and two poses, a mouth with Closed, Open and O, eyes with a blink, a Winter skin that swaps the top hat for a beanie and adds a scarf, and the parameters `EyeOpen` and `MouthOpen`, keyed to close the eyes and open the mouth). The tests open, check and re-save both byte for byte, and Pip is built in code in `SampleCharacters.swift`; run the tests with `WRITE_SAMPLES=1` to write its file again after changing the builder.
+
+## Milestone 5 notes (binding and posing)
+
+Milestone 5 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md), with the rendering plan it starts from in [deformation-rendering.md](docs/plans/deformation-rendering.md). The file format stays 0.2: poses and weights use keys it already reserved.
+
+**Using it**
+
+- **Setup and Pose** at the start of the Bones tool's context bar. Setup is milestone 4's Draw and Adjust, where moving bones never moves the art. Pose shows the character posed.
+- **Turn** (Pose): drag a bone to turn it about its head; its children and every part on them follow. Shift snaps the turn to 15 degrees. The selected bone's turn shows in degrees, with **Reset Bone**; **Reset Pose** puts every bone back. The rest pose never changes, and each drag is one undo step. Leaving Pose mode (Setup, or another tool) shows the rest pose again, where the art is edited; coming back shows the pose.
+- **Rigid binding:** a part follows its bone, and an accessory follows its owner.
+- **Bending:** select a part on a bone (in the Layers panel) and another bone, then **Bend [part] with [bone]**. The part stays on its own bone and blends toward the second one point by point, so an arm drawn as one shape on the upper arm bends at the elbow. Weights are set by distance to the two bones; **Weights > Auto Weights** sets them again and **Make Rigid** undoes the binding.
+- **Weights** (Pose): paint the selected two-bone part's weights with the Pencil while it shows posed. Pick which bone to paint toward in the bar; anchors are tinted from blue (the part's own bone) to orange (the second bone), and a ring shows the brush. Each stroke is one undo step.
+- **Poses** menu: **Save Pose** keeps the current pose as a test pose (named Pose, Pose 2...; rename it in the field next to the menu). Each saved pose can be applied, updated to the current pose or deleted. Test poses are saved with the character; the current pose is not.
+
+**How it works**
+
+- **Model** (CharacterCore, `Pose.swift`): `Drawing.pose` is the current pose (bone id to degrees), kept in the drawing so undo covers it but never written to the file; `Drawing.poses` are the saved test poses. `PosedSkeleton` gives each bone's transform from rest to posed world space: its parent's, then its own turn about its rest head. A rigid part moves through its bone's transform; a part with `Part.secondBone` blends both transforms per point by `PathPoint.weight`, anchor and both handles alike (linear blend skinning). `AutoWeights` sets weights from the distances to the two bones. `DrawingEditor+Pose` has the Pose and Weights gestures and the commands; tests are in `PoseTests`.
+- **Rendering:** in Pose mode the canvas builds the art from `PosedArt`: rigid parts stay at rest, so their cached triangles are reused, and each part's segment of the art batch draws through its bone's transform on the GPU. Only parts that bend are skinned and re-tessellated on the CPU. The overlay draws the posed bones and art. Timings and the reasoning are in [deformation-rendering.md](docs/plans/deformation-rendering.md).
+- **Format:** `poses` holds each test pose as bone id to `{ "rotation" }`; a two-bone part writes `weights` on every point as its own bone and its second bone with their shares. The example robot has two poses, Nod and Lean. See [Schema/README.md](Schema/README.md#poses-and-weights).
 
 Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
 
@@ -94,7 +210,7 @@ Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK
 
 **How it works**
 
-- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.2.schema.json).
+- **Format:** `character.json` follows the spec's layout (`formatVersion`, `bones`, `slots`, `drawOrder`, `skins`, `poses`, `animations`) plus `palette` and `references`. Each part is a slot on the root bone with one vector attachment in the default skin. See [Schema/README.md](Schema/README.md) and the [JSON Schema](Schema/character-0.3.schema.json).
 - **CharacterCore** owns the format: a small JSON reader and writer that keeps key order (`JSONValue`), the encoder, decoder and version checks (`CharacterFormat`), and the package as a map of paths to bytes (`CharacterPackage`). Damaged files fail with the JSON path of the problem, for example `skins.default.Head.Head.shapes[0].points[1].p is missing`.
 - **App:** a SwiftUI `DocumentGroup` with a `FileDocument` that reads and writes the package folder. The editor keeps its own undo stack and hands the drawing to the document after each finished gesture or command, which marks it edited for autosave. A color picker or slider drag is handed over once, half a second after it stops (`DocumentHandOff`), and before the document closes or the app leaves the foreground.
 - Ids are never reused within a session (undo no longer rewinds the id counter), which also fixes a milestone 2 bug where importing a second reference after undoing the first could show the first image.

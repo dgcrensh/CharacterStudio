@@ -157,6 +157,11 @@ extension DrawingEditor {
         let parent = drawing.bones[i].parent
         for j in drawing.bones.indices where drawing.bones[j].parent == id { drawing.bones[j].parent = parent }
         for p in drawing.parts.indices where drawing.parts[p].bone == id { drawing.parts[p].bone = parent }
+        // A part bent by the bone becomes rigid on its own bone.
+        for p in drawing.parts.indices where drawing.parts[p].secondBone == id || drawing.parts[p].secondBone == drawing.parts[p].bone {
+            drawing.parts[p].secondBone = nil
+        }
+        drawing.pose.rotations[id] = nil
         drawing.bones.remove(at: i)
         selectedBone = parent
         commit(from: before)
@@ -263,12 +268,17 @@ extension DrawingEditor {
             copy.name = drawing.uniqueBoneName(SideName.flipped(drawing.bones[i].name) ?? copy.name)
             copy.parent = old == id ? mirrorParent(of: copy.parent) : copy.parent.flatMap { map[$0] }
             copy.apply(mirror)
+            // A mirror turns the other way, so limits and bends flip.
+            copy.limit = copy.limit?.mirrored
+            copy.ik = copy.ik?.mirrored
             drawing.bones.append(copy)
         }
         // Parts on the mirrored bones come along, mirrored too (accessories with their parts).
         for part in drawing.parts where part.bone.map({ map[$0] != nil }) == true && part.accessoryOf == nil {
             if let copy = mirroredCopy(ofPart: part.id, side: side), let p = drawing.partIndex(copy) {
                 drawing.parts[p].bone = part.bone.flatMap { map[$0] }
+                // A second bone in the mirrored set is mirrored too; one outside it stays.
+                drawing.parts[p].secondBone = part.secondBone.map { map[$0] ?? $0 }
             }
         }
         drawing.normalizeBones()
@@ -355,6 +365,11 @@ extension DrawingEditor {
                let other = SideName.flipped(bone.name), let match = drawing.bone(named: other) {
                 drawing.parts[p].bone = match.id
             }
+            // The second bone's partner on the other side, when it has one.
+            if let p = drawing.partIndex(copy), let second = drawing.parts[p].secondBone.flatMap({ drawing.bone($0) }),
+               let other = SideName.flipped(second.name), let match = drawing.bone(named: other) {
+                drawing.parts[p].secondBone = match.id
+            }
             selection = .layer(copy)
         } else {
             var copies: Set<ShapeRef> = []
@@ -412,13 +427,11 @@ extension DrawingEditor {
         var copy = drawing.parts[i]
         copy.id = drawing.makeID()
         copy.name = drawing.uniquePartName(SideName.flipped(copy.name) ?? copy.name)
-        for s in copy.shapes.indices {
-            copy.shapes[s].id = drawing.makeID()
-            copy.shapes[s].apply(symmetry.transform)
-        }
-        drawing.renewGroups(of: &copy)
-        for g in copy.groups.indices {
-            copy.groups[g].name = SideName.flipped(copy.groups[g].name) ?? copy.groups[g].name
+        drawing.renewArtIDs(of: &copy)
+        let mirror = symmetry.transform
+        copy.updateAllArt { shapes, groups in
+            for s in shapes.indices { shapes[s].apply(mirror) }
+            for g in groups.indices { groups[g].name = SideName.flipped(groups[g].name) ?? groups[g].name }
         }
         copy.pivot = symmetry.mirror(copy.pivot)
         // A copied accessory goes on its owner's partner on the other side, when there is one.
@@ -429,10 +442,12 @@ extension DrawingEditor {
         drawing.parts.insert(copy, at: i + 1)
         let symmetry = symmetry
         copyAccessories(of: id, to: copy.id) { part in
-            for s in part.shapes.indices { part.shapes[s].apply(symmetry.transform) }
+            part.updateAllArt { shapes, groups in
+                for s in shapes.indices { shapes[s].apply(symmetry.transform) }
+                for g in groups.indices { groups[g].name = SideName.flipped(groups[g].name) ?? groups[g].name }
+            }
             part.pivot = symmetry.mirror(part.pivot)
             part.name = SideName.flipped(part.name) ?? part.name
-            for g in part.groups.indices { part.groups[g].name = SideName.flipped(part.groups[g].name) ?? part.groups[g].name }
         }
         return copy.id
     }
@@ -479,7 +494,8 @@ extension DrawingEditor {
     /// and each frame only draws the turning shapes through the new transform. Nil when
     /// nothing wiggles.
     public func wiggleTransform(at time: Double) -> LiveTransform? {
-        guard let id = wigglePart, let part = drawing.part(id) else { return nil }
+        // Pose mode shows the pose instead.
+        guard !isPosing, let id = wigglePart, let part = drawing.part(id) else { return nil }
         var shapes: Set<Int> = []
         for p in wiggleFamily(of: part) { shapes.formUnion(drawing.parts[p].shapes.map(\.id)) }
         return LiveTransform(id: wiggleID, base: drawing, shapes: shapes, transform: wiggleTurn(of: part, at: time))
@@ -487,8 +503,9 @@ extension DrawingEditor {
 
     /// The drawing as the wiggle preview shows it at `time`: the wiggling part turned
     /// about its pivot, along with its accessories and the parts on bones below its bone. The drawing itself
-    /// when nothing wiggles.
+    /// when nothing wiggles, and the posed drawing (`shownDrawing`) while posing.
     public func displayDrawing(at time: Double) -> Drawing {
+        guard !isPosing else { return shownDrawing }
         guard let id = wigglePart, let part = drawing.part(id) else { return drawing }
         var out = drawing
         let turn = wiggleTurn(of: part, at: time)

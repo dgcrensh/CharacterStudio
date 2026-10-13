@@ -58,6 +58,25 @@ public struct LayerTree: Hashable, Sendable {
         public var children: [BoneLayer]
     }
 
+    /// A deformer, with the layers attached to it and the deformers inside it.
+    public struct DeformerLayer: Hashable, Sendable, Identifiable {
+        public var id: Int
+        public var name: String
+        public var isWarp: Bool
+        /// A warp's lattice size, "3 × 3"; empty for a rotation.
+        public var latticeSize: String
+        /// How many keyforms it has.
+        public var keyformCount: Int
+        /// The layers attached to it, front to back, by id and name.
+        public var layers: [AttachedLayer]
+        public var children: [DeformerLayer]
+    }
+
+    public struct AttachedLayer: Hashable, Sendable, Identifiable {
+        public var id: Int
+        public var name: String
+    }
+
     /// One row of the tree as the panel lists it.
     public struct Row: Hashable, Sendable, Identifiable {
         public enum Kind: Hashable, Sendable {
@@ -113,10 +132,13 @@ public struct LayerTree: Hashable, Sendable {
     /// the skeleton and the ownership tree.
     public var drawOrder: [PartLayer]
     /// `drawOrder` with a row of its own for each accessory's behind shapes, front to
-    /// back as they draw.
+    /// back as they draw with no switch placing a part elsewhere (see
+    /// `Drawing.unswitchedDrawStackPieces`), so reordering isn't confused by a turned head.
     public var stack: [StackRow]
     /// Top to bottom.
     public var references: [ReferenceImage]
+    /// The deformers at the top, each holding the deformers inside it, in the drawing's order.
+    public var deformers: [DeformerLayer]
 
     public init(drawing: Drawing) {
         let parts = drawing.parts
@@ -155,7 +177,7 @@ public struct LayerTree: Hashable, Sendable {
         bones = [layer(nil, name: CharacterFormat.rootBone)]
         drawOrder = layers
         let byID = Dictionary(layers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        stack = drawing.drawStackPieces.reversed().compactMap { piece in
+        stack = drawing.unswitchedDrawStackPieces.reversed().compactMap { piece in
             guard var layer = byID[piece.part.id] else { return nil }
             guard piece.isBehind else { return StackRow(layer: layer, isBehind: false) }
             layer.shapeCount = piece.part.shapes.count
@@ -164,6 +186,26 @@ public struct LayerTree: Hashable, Sendable {
                             behindLayerName: target.flatMap { drawing.part($0)?.name })
         }
         references = drawing.references.reversed()
+        // A deformer whose parent is missing (or a loop) is listed at the top.
+        let ids = Set(drawing.deformers.map(\.id))
+        func deformerLayer(_ deformer: Deformer, seen: Set<Int>) -> DeformerLayer {
+            let inside = seen.union([deformer.id])
+            return DeformerLayer(
+                id: deformer.id, name: deformer.name, isWarp: deformer.isWarp,
+                latticeSize: deformer.isWarp ? "\(deformer.columns) × \(deformer.rows)" : "",
+                keyformCount: deformer.keys.keyforms.count,
+                layers: parts.reversed().filter { $0.deformer == deformer.id }.map { AttachedLayer(id: $0.id, name: $0.name) },
+                children: drawing.deformers.filter { $0.parent == deformer.id && !inside.contains($0.id) }
+                    .map { deformerLayer($0, seen: inside) })
+        }
+        let tops = drawing.deformers.filter { deformer in
+            guard let parent = deformer.parent, ids.contains(parent) else { return true }
+            // In a loop of parents: list the loop's first deformer at the top.
+            let chain = drawing.deformerChain(from: deformer.id)
+            return chain.last?.parent.map { p in chain.contains { $0.id == p } } == true &&
+                drawing.deformers.first { d in chain.contains { $0.id == d.id } }?.id == deformer.id
+        }
+        deformers = tops.map { deformerLayer($0, seen: []) }
     }
 
     /// True when the accessory at index `i` is in its owner's run: the owner at `o` and

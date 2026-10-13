@@ -260,7 +260,8 @@ final class CharacterFormatTests: XCTestCase {
         XCTAssertNoThrow(try open("0.1.0"))
         XCTAssertNoThrow(try open("0.1.7"))
         XCTAssertNoThrow(try open("0.2.0"))
-        XCTAssertThrowsError(try open("0.3.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("0.3.0")) }
+        XCTAssertNoThrow(try open("0.3.0"))
+        XCTAssertThrowsError(try open("0.4.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("0.4.0")) }
         XCTAssertThrowsError(try open("1.0.0")) { XCTAssertEqual($0 as? CharacterFileError, .newerVersion("1.0.0")) }
         XCTAssertThrowsError(try open("0.0.9")) { XCTAssertEqual($0 as? CharacterFileError, .unsupportedVersion("0.0.9")) }
         XCTAssertThrowsError(try open("one")) {

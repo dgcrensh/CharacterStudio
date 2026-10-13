@@ -5,6 +5,33 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// One chip in the variant strip.
+struct VariantChip: Identifiable, Equatable {
+    let id: Int
+    let name: String
+}
+
+/// One row of the parameters panel: a parameter, its slider's value and the values
+/// shapes have keyforms at, for the slider's tick marks.
+struct ParameterRow: Identifiable, Equatable {
+    let id: Int
+    let name: String
+    let minimum: Double
+    let maximum: Double
+    let defaultValue: Double
+    let value: Double
+    let keyValues: [Double]
+    /// The bone whose turn sets the value, if any.
+    let driver: ParameterDriver?
+    let canMirrorKeyforms: Bool
+}
+
+/// A layer a part switch can place the selected part behind or in front of.
+struct LayerChoice: Identifiable, Equatable {
+    let id: Int
+    let name: String
+}
+
 /// The editor state SwiftUI controls show. Refreshed from the session after each
 /// gesture and command, never per touch sample.
 @MainActor
@@ -120,6 +147,75 @@ final class EditorUIState {
     var canAddJointCap = false
     var wigglePart: Int?
     var canWiggle = false
+
+    // Pose mode
+    /// The selected bone's turn from its rest pose, in degrees.
+    var selectedBoneRotation = 0.0
+    var canResetPose = false
+    var poses: [NamedPose] = []
+    var activePose: Int?
+    var canBindSecondBone = false
+    var selectedPartHasSecondBone = false
+    /// The bone the weight brush paints toward, when a two-bone part is selected.
+    var weightPaintBoneName: String?
+    var weightPaintBone: Int?
+    /// The two bones of the part being painted: the part's own, then its second.
+    var weightPaintChoices: [Bone] = []
+
+    // Limbs
+    var canAddIK = false
+    var selectedBoneIK: IKConstraint?
+    var selectedBoneLimit: RotationLimit?
+    var canMirrorPoseFromLeft = false
+    var canMirrorPoseFromRight = false
+
+    // Variants and skins
+    /// The part the variant strip shows, and its variants in strip order (none for a
+    /// part with one drawing).
+    var variantPart: Int?
+    var variantPartName = ""
+    var variants: [VariantChip] = []
+    var activeVariant: Int?
+    var showsOnionSkin = false
+    var skins: [Skin] = []
+    var activeSkin = Skin.defaultID
+    var activeSkinName = "default"
+    var canGiveSkinArt = false
+    var canUseDefaultArt = false
+
+    // Parameters and keyforms
+    /// The parameters in panel order, with their values and key values.
+    var parameters: [ParameterRow] = []
+    /// Where edits land while a parameter is away from its default (see
+    /// `Drawing.keyformBanner`); nil at the rest drawing.
+    var keyformBanner: String?
+    var canAddKeyform = false
+    var canDeleteKeyform = false
+
+    // Deformers
+    /// The deformer picked in the layers panel, whose lattice (or pivot and angle knob)
+    /// shows on the canvas, and its name.
+    var selectedDeformer: Int?
+    var selectedDeformerName = ""
+    /// The selected deformer is a rotation, and its angle at the current values in degrees.
+    var selectedDeformerIsRotation = false
+    var selectedDeformerAngle = 0.0
+    /// One or two parameters are moved, so a deformer edit keys it there.
+    var canKeyDeformer = false
+    /// Add and Delete Keyform act on the selected deformer rather than the shapes.
+    var keysSelectedDeformer = false
+    var canAddDeformerKeyform = false
+    var canDeleteDeformerKeyform = false
+
+    // Part switches
+    /// The selected layer, whose switches the parameters panel shows, and its name.
+    var switchPart: Int?
+    var switchPartName = ""
+    var switches: [PartSwitch] = []
+    /// The selected layer's variant names, for a switch's variant.
+    var switchVariantNames: [String] = []
+    /// The other layers, for a switch's placement.
+    var switchTargets: [LayerChoice] = []
 
     // Workspace
     var outlineView = false
@@ -256,8 +352,9 @@ final class CanvasStore {
     }
 
     /// Copies editor state into `ui` and redraws. The values read from the whole
-    /// drawing are read again only when the drawing changed.
-    func refresh() {
+    /// drawing are read again only when the drawing changed. A `continuous` change (a
+    /// parameter slider tick) is handed to the document once the run goes quiet.
+    func refresh(continuous: Bool = false) {
         let interval = Signposts.canvas.beginInterval("Refresh")
         defer { Signposts.canvas.endInterval("Refresh", interval) }
         let editor = session.editor
@@ -272,6 +369,7 @@ final class CanvasStore {
             update(\.frame, editor.drawing.frame)
             update(\.canExport, editor.drawing.exportArea() != nil)
             update(\.layers, LayerTree(drawing: editor.drawing))
+            refreshParameters(editor)
         }
         update(\.tool, editor.tool)
         update(\.canUndo, editor.canUndo)
@@ -349,6 +447,45 @@ final class CanvasStore {
         update(\.canAddJointCap, editor.canAddJointCap)
         update(\.wigglePart, editor.wigglePart)
         update(\.canWiggle, editor.wiggleCandidate != nil || editor.wigglePart != nil)
+        update(\.selectedBoneRotation, editor.selectedBone.map { editor.drawing.pose.rotation(of: $0) } ?? 0)
+        update(\.canResetPose, editor.canResetPose)
+        update(\.poses, editor.drawing.poses)
+        update(\.activePose, editor.activePose)
+        update(\.canBindSecondBone, editor.canBindSecondBone)
+        update(\.selectedPartHasSecondBone, editor.selectedPartHasSecondBone)
+        update(\.weightPaintBoneName, editor.weightPaintBone.flatMap { editor.drawing.bone($0)?.name })
+        update(\.weightPaintBone, editor.weightPaintBone)
+        let painted = editor.weightPaintPart.flatMap { editor.drawing.part($0) }
+        update(\.weightPaintChoices, [painted?.bone, painted?.secondBone].compactMap { $0.flatMap { editor.drawing.bone($0) } })
+        update(\.canAddIK, editor.canAddIK)
+        update(\.selectedBoneIK, editor.selectedBoneIK)
+        update(\.selectedBoneLimit, editor.selectedBoneLimit)
+        update(\.canMirrorPoseFromLeft, editor.canMirrorPose(from: .left))
+        update(\.canMirrorPoseFromRight, editor.canMirrorPose(from: .right))
+        let variantPart = editor.variantPart.flatMap { editor.drawing.part($0) }
+        update(\.variantPart, variantPart?.id)
+        update(\.variantPartName, variantPart?.name ?? "")
+        update(\.variants, variantPart?.variants.map { VariantChip(id: $0.id, name: $0.name) } ?? [])
+        update(\.activeVariant, variantPart?.activeVariant)
+        update(\.showsOnionSkin, editor.showsOnionSkin)
+        update(\.skins, editor.drawing.skins)
+        update(\.activeSkin, editor.drawing.activeSkin)
+        update(\.activeSkinName, editor.drawing.activeSkinName)
+        update(\.canGiveSkinArt, editor.canGiveSkinArt)
+        update(\.canUseDefaultArt, editor.canUseDefaultArt)
+        update(\.canAddKeyform, editor.canAddKeyform)
+        update(\.canDeleteKeyform, editor.canDeleteKeyform)
+        let deformer = editor.selectedDeformer.flatMap { editor.drawing.deformer($0) }
+        let coordinate = editor.drawing.keyformTarget.coordinate
+        let deformerKeyed = deformer.flatMap { d in coordinate.flatMap { d.keys.keyformIndex(at: $0) } } != nil
+        update(\.selectedDeformer, deformer?.id)
+        update(\.selectedDeformerName, deformer?.name ?? "")
+        update(\.selectedDeformerIsRotation, deformer.map { !$0.isWarp } ?? false)
+        update(\.selectedDeformerAngle, deformer.map { editor.deformerAngle($0.id) } ?? 0)
+        update(\.canKeyDeformer, coordinate != nil)
+        update(\.keysSelectedDeformer, editor.keysSelectedDeformer)
+        update(\.canAddDeformerKeyform, editor.keysSelectedDeformer && !deformerKeyed)
+        update(\.canDeleteDeformerKeyform, editor.keysSelectedDeformer && deformerKeyed)
         update(\.outlineView, editor.outlineView)
         update(\.ghostsUnselected, editor.ghostsUnselected)
         update(\.selectedLayers, editor.selectedLayers)
@@ -365,12 +502,25 @@ final class CanvasStore {
         } else {
             update(\.selectedPart, nil)
         }
+        let switchPart = ui.selectedPart.flatMap { editor.drawing.part($0) }
+        update(\.switchPart, switchPart?.id)
+        update(\.switchPartName, switchPart?.name ?? "")
+        update(\.switches, switchPart?.switches ?? [])
+        update(\.switchVariantNames, switchPart?.variants.map(\.name) ?? [])
+        update(\.switchTargets, switchPart.map { part in
+            editor.drawing.parts.filter { $0.id != part.id }.map { LayerChoice(id: $0.id, name: $0.name) }
+        } ?? [])
 
         if session.tapCommandCount != seenTapCommands {
             seenTapCommands = session.tapCommandCount
             showToast(session.lastTapCommand == .redo ? "Redo" : "Undo")
         }
-        updateDocument()
+        // An edit the editor refused (one a keyform can't keep) says why, once.
+        if let notice = editor.notice {
+            session.editor.clearNotice()
+            showToast(notice)
+        }
+        updateDocument(continuous: continuous)
         onChange?()
     }
 
@@ -389,9 +539,27 @@ final class CanvasStore {
         update(\.recentColors, editor.recentColors)
         update(\.palette, editor.drawing.palette)
         update(\.globalColors, editor.drawing.globalColors)
+        // An opacity change at a slider's value can make a keyform there.
+        refreshParameters(editor)
         if refreshedRevision != nil { refreshedRevision = editor.revision }
+        if let notice = editor.notice {
+            session.editor.clearNotice()
+            showToast(notice)
+        }
         updateDocument(continuous: true)
         onChange?()
+    }
+
+    /// The parameters panel's rows and the keyform banner.
+    private func refreshParameters(_ editor: DrawingEditor) {
+        let drawing = editor.drawing
+        update(\.parameters, drawing.parameters.map {
+            ParameterRow(id: $0.id, name: $0.name, minimum: $0.minimum, maximum: $0.maximum,
+                         defaultValue: $0.defaultValue, value: drawing.value(of: $0.id),
+                         keyValues: drawing.keyValues(of: $0.id), driver: $0.driver,
+                         canMirrorKeyforms: editor.canMirrorKeyforms(of: $0.id))
+        })
+        update(\.keyformBanner, drawing.keyformBanner)
     }
 
     /// Shows a short message over the canvas.
@@ -547,6 +715,113 @@ final class CanvasStore {
             $0.editor.selectedBone = id
             $0.editor.mirrorSelectedBone()
         }
+    }
+
+    // MARK: Pose mode
+
+    func resetPose() { edit { $0.editor.resetPose() } }
+    func resetSelectedBonePose() { edit { $0.editor.resetSelectedBonePose() } }
+    func setBoneRotation(_ id: Int, degrees: Double) { edit { $0.editor.setBoneRotation(id, degrees: degrees) } }
+    func savePose() { edit { _ = $0.editor.savePose(named: "Pose") } }
+    func applyPose(_ id: Int) { edit { $0.editor.applyPose(id) } }
+    func updatePose(_ id: Int) { edit { $0.editor.updatePose(id) } }
+    func deletePose(_ id: Int) { edit { $0.editor.deletePose(id) } }
+    func renamePose(_ id: Int, to name: String) { edit { $0.editor.renamePose(id, to: name) } }
+    func bindSecondBone() { edit { $0.editor.bindSelectedPartToSecondBone() } }
+    func unbindSecondBone() { edit { $0.editor.unbindSecondBone() } }
+    func autoWeightSelectedPart() { edit { $0.editor.autoWeightSelectedPart() } }
+
+    // MARK: Limbs
+
+    func addIK() { edit { $0.editor.addIKToSelectedBone() } }
+    func removeIK() { edit { $0.editor.removeIKFromSelectedBone() } }
+    func flipIKBend() { edit { $0.editor.flipSelectedIKBend() } }
+    func setLimitMinimumToPose() { edit { $0.editor.setSelectedBoneMinimumToPose() } }
+    func setLimitMaximumToPose() { edit { $0.editor.setSelectedBoneMaximumToPose() } }
+    func clearLimit() { edit { $0.editor.clearSelectedBoneLimit() } }
+    func mirrorPose(from side: SideName.Side) { edit { $0.editor.mirrorPose(from: side) } }
+
+    /// What Clean for Rig finds now, each with the line the list shows.
+    func rigIssues() -> [(issue: RigIssue, summary: String)] {
+        let editor = session.editor
+        return editor.rigIssues.map { (issue: $0, summary: $0.summary(in: editor.drawing)) }
+    }
+
+    /// Fixes `issues`, or everything Clean for Rig finds when nil.
+    func cleanForRig(_ issues: [RigIssue]? = nil) { edit { $0.editor.cleanForRig(issues) } }
+
+    // MARK: Variants and skins
+
+    func addVariant() { edit { _ = $0.editor.addVariant() } }
+    func selectVariant(_ id: Int, of part: Int) { edit { $0.editor.selectVariant(id, of: part) } }
+    func cycleVariant(by step: Int) { edit { $0.editor.cycleVariant(by: step) } }
+    func renameVariant(_ id: Int, of part: Int, to name: String) { edit { $0.editor.renameVariant(id, of: part, to: name) } }
+    func moveVariant(_ id: Int, of part: Int, to index: Int) { edit { $0.editor.moveVariant(id, of: part, to: index) } }
+    func deleteVariant(_ id: Int, of part: Int) { edit { $0.editor.deleteVariant(id, of: part) } }
+    func setShowsOnionSkin(_ on: Bool) { edit { $0.editor.showsOnionSkin = on } }
+    func addSkin() { edit { _ = $0.editor.addSkin(named: "Skin") } }
+    func showSkin(_ id: Int) { edit { $0.editor.showSkin(id) } }
+    func renameSkin(_ id: Int, to name: String) { edit { $0.editor.renameSkin(id, to: name) } }
+    func deleteSkin(_ id: Int) { edit { $0.editor.deleteSkin(id) } }
+    func giveSkinArt() { edit { $0.editor.giveSkinArt() } }
+    func moveArtToSkin() { edit { $0.editor.moveArtToSkin() } }
+    func useDefaultArt() { edit { $0.editor.useDefaultArt() } }
+
+    // MARK: Parameters and keyforms
+
+    func addParameter() { edit { _ = $0.editor.addParameter(name: "Parameter") } }
+    func renameParameter(_ id: Int, to name: String) { edit { $0.editor.renameParameter(id, to: name) } }
+    func moveParameter(_ id: Int, to index: Int) { edit { $0.editor.moveParameter(id, to: index) } }
+    func deleteParameter(_ id: Int) { edit { $0.editor.deleteParameter(id) } }
+    func setParameterRange(_ id: Int, minimum: Double, maximum: Double) {
+        edit { $0.editor.setParameterRange(id, minimum: minimum, maximum: maximum) }
+    }
+    func setParameterDefault(_ id: Int, to value: Double) { edit { $0.editor.setParameterDefault(id, to: value) } }
+    func resetParameters() { edit { $0.editor.resetParameters() } }
+    func addKeyform() { edit { $0.editor.addKeyform() } }
+    func deleteKeyform() { edit { $0.editor.deleteCurrentKeyform() } }
+    func mirrorKeyforms(of id: Int) { edit { $0.editor.mirrorKeyforms(of: id) } }
+    func setParameterDriver(_ id: Int, bone: Int, minimumAngle: Double, maximumAngle: Double) {
+        edit { $0.editor.setParameterDriver(id, bone: bone, minimumAngle: minimumAngle, maximumAngle: maximumAngle) }
+    }
+    func clearParameterDriver(_ id: Int) { edit { $0.editor.clearParameterDriver(id) } }
+
+    // MARK: Deformers
+
+    /// Picks a deformer (nil for none), showing its handles on the canvas.
+    func selectDeformer(_ id: Int?) { edit { $0.editor.selectedDeformer = id } }
+    /// Adds a warp with a `size` × `size` lattice over the selected layers.
+    func addWarpDeformer(size: Int) { edit { _ = $0.editor.addWarpDeformer(columns: size, rows: size) } }
+    func addRotationDeformer() { edit { _ = $0.editor.addRotationDeformer() } }
+    func deleteDeformer(_ id: Int) { edit { $0.editor.deleteDeformer(id) } }
+    func renameDeformer(_ id: Int, to name: String) { edit { $0.editor.renameDeformer(id, to: name) } }
+    func attachLayers(_ ids: [Int], toDeformer id: Int?) { edit { $0.editor.attachLayers(ids, toDeformer: id) } }
+    func attachSelectedLayers(toDeformer id: Int?) { edit { $0.editor.attachSelectedLayers(toDeformer: id) } }
+    func canMoveDeformer(_ id: Int, into parent: Int?) -> Bool { session.editor.canMoveDeformer(id, into: parent) }
+    func moveDeformer(_ id: Int, into parent: Int?) { edit { $0.editor.moveDeformer(id, into: parent) } }
+    func fitDeformerToLayers(_ id: Int) { edit { $0.editor.fitDeformerToLayers(id) } }
+    func addDeformerKeyform() { edit { $0.editor.addDeformerKeyform() } }
+    func deleteDeformerKeyform() { edit { $0.editor.deleteDeformerKeyform() } }
+
+    /// A slider tick turning a rotation deformer; ticks of one drag are one undo step, and
+    /// the document hears of it once the slider stops.
+    func setDeformerAngle(_ degrees: Double, of id: Int) {
+        Signposts.canvas.withIntervalSignpost("Edit") { session.editor.setDeformerAngle(degrees, of: id) }
+        refresh(continuous: true)
+    }
+
+    // MARK: Part switches
+
+    func addSwitch(to id: Int) { edit { _ = $0.editor.addSwitch(to: id) } }
+    func updateSwitch(_ index: Int, of id: Int, to value: PartSwitch) { edit { $0.editor.updateSwitch(index, of: id, to: value) } }
+    func deleteSwitch(_ index: Int, of id: Int) { edit { $0.editor.deleteSwitch(index, of: id) } }
+    func moveSwitch(_ index: Int, of id: Int, to newIndex: Int) { edit { $0.editor.moveSwitch(index, of: id, to: newIndex) } }
+
+    /// A slider tick: moves the parameter, snapping onto nearby keys, and redraws the art.
+    /// Not an undo step; the document hears of it once the slider stops.
+    func setParameterValue(_ value: Double, of id: Int) {
+        Signposts.canvas.withIntervalSignpost("Edit") { session.editor.setParameterValue(value, of: id, snapping: true) }
+        refresh(continuous: true)
     }
 
     // MARK: Symmetry, wiggle and joints

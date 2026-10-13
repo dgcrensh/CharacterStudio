@@ -12,7 +12,7 @@ import sys
 from jsonschema import Draft202012Validator
 
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "character-0.2.schema.json")) as f:
+with open(os.path.join(here, "character-0.3.schema.json")) as f:
     schema = json.load(f)
 Draft202012Validator.check_schema(schema)
 validator = Draft202012Validator(schema)

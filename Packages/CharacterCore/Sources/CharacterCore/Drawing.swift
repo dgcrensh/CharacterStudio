@@ -28,6 +28,9 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     /// `Part.behindLayer`) instead of with the rest of the accessory (a hat's back brim
     /// behind the head). Ignored in a part's own art.
     public var isBehindOwner = false
+    /// The shape's keyforms and its rest, when it has keyforms. `path` and `opacity` are
+    /// what the shape shows at the drawing's parameter values (see `ShapeKeyforms`).
+    public var keys: ShapeKeyforms?
 
     public init(id: Int, path: BezierPath, fill: RGBAColor? = nil, stroke: StrokeStyle? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -66,6 +69,7 @@ public struct VectorShape: Hashable, Sendable, Codable, Identifiable {
     public mutating func apply(_ t: Affine2D) {
         path.apply(t)
         gradient?.apply(t)
+        keys?.apply(t)
         if stroke != nil {
             let k = abs(t.determinant).squareRoot()
             stroke!.width *= k
@@ -165,6 +169,10 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     public var pivot: Vec2
     /// The bone the part's slot sits on, or nil for the root bone.
     public var bone: Int?
+    /// A second bone the part bends with, such as the forearm for an arm drawn on the
+    /// upper arm. Each point's `PathPoint.weight` says how much it follows this bone
+    /// rather than `bone`. Nil for a rigid part, which moves only with `bone`.
+    public var secondBone: Int?
     /// Editor hints, saved in the file, that apply to every shape in the part.
     public var isHidden: Bool
     public var isLocked: Bool
@@ -178,6 +186,26 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// the layer those shapes draw just behind instead of the owner, such as the neck for
     /// long back hair on the head. Nil draws them just behind the owner.
     public var behindLayer: Int?
+    /// The part's drawings (mouth shapes, hand poses, blinks), in the order the variant
+    /// strip shows them, with `activeVariant` the one shown. Empty for a part with one
+    /// drawing. The active variant's art is `shapes` and `groups`; see `PartVariant`.
+    public var variants: [PartVariant] = []
+    public var activeVariant: Int?
+    /// The skin whose art the part shows (`Skin.defaultID` for the default skin). The
+    /// active skin's, or the default when the part has no art of its own there.
+    public var shownSkin = Skin.defaultID
+    /// The part's art in the skins it isn't showing, by skin id. It has default art
+    /// whatever it shows, so while it shows another skin its default art is in here.
+    public var otherSkinArt: [Int: PartArt] = [:]
+    /// What the part does over chosen ranges of parameter values (show another variant,
+    /// draw behind or in front of another layer), first match first; see `PartSwitch`.
+    public var switches: [PartSwitch] = []
+    /// While a switch shows one of the part's variants: the variant the part showed
+    /// before, which it goes back to when no switch applies. Not saved (the file names
+    /// this one); see `Drawing.applySwitches`.
+    public var switchedFrom: Int?
+    /// The deformer (a `Deformer` id) that bends or turns the part's art, if any.
+    public var deformer: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -452,6 +480,26 @@ public struct Drawing: Hashable, Sendable, Codable {
     public var globalColors: [GlobalColor] = []
     /// The target box and ground line the character is drawn for, if set.
     public var frame: CharacterFrame?
+    /// The pose Pose mode shows. Kept with the drawing so posing is undoable, but not
+    /// saved: the file keeps only the rest pose and the named `poses`.
+    public var pose = Pose()
+    /// Saved test poses, in the order they were made.
+    public var poses: [NamedPose] = []
+    /// Skins besides the default one, in the order they were made.
+    public var skins: [Skin] = []
+    /// The skin the parts show (`Skin.defaultID` for the default). Kept with the drawing
+    /// so switching is undoable, but not saved: the file opens on the default skin.
+    public var activeSkin = Skin.defaultID
+    /// The character's parameters, in the order the parameter panel lists them.
+    public var parameters: [Parameter] = []
+    /// The parameter values the art shows, by parameter id; a parameter missing here is at
+    /// its default. Kept with the drawing because every keyed shape's `path` is drawn at
+    /// these values, but not saved: the file keeps the rest drawing. Set it with
+    /// `setParameterValues(_:)`.
+    public internal(set) var parameterValues: [Int: Double] = [:]
+    /// The character's warp and rotation deformers, in the order the layers panel lists
+    /// them (see `Deformer`).
+    public var deformers: [Deformer] = []
     public var nextID = 1
 
     public init() {}
@@ -608,25 +656,42 @@ public struct Drawing: Hashable, Sendable, Codable {
         case .none:
             break
         case .layer(let id):
-            // Accessories move with their part.
-            for p in family(of: id) {
-                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, family(of: id))
         case .layers(let ids):
-            for p in families(of: ids) {
-                for s in parts[p].shapes.indices { parts[p].shapes[s].apply(t) }
-                parts[p].pivot = t.apply(parts[p].pivot)
-            }
+            applyToLayers(t, families(of: ids))
         case .shape(let pid, let sid):
             guard let idx = indices(part: pid, shape: sid) else { return }
-            parts[idx.0].shapes[idx.1].apply(t)
+            applyToShown(t, &parts[idx.0].shapes[idx.1])
         case .shapes:
-            for (p, s) in shapeIndices(in: selection) { parts[p].shapes[s].apply(t) }
+            for (p, s) in shapeIndices(in: selection) { applyToShown(t, &parts[p].shapes[s]) }
         case .reference(let id):
             guard let r = referenceIndex(id) else { return }
             references[r].apply(t)
         }
+    }
+
+    /// Transforms whole layers (part indices). At the rest every variant and skin's art
+    /// and the pivot move with them. Away from the rest only the shown shapes move, so the
+    /// move folds into the keyform being edited and the rest drawing stays.
+    private mutating func applyToLayers(_ t: Affine2D, _ indices: [Int]) {
+        for p in indices {
+            if parameterValues.isEmpty {
+                parts[p].updateAllShapes { $0.apply(t) }
+                parts[p].pivot = t.apply(parts[p].pivot)
+            } else {
+                for s in parts[p].shapes.indices { applyToShown(t, &parts[p].shapes[s]) }
+            }
+        }
+    }
+
+    /// Transforms a selected shape. At the rest its keyforms turn with it; away from the
+    /// rest only what it shows moves, so the edit folds into the keyform being edited.
+    private func applyToShown(_ t: Affine2D, _ shape: inout VectorShape) {
+        guard shape.keys != nil, !parameterValues.isEmpty else { return shape.apply(t) }
+        let keys = shape.keys
+        shape.keys = nil
+        shape.apply(t)
+        shape.keys = keys
     }
 
     public func applying(_ t: Affine2D, to selection: Selection) -> Drawing {

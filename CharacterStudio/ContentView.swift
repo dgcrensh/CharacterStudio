@@ -27,7 +27,20 @@ struct ContentView: View {
                 ModifierStrip(store: store, ui: store.ui)
                     .padding(.trailing, 16)
             }
-            .overlay(alignment: .bottom) { StyleBar(store: store, ui: store.ui) }
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 10) {
+                    if store.ui.variantPart != nil, !store.ui.variants.isEmpty {
+                        VariantStrip(store: store, ui: store.ui)
+                    }
+                    StyleBar(store: store, ui: store.ui)
+                }
+            }
+            .overlay(alignment: .top) {
+                if let banner = store.ui.keyformBanner {
+                    KeyformBanner(text: banner)
+                        .padding(.top, 8)
+                }
+            }
             .overlay { ToastView(ui: store.ui) }
             .overlay { PencilPalette(store: store, ui: store.ui) }
             // Keyboard shortcuts (EditorCommands) act on the focused document's canvas.
@@ -83,6 +96,8 @@ private struct ToolBar: View {
     @State private var showingInspector = false
     @State private var showingAppearance = false
     @State private var showingFrame = false
+    @State private var showingRigCheck = false
+    @State private var showingParameters = false
     @State private var importingSVG = false
     @State private var exporting = false
     @State private var exportFile = ExportFile()
@@ -104,6 +119,8 @@ private struct ToolBar: View {
         .popover(isPresented: $showingAppearance) { AppearancePanel(store: store, ui: ui) }
         .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
         .popover(isPresented: $showingFrame) { FramePanel(store: store, ui: ui) }
+        .popover(isPresented: $showingRigCheck) { RigCheckPanel(store: store) }
+        .popover(isPresented: $showingParameters) { ParametersPanel(store: store, ui: ui) }
         // The importer and exporter sit on separate views: SwiftUI shows only one file
         // panel modifier per view.
         .background {
@@ -169,6 +186,8 @@ private struct ToolBar: View {
             Button("Inspector", systemImage: "slider.horizontal.3") { showingInspector = true }
             Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
             Button("Layers", systemImage: "square.3.layers.3d") { showingLayers = true }
+            Button("Parameters", systemImage: "dial.medium") { showingParameters = true }
+            SkinMenu(store: store, ui: ui)
             ViewMenu(store: store, ui: ui, showingFrame: $showingFrame)
             Menu {
                 Button("Import SVG", systemImage: "square.and.arrow.down") { importingSVG = true }
@@ -181,6 +200,8 @@ private struct ToolBar: View {
                     }
                 }
                 .disabled(!ui.canExport)
+                Divider()
+                Button("Clean for Rig", systemImage: "checklist") { showingRigCheck = true }
                 Divider()
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) { store.clear() }
             } label: {
@@ -288,6 +309,8 @@ private struct EditMenu: View {
                     }
                 }
             }
+            Button("Add Variant", systemImage: "rectangle.stack.badge.plus") { store.addVariant() }
+                .disabled(ui.variantPart == nil)
             if ui.canMoveShapes {
                 Button("Move to New Part", systemImage: "rectangle.badge.plus") { store.moveSelectionToNewPart() }
                 Menu("Move to Part", systemImage: "arrow.right.square") {
@@ -318,6 +341,133 @@ private struct EditMenu: View {
             }
         } label: {
             Label("Edit", systemImage: "square.on.square.dashed")
+        }
+    }
+}
+
+/// The skin switcher: shows the default skin or another, adds, renames and deletes
+/// skins, and gives the selected part art of its own in the shown skin.
+private struct SkinMenu: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    @State private var renaming = false
+    @State private var newName = ""
+
+    var body: some View {
+        Menu {
+            Picker("Skin", selection: Binding(get: { ui.activeSkin }, set: { store.showSkin($0) })) {
+                Text("Default").tag(Skin.defaultID)
+                ForEach(ui.skins) { skin in
+                    Text(skin.name).tag(skin.id)
+                }
+            }
+            .pickerStyle(.inline)
+            Button("New Skin", systemImage: "plus") { store.addSkin() }
+            if ui.activeSkin != Skin.defaultID {
+                Button("Rename \(ui.activeSkinName)", systemImage: "pencil") {
+                    newName = ui.activeSkinName
+                    renaming = true
+                }
+                Button("Delete \(ui.activeSkinName)", systemImage: "trash", role: .destructive) {
+                    store.deleteSkin(ui.activeSkin)
+                }
+                Divider()
+                if ui.canGiveSkinArt {
+                    Button("Own Art for \(ui.variantPartName)", systemImage: "square.on.square") { store.giveSkinArt() }
+                    Button("\(ui.variantPartName) Only in \(ui.activeSkinName)", systemImage: "square.dashed") {
+                        store.moveArtToSkin()
+                    }
+                }
+                if ui.canUseDefaultArt {
+                    Button("Default Art for \(ui.variantPartName)", systemImage: "arrow.uturn.backward") {
+                        store.useDefaultArt()
+                    }
+                }
+            }
+        } label: {
+            Label("Skins", systemImage: ui.activeSkin == Skin.defaultID ? "tshirt" : "tshirt.fill")
+        }
+        .alert("Rename Skin", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") { store.renameSkin(ui.activeSkin, to: newName) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
+/// The variants of the selected part, one chip each: tap one to show it. Each chip's
+/// menu renames, moves and deletes it; the strip also adds a variant and toggles the
+/// onion skin of the others.
+private struct VariantStrip: View {
+    let store: CanvasStore
+    let ui: EditorUIState
+    @State private var renaming: VariantChip?
+    @State private var newName = ""
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(ui.variantPartName)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(ui.variants.enumerated()), id: \.element.id) { index, variant in
+                        chip(variant, at: index)
+                    }
+                }
+            }
+            .frame(maxWidth: 520)
+            .fixedSize(horizontal: true, vertical: false)
+            Button("Add Variant", systemImage: "plus") { store.addVariant() }
+            Toggle(isOn: Binding(get: { ui.showsOnionSkin }, set: { store.setShowsOnionSkin($0) })) {
+                Label("Onion Skin", systemImage: "square.3.layers.3d.down.right")
+            }
+            .toggleStyle(.button)
+        }
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .alert("Rename Variant", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                if let variant = renaming, let part = ui.variantPart { store.renameVariant(variant.id, of: part, to: newName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func chip(_ variant: VariantChip, at index: Int) -> some View {
+        let isActive = variant.id == ui.activeVariant
+        return Button {
+            if let part = ui.variantPart { store.selectVariant(variant.id, of: part) }
+        } label: {
+            Text(variant.name)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary), in: Capsule())
+                .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+        .contextMenu {
+            Button("Rename", systemImage: "pencil") {
+                newName = variant.name
+                renaming = variant
+            }
+            Button("Move Left", systemImage: "arrow.left") {
+                if let part = ui.variantPart { store.moveVariant(variant.id, of: part, to: index - 1) }
+            }
+            .disabled(index == 0)
+            Button("Move Right", systemImage: "arrow.right") {
+                if let part = ui.variantPart { store.moveVariant(variant.id, of: part, to: index + 1) }
+            }
+            .disabled(index == ui.variants.count - 1)
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                if let part = ui.variantPart { store.deleteVariant(variant.id, of: part) }
+            }
         }
     }
 }
@@ -484,9 +634,32 @@ private struct ContextBar: View {
         .font(.subheadline)
     }
 
-    /// Draw or adjust bones, and the selected bone's name, parent and commands.
+    /// Setup (draw or adjust bones, with the selected bone's name, parent and commands)
+    /// or Pose (turn bones, paint weights, test poses).
     @ViewBuilder
     private var boneControls: some View {
+        Picker("Skeleton mode", selection: Binding(get: { ui.boneMode.isPose },
+                                                   set: { store.setBoneMode($0 ? .pose : .draw) })) {
+            Text("Setup").tag(false)
+            Text("Pose").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 130)
+        if ui.boneMode.isPose {
+            Picker("Pose mode", selection: Binding(get: { ui.boneMode }, set: { store.setBoneMode($0) })) {
+                Text("Turn").tag(BoneToolMode.pose)
+                Text("Weights").tag(BoneToolMode.weights)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 150)
+            poseControls
+        } else {
+            setupControls
+        }
+    }
+
+    @ViewBuilder
+    private var setupControls: some View {
         Picker("Bone mode", selection: Binding(get: { ui.boneMode }, set: { store.setBoneMode($0) })) {
             Text("Draw").tag(BoneToolMode.draw)
             Text("Adjust").tag(BoneToolMode.adjust)
@@ -519,6 +692,7 @@ private struct ContextBar: View {
                         .lineLimit(1)
                 }
             }
+            bindingControls
         } else {
             Text(ui.boneMode == .draw
                  ? "Drag to draw a bone; drag from a bone's tip to chain the next"
@@ -526,6 +700,118 @@ private struct ContextBar: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// Binding the selected part to a second bone so it bends, and its weights.
+    @ViewBuilder
+    private var bindingControls: some View {
+        if ui.canBindSecondBone {
+            Button {
+                store.bindSecondBone()
+            } label: {
+                Label("Bend \(ui.selectedPartName) with \(ui.selectedBoneName)", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            }
+        }
+        if ui.selectedPartHasSecondBone {
+            Menu {
+                Button("Auto Weights", systemImage: "wand.and.stars") { store.autoWeightSelectedPart() }
+                Button("Make Rigid", systemImage: "link.badge.plus") { store.unbindSecondBone() }
+            } label: {
+                Label("Weights", systemImage: "scalemass")
+            }
+        }
+    }
+
+    /// Turning bones, resetting the pose, test poses, and weight painting.
+    @ViewBuilder
+    private var poseControls: some View {
+        Divider().frame(height: 24)
+        if ui.boneMode == .weights {
+            if let bone = ui.weightPaintBone, ui.weightPaintChoices.count == 2 {
+                Picker("Paint toward", selection: Binding(get: { bone }, set: { store.selectBone($0) })) {
+                    ForEach(ui.weightPaintChoices) { choice in
+                        Text(choice.name).tag(choice.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                Text("Paint toward a bone to make the art follow it more")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Select a part bound to two bones to paint its weights")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            bindingControls
+        } else if ui.selectedBone != nil {
+            Text("\(ui.selectedBoneName) \(ui.selectedBoneRotation, format: .number.precision(.fractionLength(0...1)))°")
+                .monospacedDigit()
+            Button("Reset Bone", systemImage: "arrow.uturn.backward") { store.resetSelectedBonePose() }
+                .disabled(ui.selectedBoneRotation == 0)
+            limbMenu
+        } else {
+            Text("Drag a bone to turn it, or an IK target to bend a limb")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        Button("Reset Pose", systemImage: "figure.stand") { store.resetPose() }
+            .disabled(!ui.canResetPose)
+        if ui.canMirrorPoseFromLeft || ui.canMirrorPoseFromRight {
+            Menu {
+                Button("Left to Right", systemImage: "arrow.right") { store.mirrorPose(from: .left) }
+                    .disabled(!ui.canMirrorPoseFromLeft)
+                Button("Right to Left", systemImage: "arrow.left") { store.mirrorPose(from: .right) }
+                    .disabled(!ui.canMirrorPoseFromRight)
+            } label: {
+                Label("Mirror Pose", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+            }
+        }
+        Menu {
+            Button("Save Pose", systemImage: "plus") { store.savePose() }
+            if !ui.poses.isEmpty { Divider() }
+            ForEach(ui.poses) { pose in
+                Menu(pose.name) {
+                    Button("Apply", systemImage: "figure.walk") { store.applyPose(pose.id) }
+                    Button("Update to Current Pose", systemImage: "square.and.arrow.down") { store.updatePose(pose.id) }
+                    Button("Delete", systemImage: "trash", role: .destructive) { store.deletePose(pose.id) }
+                }
+            }
+        } label: {
+            Label("Poses", systemImage: "figure.walk")
+        }
+        if let id = ui.activePose, let pose = ui.poses.first(where: { $0.id == id }) {
+            NameField(placeholder: "Pose name", name: pose.name) { store.renamePose(id, to: $0) }
+        }
+    }
+
+    /// The selected bone's IK target and rotation limits.
+    private var limbMenu: some View {
+        Menu {
+            if ui.canAddIK {
+                Button("Add IK Target", systemImage: "scope") { store.addIK() }
+            }
+            if ui.selectedBoneIK != nil {
+                Button("Flip Bend", systemImage: "arrow.uturn.left") { store.flipIKBend() }
+                Button("Remove IK Target", systemImage: "xmark.circle") { store.removeIK() }
+            }
+            Section(limitTitle) {
+                Button("Set Minimum to Current Angle", systemImage: "arrow.down.to.line") { store.setLimitMinimumToPose() }
+                Button("Set Maximum to Current Angle", systemImage: "arrow.up.to.line") { store.setLimitMaximumToPose() }
+                Button("Clear Limits", systemImage: "infinity") { store.clearLimit() }
+                    .disabled(ui.selectedBoneLimit == nil)
+            }
+        } label: {
+            Label("Limb", systemImage: ui.selectedBoneIK != nil ? "scope" : "angle")
+        }
+    }
+
+    private var limitTitle: String {
+        guard let limit = ui.selectedBoneLimit else { return "Turns freely" }
+        let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...1))
+        return "Turns \(limit.min.formatted(format))° to \(limit.max.formatted(format))°"
     }
 
     /// Mirror drawing about a vertical axis.
@@ -931,6 +1217,22 @@ private struct PencilPalette: View {
         let margin = radius + 40
         return CGPoint(x: min(max(p.x, margin), max(size.width - margin, margin)),
                        y: min(max(p.y, margin), max(size.height - margin, margin)))
+    }
+}
+
+/// While a parameter is away from its default: which keyform edits land in, or why
+/// edits are refused. It only informs, so touches pass through to the canvas.
+private struct KeyformBanner: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "dial.medium")
+            .font(.subheadline)
+            .lineLimit(2)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .allowsHitTesting(false)
     }
 }
 
