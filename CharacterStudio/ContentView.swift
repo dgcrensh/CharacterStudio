@@ -484,9 +484,32 @@ private struct ContextBar: View {
         .font(.subheadline)
     }
 
-    /// Draw or adjust bones, and the selected bone's name, parent and commands.
+    /// Setup (draw or adjust bones, with the selected bone's name, parent and commands)
+    /// or Pose (turn bones, paint weights, test poses).
     @ViewBuilder
     private var boneControls: some View {
+        Picker("Skeleton mode", selection: Binding(get: { ui.boneMode.isPose },
+                                                   set: { store.setBoneMode($0 ? .pose : .draw) })) {
+            Text("Setup").tag(false)
+            Text("Pose").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 130)
+        if ui.boneMode.isPose {
+            Picker("Pose mode", selection: Binding(get: { ui.boneMode }, set: { store.setBoneMode($0) })) {
+                Text("Turn").tag(BoneToolMode.pose)
+                Text("Weights").tag(BoneToolMode.weights)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 150)
+            poseControls
+        } else {
+            setupControls
+        }
+    }
+
+    @ViewBuilder
+    private var setupControls: some View {
         Picker("Bone mode", selection: Binding(get: { ui.boneMode }, set: { store.setBoneMode($0) })) {
             Text("Draw").tag(BoneToolMode.draw)
             Text("Adjust").tag(BoneToolMode.adjust)
@@ -519,12 +542,87 @@ private struct ContextBar: View {
                         .lineLimit(1)
                 }
             }
+            bindingControls
         } else {
             Text(ui.boneMode == .draw
                  ? "Drag to draw a bone; drag from a bone's tip to chain the next"
                  : "Drag a joint or bone to move it")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Binding the selected part to a second bone so it bends, and its weights.
+    @ViewBuilder
+    private var bindingControls: some View {
+        if ui.canBindSecondBone {
+            Button {
+                store.bindSecondBone()
+            } label: {
+                Label("Bend \(ui.selectedPartName) with \(ui.selectedBoneName)", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            }
+        }
+        if ui.selectedPartHasSecondBone {
+            Menu {
+                Button("Auto Weights", systemImage: "wand.and.stars") { store.autoWeightSelectedPart() }
+                Button("Make Rigid", systemImage: "link.badge.plus") { store.unbindSecondBone() }
+            } label: {
+                Label("Weights", systemImage: "scalemass")
+            }
+        }
+    }
+
+    /// Turning bones, resetting the pose, test poses, and weight painting.
+    @ViewBuilder
+    private var poseControls: some View {
+        Divider().frame(height: 24)
+        if ui.boneMode == .weights {
+            if let bone = ui.weightPaintBone, ui.weightPaintChoices.count == 2 {
+                Picker("Paint toward", selection: Binding(get: { bone }, set: { store.selectBone($0) })) {
+                    ForEach(ui.weightPaintChoices) { choice in
+                        Text(choice.name).tag(choice.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                Text("Paint toward a bone to make the art follow it more")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Select a part bound to two bones to paint its weights")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            bindingControls
+        } else if ui.selectedBone != nil {
+            Text("\(ui.selectedBoneName) \(ui.selectedBoneRotation, format: .number.precision(.fractionLength(0...1)))°")
+                .monospacedDigit()
+            Button("Reset Bone", systemImage: "arrow.uturn.backward") { store.resetSelectedBonePose() }
+                .disabled(ui.selectedBoneRotation == 0)
+        } else {
+            Text("Drag a bone to turn it; its children follow")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        Button("Reset Pose", systemImage: "figure.stand") { store.resetPose() }
+            .disabled(!ui.canResetPose)
+        Menu {
+            Button("Save Pose", systemImage: "plus") { store.savePose() }
+            if !ui.poses.isEmpty { Divider() }
+            ForEach(ui.poses) { pose in
+                Menu(pose.name) {
+                    Button("Apply", systemImage: "figure.walk") { store.applyPose(pose.id) }
+                    Button("Update to Current Pose", systemImage: "square.and.arrow.down") { store.updatePose(pose.id) }
+                    Button("Delete", systemImage: "trash", role: .destructive) { store.deletePose(pose.id) }
+                }
+            }
+        } label: {
+            Label("Poses", systemImage: "figure.walk")
+        }
+        if let id = ui.activePose, let pose = ui.poses.first(where: { $0.id == id }) {
+            NameField(placeholder: "Pose name", name: pose.name) { store.renamePose(id, to: $0) }
         }
     }
 

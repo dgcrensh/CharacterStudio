@@ -188,6 +188,9 @@ extension Drawing {
         bones = out
         let valid = Set(bones.map(\.id))
         for p in parts.indices where parts[p].bone.map({ !valid.contains($0) }) == true { parts[p].bone = nil }
+        for p in parts.indices where parts[p].secondBone.map({ !valid.contains($0) || $0 == parts[p].bone }) == true {
+            parts[p].secondBone = nil
+        }
     }
 
     /// Bone joints (heads and tails), for snapping pivots and new bones.

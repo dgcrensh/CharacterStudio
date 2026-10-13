@@ -118,6 +118,12 @@ final class CanvasRenderer {
     private var liveTransform = Affine2D.identity
     /// The live drag drawn on the last frame, whose triangles move with the shapes when it ends.
     private var lastLive: LiveTransform?
+    /// In Pose mode: the posed art for the drawing revision it was made from, and the
+    /// rigid parts' transforms the art draws through (by part id).
+    private var posedArt: (revision: Int, art: PosedArt)?
+    private var posedDrawing: (revision: Int, drawing: Drawing)?
+    private var artPartTransforms: [Int: Affine2D] = [:]
+    private var artPosing = false
     private var artSteps: [ArtStep] = []
     /// One per part. Each part's vertices live in their own buffer, keyed by segment id,
     /// so an edit uploads only the parts it changed. A buffer is never written after it
@@ -330,9 +336,10 @@ final class CanvasRenderer {
         }
         // Only the outline view's wireframe reads the turned drawing.
         let shown = editor.outlineView ? wiggle.map { _ in editor.displayDrawing(at: time) } : nil
+        let posed = editor.isPosing ? currentPosedDrawing(editor) : nil
         let overlay = Signposts.canvas.withIntervalSignpost("Overlay build") {
             EditorOverlay.layers(for: editor, zoom: session.camera.zoom, viewRect: Rect(points: screen),
-                                 art: shown, darkMode: darkMode, cache: &overlayCache)
+                                 art: shown, posed: posed, darkMode: darkMode, cache: &overlayCache)
         }
         if overlayCache.generation != overlayGeneration {
             overlayGeneration = overlayCache.generation
@@ -394,8 +401,12 @@ final class CanvasRenderer {
         let wanted = 0.2 / bucket
         // A drag while wiggling edits the wiggle's base, so it rebuilds on every sample.
         let drag = editor.liveTransform.flatMap { $0.movesTessellation ? $0 : nil }
-        let live = wiggle ?? drag
-        let drawing = live?.base ?? editor.drawing
+        // Pose mode draws rigid parts at rest through their bones' transforms, so posing
+        // re-tessellates only the parts that bend (see `PosedArt`).
+        let posed = editor.isPosing ? currentPosedArt(editor) : nil
+        let live = posed == nil ? wiggle ?? drag : nil
+        let drawing = posed?.drawing ?? live?.base ?? editor.drawing
+        artPartTransforms = posed?.transforms ?? [:]
         // A live drag just ended: carry the moved shapes' triangles to where they landed
         // rather than flattening them again. Enlarged ones are coarse until a refine.
         if live == nil, let ended = lastLive {
@@ -421,17 +432,18 @@ final class CanvasRenderer {
         let ghost = editor.ghostFocus
         liveTransform = live?.transform ?? .identity
         let current = live.map { artLive == $0.id } ?? (artLive == nil && editor.revision == artRevision)
-        guard !current || artRefined ||
+        guard !current || artRefined || (posed != nil) != artPosing ||
             editor.isolatedPart != artIsolation || editor.isolatedGroup != artGroupIsolation || ghost != artGhost
         else { return }
         // Why, for the signpost.
         let reason = artCold ? "open" : !current ? (wiggle != nil ? "wiggle" : live != nil ? "drag" : "edit")
-            : artRefined ? "refine" : "focus"
+            : artRefined ? "refine" : (posed != nil) != artPosing ? "pose" : "focus"
         // A live build stands for no revision, so the drawing is rebuilt when the drag ends.
         artRevision = live == nil ? editor.revision : -1
         artLive = live?.id
         artIsolation = editor.isolatedPart
         artGroupIsolation = editor.isolatedGroup
+        artPosing = posed != nil
         artGhost = ghost
         artRefined = false
         artDrawing = drawing
@@ -444,6 +456,23 @@ final class CanvasRenderer {
                                      tolerance: artTolerance, ghostFocus: ghost, moving: live?.shapes ?? [],
                                      reusingOtherTolerances: refineJob != nil || artMixed, leavingOutUncached: artCold)
         uploadArt(batch)
+    }
+
+    /// The editor's drawing with every part and bone posed, for the overlay, made once
+    /// per drawing revision.
+    private func currentPosedDrawing(_ editor: DrawingEditor) -> Drawing {
+        if let posedDrawing, posedDrawing.revision == editor.revision { return posedDrawing.drawing }
+        let drawing = editor.shownDrawing
+        posedDrawing = (editor.revision, drawing)
+        return drawing
+    }
+
+    /// The editor's posed art, made once per drawing revision.
+    private func currentPosedArt(_ editor: DrawingEditor) -> PosedArt {
+        if let posedArt, posedArt.revision == editor.revision { return posedArt.art }
+        let art = Signposts.canvas.withIntervalSignpost("Pose") { editor.posedArt }
+        posedArt = (editor.revision, art)
+        return art
     }
 
     /// Keeps the buffers of parts that didn't change and makes one for each part that did.
@@ -544,7 +573,9 @@ final class CanvasRenderer {
             view.append(Float(corners[i].x))
             view.append(Float(corners[i].y))
         }
-        // Shapes a drag moves draw through its transform, applied before the camera.
+        // Shapes a drag moves draw through its transform, applied before the camera. In
+        // Pose mode each rigid part draws through its bone's transform.
+        var posed = uniforms
         var moved = uniforms
         moved.worldToClip = uniforms.worldToClip * liveTransform.matrix4x4
         var moving = false
@@ -557,7 +588,7 @@ final class CanvasRenderer {
             if moving {
                 encoder.setVertexBytes(&moved, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
             } else {
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
+                encoder.setVertexBytes(&posed, length: MemoryLayout<CanvasUniforms>.stride, index: 1)
             }
             if let partBuffer { encoder.setVertexBuffer(partBuffer, offset: 0, index: 0) }
             bound = kind
@@ -567,6 +598,13 @@ final class CanvasRenderer {
             // Each part's ranges count from the start of its own buffer.
             partBuffer = artBuffers[segment.id]
             bound = .none
+            if let transform = artPartTransforms[segment.part] {
+                posed.worldToClip = uniforms.worldToClip * transform.matrix4x4
+                moved.worldToClip = posed.worldToClip * liveTransform.matrix4x4
+            } else if !artPartTransforms.isEmpty {
+                posed.worldToClip = uniforms.worldToClip
+                moved.worldToClip = uniforms.worldToClip * liveTransform.matrix4x4
+            }
             for step in artSteps[segment.steps] {
                 switch step {
                 case .stencil(let range, let state, let reference):

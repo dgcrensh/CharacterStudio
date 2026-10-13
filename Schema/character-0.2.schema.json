@@ -40,7 +40,7 @@
       }
     },
     "poses": {
-      "description": "Saved test poses: pose name to bone id to a transform relative to the rest pose. Empty in 0.1.",
+      "description": "Saved test poses: pose name to bone id to a transform relative to the rest pose (the app writes rotation only, in degrees, applied after the parent's pose). Bones not named stay at rest. Empty in 0.1.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
@@ -208,7 +208,7 @@
         "symmetric": { "description": "Editor hint: true when the handles are kept equally long and opposite. Defaults to false; ignored on corner points.", "type": "boolean" },
         "stroked": { "description": "Format 0.2: false leaves the segment from this point to the next without an outline; the fill still covers it. Defaults to true; ignored on the last point of an open path.", "type": "boolean" },
         "weights": {
-          "description": "[bone id, weight] pairs for blended binding. Rigid parts omit this and follow their slot's bone.",
+          "description": "[bone id, weight] pairs for blended binding: the point moves by the blend of the bones' pose transforms, weighted by their shares. The app writes the slot's bone and one second bone on every point of a part that bends. Rigid parts omit this and follow their slot's bone.",
           "type": "array",
           "items": {
             "type": "array",

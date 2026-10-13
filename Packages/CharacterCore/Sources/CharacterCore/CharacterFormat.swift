@@ -103,7 +103,12 @@ public enum CharacterFormat {
                 for s in local.shapes.indices { local.shapes[s].apply(inverse) }
                 local.pivot = inverse.apply(local.pivot)
             }
-            skin.append((key: name, value: obj([name: attachment(local, globals: globals)])))
+            // A part bound to a second bone writes both bones' weights on every point.
+            let weights = part.secondBone.flatMap { second -> (String, String)? in
+                guard bone != nil, second != part.bone, let secondName = bones[second] else { return nil }
+                return (boneName, secondName)
+            }
+            skin.append((key: name, value: obj([name: attachment(local, globals: globals, weights: weights)])))
         }
         let rootBoneValue = obj([
             "id": .string(rootBone), "parent": .null, "length": 0,
@@ -129,7 +134,7 @@ public enum CharacterFormat {
             "slots": .array(slots),
             "drawOrder": .array(drawOrder),
             "skins": obj([defaultSkin: .object(skin)]),
-            "poses": .object([]),
+            "poses": poses(drawing, names: bones),
             "animations": .object([]),
             "palette": .array(palette),
             "references": .array(references),
@@ -207,7 +212,27 @@ public enum CharacterFormat {
         }
     }
 
-    private static func attachment(_ part: Part, globals: [Int: String]) -> JSONValue {
+    /// Each test pose by name: the turned bones by name, in skeleton order, with their
+    /// turns in degrees. Bones at rest are left out.
+    private static func poses(_ drawing: Drawing, names: [Int: String]) -> JSONValue {
+        var used: Set<String> = []
+        var out: [(key: String, value: JSONValue)] = []
+        for pose in drawing.poses {
+            // Pose names are kept unique by the editor; a repeat would be lost, so it is skipped.
+            guard used.insert(pose.name).inserted else { continue }
+            var bones: [(key: String, value: JSONValue)] = []
+            for bone in drawing.bones {
+                let turn = pose.pose.rotation(of: bone.id)
+                guard abs(turn) >= 1e-9, let name = names[bone.id] else { continue }
+                bones.append((key: name, value: obj(["rotation": num(turn)])))
+            }
+            out.append((key: pose.name, value: .object(bones)))
+        }
+        return .object(out)
+    }
+
+    /// `weights` names the part's own bone and its second bone, for a two-bone part.
+    private static func attachment(_ part: Part, globals: [Int: String], weights: (String, String)?) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [
             (key: "type", value: .string("vector")),
             (key: "pivot", value: vec(part.pivot)),
@@ -227,7 +252,9 @@ public enum CharacterFormat {
             }
             members.append((key: "groups", value: .array(groups)))
         }
-        members.append((key: "shapes", value: .array(part.shapes.map { shape($0, globals: globals, groups: groupNumbers) })))
+        members.append((key: "shapes", value: .array(part.shapes.map {
+            shape($0, globals: globals, groups: groupNumbers, weights: weights)
+        })))
         return .object(members)
     }
 
@@ -241,7 +268,8 @@ public enum CharacterFormat {
 
     /// Keys beyond 0.1's are written only when they differ from their defaults, so a
     /// shape that uses none of them is written as before.
-    private static func shape(_ shape: VectorShape, globals: [Int: String], groups: [Int: Int]) -> JSONValue {
+    private static func shape(_ shape: VectorShape, globals: [Int: String], groups: [Int: Int],
+                              weights: (String, String)?) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [(key: "closed", value: .bool(shape.path.closed))]
         if let number = shape.group.flatMap({ groups[$0] }) {
             members.append((key: "group", value: .number(Double(number))))
@@ -262,7 +290,7 @@ public enum CharacterFormat {
         if shape.isClipped { members.append((key: "clipped", value: .bool(true))) }
         if shape.isBehindOwner { members.append((key: "behindOwner", value: .bool(true))) }
         members += editorHints(hidden: shape.isHidden, locked: shape.isLocked)
-        members.append((key: "points", value: .array(shape.path.points.map(point))))
+        members.append((key: "points", value: .array(shape.path.points.map { point($0, weights: weights) })))
         return .object(members)
     }
 
@@ -295,7 +323,7 @@ public enum CharacterFormat {
         ])
     }
 
-    private static func point(_ point: PathPoint) -> JSONValue {
+    private static func point(_ point: PathPoint, weights: (String, String)?) -> JSONValue {
         var members: [(key: String, value: JSONValue)] = [
             (key: "p", value: vec(point.position)),
             (key: "in", value: vec(point.inHandle)),
@@ -305,6 +333,11 @@ public enum CharacterFormat {
         if !point.isSmooth { members.append((key: "smooth", value: .bool(false))) }
         if point.mode == .symmetric { members.append((key: "symmetric", value: .bool(true))) }
         if !point.stroked { members.append((key: "stroked", value: .bool(false))) }
+        if let weights {
+            let w = min(max(point.weight, 0), 1)
+            members.append((key: "weights", value: .array([.array([.string(weights.0), num(1 - w)]),
+                                                            .array([.string(weights.1), num(w)])])))
+        }
         return .object(members)
     }
 
@@ -384,6 +417,7 @@ public enum CharacterFormat {
 
         let skin = try root.field("skins")?.field(defaultSkin)
         var partBones: [Int: String] = [:]
+        var secondBones: [Int: String] = [:]
         var partIDs: [String: Int] = [:]
         var owners: [Int: String] = [:]
         var behindSlots: [Int: String] = [:]
@@ -408,8 +442,12 @@ public enum CharacterFormat {
                 groups[number] = group.id
                 part.groups.append(group)
             }
+            // Per-point weights by bone name, read once the slot's bone is known.
+            var shapeWeights: [[[(bone: String, weight: Double)]]] = []
             for shapeNode in try node.field("shapes")?.array() ?? [] {
-                var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals)
+                var pointWeights: [[(bone: String, weight: Double)]] = []
+                var decoded = try shape(shapeNode, id: drawing.makeID(), globals: globals, weights: &pointWeights)
+                shapeWeights.append(pointWeights)
                 // An unknown group leaves the shape ungrouped.
                 decoded.group = try shapeNode.integer("group").flatMap { groups[$0] }
                 part.shapes.append(decoded)
@@ -421,7 +459,17 @@ public enum CharacterFormat {
                 for s in part.shapes.indices { part.shapes[s].apply(world) }
                 part.pivot = world.apply(part.pivot)
             }
-            if boneName != rootBone, skeleton.world[boneName] != nil { partBones[part.id] = boneName }
+            if boneName != rootBone, skeleton.world[boneName] != nil {
+                partBones[part.id] = boneName
+                if let second = secondBone(of: shapeWeights, slotBone: boneName, known: skeleton.world) {
+                    secondBones[part.id] = second
+                    for s in part.shapes.indices {
+                        for i in part.shapes[s].path.points.indices {
+                            part.shapes[s].path.points[i].weight = weight(shapeWeights[s][i], of: second)
+                        }
+                    }
+                }
+            }
             partIDs[slot.id] = part.id
             if let owner = slot.accessoryOf { owners[part.id] = owner }
             if let behind = slot.behindSlot { behindSlots[part.id] = behind }
@@ -438,7 +486,9 @@ public enum CharacterFormat {
         }
         for p in drawing.parts.indices {
             drawing.parts[p].bone = partBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
+            drawing.parts[p].secondBone = secondBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
         }
+        drawing.poses = try poses(root.field("poses"), boneIDs: boneIDs, drawing: &drawing)
         // Accessories find their owners by slot id. An unknown owner leaves a plain part;
         // an accessory of an accessory belongs to that one's owner, on the owner's bone.
         for p in drawing.parts.indices {
@@ -478,6 +528,52 @@ public enum CharacterFormat {
                                            isHidden: try node.field("hidden")?.bool() ?? false)
         }
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
+    }
+
+    /// The bone a part bends with besides its slot's: the known bone other than the slot's
+    /// that the most points weight. Nil when no point names one. The app writes two
+    /// bones per point; any other bones a point names are left out.
+    private static func secondBone(of weights: [[[(bone: String, weight: Double)]]], slotBone: String,
+                                   known: [String: Affine2D]) -> String? {
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for shape in weights {
+            for point in shape {
+                for pair in point where pair.bone != slotBone && pair.bone != rootBone && known[pair.bone] != nil {
+                    if counts[pair.bone] == nil { order.append(pair.bone) }
+                    counts[pair.bone, default: 0] += 1
+                }
+            }
+        }
+        // The first one named wins a tie, so reading is deterministic.
+        var best: String?
+        for name in order where best == nil || counts[name, default: 0] > counts[best!, default: 0] { best = name }
+        return best
+    }
+
+    /// A point's share of `second` among the weights it names (0 with none).
+    private static func weight(_ pairs: [(bone: String, weight: Double)], of second: String) -> Double {
+        let total = pairs.reduce(0) { $0 + $1.weight }
+        guard total > 1e-12 else { return 0 }
+        return min(max(pairs.filter { $0.bone == second }.reduce(0) { $0 + $1.weight } / total, 0), 1)
+    }
+
+    /// The test poses: by name, each bone's turn. Unknown bones are skipped.
+    private static func poses(_ node: Node?, boneIDs: [String: Int], drawing: inout Drawing) throws -> [NamedPose] {
+        guard let node else { return [] }
+        var out: [NamedPose] = []
+        for (name, _) in try node.members() {
+            guard let poseNode = try node.field(name) else { continue }
+            var pose = Pose()
+            for (boneName, _) in try poseNode.members() {
+                guard let id = boneIDs[boneName], let boneNode = try poseNode.field(boneName) else { continue }
+                let turn = try boneNode.number("rotation") ?? 0
+                if abs(turn) >= 1e-9 { pose.rotations[id] = Pose.normalized(turn) }
+            }
+            guard !out.contains(where: { $0.name == name }) else { continue }
+            out.append(NamedPose(id: drawing.makeID(), name: name, pose: pose))
+        }
+        return out
     }
 
     /// A bone from the file, resolved to world space.
@@ -537,8 +633,11 @@ public enum CharacterFormat {
         return (world, out)
     }
 
-    private static func shape(_ node: Node, id: Int, globals: [String: Int]) throws -> VectorShape {
+    /// `weights` gets each point's `[bone, weight]` pairs, empty for a point without them.
+    private static func shape(_ node: Node, id: Int, globals: [String: Int],
+                              weights: inout [[(bone: String, weight: Double)]]) throws -> VectorShape {
         var points: [PathPoint] = []
+        weights = []
         for p in try node.require("points").array() {
             var point = PathPoint(try p.requireVec2("p"))
             point.inHandle = try p.vec2("in") ?? .zero
@@ -550,6 +649,15 @@ public enum CharacterFormat {
             point.isSmooth = try p.bool("smooth") ?? true
             if point.isSmooth, try p.bool("symmetric") ?? false { point.mode = .symmetric }
             point.stroked = try p.bool("stroked") ?? true
+            var pairs: [(bone: String, weight: Double)] = []
+            for pair in try p.field("weights")?.array() ?? [] {
+                let items = try pair.array()
+                guard items.count == 2 else {
+                    throw CharacterFileError.invalid(path: pair.path, problem: "is not a [bone, weight] pair")
+                }
+                pairs.append((bone: try items[0].string(), weight: max(try items[1].number(), 0)))
+            }
+            weights.append(pairs)
             points.append(point)
         }
         let path = BezierPath(points: points, closed: try node.bool("closed") ?? false)

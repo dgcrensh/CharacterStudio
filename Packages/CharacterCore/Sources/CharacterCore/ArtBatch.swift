@@ -133,6 +133,10 @@ public struct ArtSegment: Hashable, Sendable {
     /// Names these vertices: a segment in a later batch from the same `ArtBuilder` with
     /// the same id has the same `floats`. Never reused by that builder.
     public var id: Int
+    /// The part (its id in the drawing) whose art this is. An accessory drawn partly
+    /// behind its owner has two segments with the same part. A renderer drawing a pose
+    /// draws each segment through its part's transform (see `PosedArt`).
+    public var part: Int
     /// The part's vertices, in the batch's vertex numbering.
     public var vertices: Range<Int>
     /// The part's steps, as indices into `ArtBatch.steps`.
@@ -356,14 +360,14 @@ public struct ArtBuilder: Sendable {
                               ghostFocus: ghostFocus.map { Self.restrict($0, to: part) },
                               moving: Self.restrict(moving, to: part))
             if let cached = partCache[slot], cached.isExact, cached.key == key {
-                batch.append(cached, concatenating: concatenatesVertices)
+                batch.append(cached, part: part.id, concatenating: concatenatesVertices)
                 continue
             }
             if let old = partCache[slot] { retired.formUnion(old.key.shapes.lazy.map(\.id)) }
             fresh.formUnion(part.shapes.lazy.map(\.id))
             let built = buildPart(part, key: key)
             partCache[slot] = built
-            batch.append(built, concatenating: concatenatesVertices)
+            batch.append(built, part: part.id, concatenating: concatenatesVertices)
         }
         for slot in Array(partCache.keys) where !seen.contains(slot) {
             if let old = partCache.removeValue(forKey: slot) { retired.formUnion(old.key.shapes.lazy.map(\.id)) }
@@ -702,7 +706,7 @@ extension ArtBatch {
     /// Appends a part's batch as the next segment, moving its vertex ranges past the
     /// vertices so far. A `moving(false)` ending the last part and a `moving(true)`
     /// starting this one cancel out, as they would in one walk across both parts.
-    mutating func append(_ part: ArtBuilder.PartBatch, concatenating: Bool) {
+    mutating func append(_ part: ArtBuilder.PartBatch, part id: Int, concatenating: Bool) {
         let base = segments.last?.vertices.upperBound ?? 0
         var partSteps = part.steps[...]
         if case .moving(true)? = partSteps.first, case .moving(false)? = steps.last, let last = segments.indices.last {
@@ -718,7 +722,7 @@ extension ArtBatch {
             for step in partSteps { steps.append(step.offset(by: base)) }
         }
         if concatenating { vertices.append(contentsOf: part.vertices) }
-        segments.append(ArtSegment(id: part.id, vertices: base..<(base + part.vertices.count / 2),
+        segments.append(ArtSegment(id: part.id, part: id, vertices: base..<(base + part.vertices.count / 2),
                                    steps: firstStep..<steps.count, floats: part.vertices))
     }
 

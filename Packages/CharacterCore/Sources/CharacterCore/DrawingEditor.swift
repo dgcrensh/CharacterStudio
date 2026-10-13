@@ -28,6 +28,15 @@ public enum BoneToolMode: String, Hashable, Sendable, CaseIterable {
     /// Drag a bone's tip to turn and resize it (its children follow), its head to move
     /// just that end, or its middle to move it with its children.
     case adjust
+    /// Pose mode: drag a bone to turn it about its head (forward kinematics); its
+    /// children and the art bound to them follow. The rest pose never changes.
+    case pose
+    /// Pose mode: paint the selected two-bone part's weights with the Pencil, toward the
+    /// selected bone. The art shows posed while it is painted.
+    case weights
+
+    /// True for the Pose modes, false for the Setup modes (draw and adjust).
+    public var isPose: Bool { self == .pose || self == .weights }
 }
 
 /// Live symmetry: new strokes, shapes, pen paths and bones get a mirrored copy across a
@@ -137,6 +146,7 @@ public struct DrawingEditor: Sendable {
             // The wiggle's live transform has a new base (see `wiggleTransform(at:)`).
             if wigglePart != nil { newWiggleID() }
             if let id = targetLayer, drawing.partIndex(id) == nil { targetLayer = nil }
+            if let id = activePose, drawing.poseIndex(id) == nil { activePose = nil }
         }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
@@ -175,7 +185,13 @@ public struct DrawingEditor: Sendable {
     public var selectedBone: Int? {
         didSet { if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil } }
     }
-    public var boneMode: BoneToolMode = .draw
+    public var boneMode: BoneToolMode = .draw {
+        didSet { if boneMode != oldValue { cancelGesture() } }
+    }
+    /// The test pose last saved or applied, which the pose panel names and updates.
+    public internal(set) var activePose: Int?
+    /// The weight brush's radius in screen points (see `paintWeights(part:at:)`).
+    public var weightBrushRadius = DrawingEditor.defaultWeightBrushRadius
     /// Draws the bones in every tool, not just the bone tool.
     public var showsBones = false
     /// Draws every shape as a thin wireframe instead of its fill and outline.
@@ -350,6 +366,11 @@ public struct DrawingEditor: Sendable {
         case boneDraw(head: Vec2, parent: Int?, bone: Int?, mirror: Int?, before: Drawing)
         /// Adjusting bone `id`; `grab` keeps the grabbed point from jumping to the Pencil tip.
         case boneEdit(BoneHandle, id: Int, before: Drawing, start: Vec2, grab: Vec2)
+        /// Turning bone `id` in Pose mode about its posed `head`, from the Pencil's angle
+        /// `startAngle` (radians) and the bone's turn `startRotation` (degrees) as it began.
+        case poseTurn(id: Int, before: Drawing, head: Vec2, startAngle: Double, startRotation: Double)
+        /// Painting part `part`'s weights.
+        case weightPaint(part: Int, before: Drawing, last: Vec2)
         /// A drag that does nothing (for example, from a pen shortcut target).
         case idle
     }
@@ -380,7 +401,10 @@ public struct DrawingEditor: Sendable {
                 gesture = .pending(.empty, start: p)
             }
         case .bone:
-            if let hit = drawing.hitTestBone(p, zoom: gestureZoom) {
+            if boneMode == .weights, let part = weightPaintPart {
+                gesture = .weightPaint(part: part, before: drawing, last: p)
+                paintWeights(part: part, at: p)
+            } else if let hit = boneHit(at: p, zoom: gestureZoom) {
                 gesture = .pending(.bone(hit.bone, hit.handle, newBone: newBoneStart(on: hit.bone, hit.handle)), start: p)
             } else {
                 gesture = .pending(.empty, start: p)
@@ -424,8 +448,8 @@ public struct DrawingEditor: Sendable {
 
     /// The bone, and which part of it, a bone-tool touch at the hover point would grab.
     public var hoverBone: (bone: Int, handle: BoneHandle)? {
-        guard tool == .bone, gesture == nil, let p = hoverPoint else { return nil }
-        return drawing.hitTestBone(p, zoom: hoverZoom)
+        guard tool == .bone, gesture == nil, boneMode != .weights, let p = hoverPoint else { return nil }
+        return boneHit(at: p, zoom: hoverZoom)
     }
 
     /// Where the scissors would cut if the Pencil touched down at the hover point.
@@ -533,6 +557,19 @@ public struct DrawingEditor: Sendable {
         case .boneEdit(let handle, let id, let before, let start, let grab):
             drawing = editedBones(before, handle, id: id, start: start, to: p, grab: grab)
 
+        case .poseTurn(let id, _, let head, let startAngle, let startRotation):
+            turnBone(id, head: head, startAngle: startAngle, startRotation: startRotation, to: p)
+
+        case .weightPaint(let part, let before, let last):
+            // A dab every half radius along the stroke, however fast or slow it moves.
+            let step = max(weightBrushRadius / gestureZoom / 2, 1e-6)
+            let distance = p.distance(to: last)
+            let n = Int(distance / step)
+            guard n > 0 else { return }
+            let direction = (p - last) / distance
+            for i in 1...n { paintWeights(part: part, at: last + direction * (step * Double(i))) }
+            self.gesture = .weightPaint(part: part, before: before, last: last + direction * (step * Double(n)))
+
         case .idle:
             break
         }
@@ -572,7 +609,8 @@ public struct DrawingEditor: Sendable {
             undoBase = nil
         case .transform(_, _, let before, _), .pivot(_, let before, _, _),
              .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _),
-             .erase(let before, _), .boneEdit(_, _, let before, _, _):
+             .erase(let before, _), .boneEdit(_, _, let before, _, _), .poseTurn(_, let before, _, _, _),
+             .weightPaint(_, let before, _):
             commit(from: undoBase ?? before)
             undoBase = nil
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
@@ -596,7 +634,8 @@ public struct DrawingEditor: Sendable {
         switch gesture {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
              .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _),
-             .boneDraw(_, _, _, _, let before), .boneEdit(_, _, let before, _, _):
+             .boneDraw(_, _, _, _, let before), .boneEdit(_, _, let before, _, _), .poseTurn(_, let before, _, _, _),
+             .weightPaint(_, let before, _):
             drawing = undoBase ?? before
             undoBase = nil
             validateSelection()
@@ -611,6 +650,17 @@ public struct DrawingEditor: Sendable {
         case .pending, .idle:
             break
         }
+    }
+
+    // MARK: Pose
+
+    /// A Pose-mode drag on bone `id` from `start`: it turns about its head as posed.
+    private func beginPoseTurn(_ id: Int, from start: Vec2) -> Gesture {
+        guard let bone = drawing.bone(id) else { return .idle }
+        let head = drawing.posedSkeleton(drawing.pose).posed(bone).head
+        let d = start - head
+        return .poseTurn(id: id, before: drawing, head: head, startAngle: atan2(d.y, d.x),
+                         startRotation: drawing.pose.rotation(of: id))
     }
 
     // MARK: Select
@@ -1031,6 +1081,9 @@ public struct DrawingEditor: Sendable {
             }
             guard let bone = drawing.bone(id) else { return .idle }
             selectedBone = id
+            // Pose mode turns bones; the weight brush never moves them.
+            if boneMode == .pose { return beginPoseTurn(id, from: start) }
+            if boneMode == .weights { return .idle }
             // In draw mode only the middle is pressed here (joints start new bones): it moves the bone.
             let edit: BoneHandle = boneMode == .draw ? .body : handle
             let grabbed = edit == .tail ? bone.tail : bone.head
