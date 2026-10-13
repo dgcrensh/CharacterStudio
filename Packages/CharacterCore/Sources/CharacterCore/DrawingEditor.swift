@@ -147,6 +147,7 @@ public struct DrawingEditor: Sendable {
             if wigglePart != nil { newWiggleID() }
             if let id = targetLayer, drawing.partIndex(id) == nil { targetLayer = nil }
             if let id = activePose, drawing.poseIndex(id) == nil { activePose = nil }
+            if let id = selectedDeformer, drawing.deformerIndex(id) == nil { selectedDeformer = nil }
         }
     }
     /// Increments on every change to `drawing`, so renderers know to rebuild.
@@ -184,6 +185,12 @@ public struct DrawingEditor: Sendable {
     /// part and a bone can be selected together (to attach one to the other).
     public var selectedBone: Int? {
         didSet { if let id = selectedBone, drawing.boneIndex(id) == nil { selectedBone = nil } }
+    }
+    /// The deformer picked in the layers panel. Its lattice (or pivot and angle handle)
+    /// shows on the canvas, and dragging a handle bends it in any tool but Pose mode (see
+    /// `DrawingEditor+Deformers`). Deformers are picked apart from the art, like bones.
+    public var selectedDeformer: Int? {
+        didSet { if let id = selectedDeformer, drawing.deformerIndex(id) == nil { selectedDeformer = nil } }
     }
     public var boneMode: BoneToolMode = .draw {
         didSet { if boneMode != oldValue { cancelGesture() } }
@@ -381,6 +388,8 @@ public struct DrawingEditor: Sendable {
         case ikDrag(id: Int, before: Drawing, grab: Vec2)
         /// Painting part `part`'s weights.
         case weightPaint(part: Int, before: Drawing, last: Vec2)
+        /// Dragging a handle of deformer `id`; `grab` keeps it from jumping to the Pencil tip.
+        case deformer(DeformerHandle, id: Int, before: Drawing, grab: Vec2)
         /// A drag that does nothing (for example, from a pen shortcut target).
         case idle
     }
@@ -390,6 +399,16 @@ public struct DrawingEditor: Sendable {
         hoverPoint = nil
         if tool.usesShapeIndex { refreshShapeIndex() }
         let px = 1 / gestureZoom
+        // The selected deformer's handles come first, in any tool.
+        if let hit = deformerHit(at: p, zoom: gestureZoom) {
+            if let refusal = deformerEditRefusal(hit.handle) {
+                notice = refusal
+                gesture = .idle
+            } else {
+                gesture = .deformer(hit.handle, id: hit.id, before: drawing, grab: hit.position - p)
+            }
+            return
+        }
         switch tool {
         case .pencil:
             gesture = nil
@@ -584,6 +603,9 @@ public struct DrawingEditor: Sendable {
             for i in 1...n { paintWeights(part: part, at: last + direction * (step * Double(i))) }
             self.gesture = .weightPaint(part: part, before: before, last: last + direction * (step * Double(n)))
 
+        case .deformer(let handle, let id, let before, let grab):
+            dragDeformer(handle, of: id, before: before, to: p + grab)
+
         case .idle:
             break
         }
@@ -629,6 +651,8 @@ public struct DrawingEditor: Sendable {
              .ikDrag(_, let before, _), .weightPaint(_, let before, _):
             commit(from: undoBase ?? before)
             undoBase = nil
+        case .deformer(_, _, let before, _):
+            commit(from: before, folding: false)
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
             if let rect = marquee { finishMarquee(rect, additive: additive, baseShapes: baseShapes, baseAnchors: baseAnchors) }
             marquee = nil
@@ -651,7 +675,7 @@ public struct DrawingEditor: Sendable {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
              .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _),
              .boneDraw(_, _, _, _, let before), .boneEdit(_, _, let before, _, _), .poseTurn(_, let before, _, _, _),
-             .ikDrag(_, let before, _), .weightPaint(_, let before, _):
+             .ikDrag(_, let before, _), .weightPaint(_, let before, _), .deformer(_, _, let before, _):
             drawing = undoBase ?? before
             undoBase = nil
             validateSelection()
@@ -1693,6 +1717,8 @@ public struct DrawingEditor: Sendable {
             notice = refusal
             return
         }
+        // Deformed art shows what its keyforms and deformers give now.
+        drawing.showDeformedArt()
         guard before != drawing else { return }
         undoStack.record(before, coalescingKey: key)
     }

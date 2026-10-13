@@ -85,6 +85,55 @@ final class HeadTurnTests: XCTestCase {
         XCTAssertFalse(e.canUndo)
     }
 
+    /// Milestone 10's done-when: one warp deformer over the face, keyed on `AngleX`, moves
+    /// every facial feature for the turn, replacing the per-shape keyforms milestone 9 gave
+    /// them (9 keyed shapes then: the head, the eyes, both noses, the mouth, the hair and
+    /// the ears; now only the ears, which slide behind the head, keep keyforms).
+    func testOneFaceWarpTurnsEveryFacialFeature() throws {
+        var (e, x, _) = try tam()
+        let rest = e.drawing
+        let warps = rest.deformers.filter(\.isWarp)
+        XCTAssertEqual(warps.map(\.name), ["Face"])
+        let face = warps[0]
+        XCTAssertTrue(face.keys.keyforms.contains { $0.parameter == x && $0.parameter2 == nil && $0.value == 30 })
+        let features = ["Head", "Eyes", "Nose", "Mouth", "Hair"]
+        for name in features {
+            XCTAssertEqual(part(rest, name).deformer, face.id, name)
+            XCTAssertFalse(part(rest, name).allShapes.contains(where: \.isKeyed), "\(name) has keyforms of its own")
+        }
+        let keyed = rest.parts.flatMap(\.allShapes).filter(\.isKeyed).count
+        XCTAssertEqual(keyed, 2)
+        // At AngleX 30 every feature moves right, the middle of the face furthest.
+        e.setParameterValue(30, of: x)
+        for name in features {
+            for s in part(rest, name).shapes.indices {
+                XCTAssertGreaterThan(center(e.drawing, name, shape: s).x, center(rest, name, shape: s).x + 4, name)
+            }
+        }
+        // The far side narrows: the right eye is narrower than the left.
+        let eyes = part(e.drawing, "Eyes").shapes.map { $0.path.controlBounds.width }
+        XCTAssertLessThan(eyes[1], eyes[0] - 1)
+        // Halfway, the features are halfway.
+        e.setParameterValue(15, of: x)
+        let half = center(e.drawing, "Mouth").x
+        e.setParameterValue(30, of: x)
+        XCTAssertEqual(half, (center(e.drawing, "Mouth").x + center(rest, "Mouth").x) / 2, accuracy: 1e-9)
+    }
+
+    func testAngleZTiltsTheHeadAboutTheNeck() throws {
+        var (e, _, _) = try tam()
+        let z = e.drawing.parameter(named: "AngleZ")!.id
+        let rest = e.drawing
+        e.setParameterValue(30, of: z)
+        // Ten degrees clockwise about the neck: the hair, above it, swings right.
+        func top(_ d: Drawing) -> Vec2 { part(d, "Hair").shapes[0].path.points[1].position }
+        let turned = Affine2D.rotation(10 * .pi / 180).applyToVector(top(rest) - Vec2(0, -60)) + Vec2(0, -60)
+        assertClose(top(e.drawing), turned, tolerance: 1e-9)
+        XCTAssertGreaterThan(top(e.drawing).x, top(rest).x + 15)
+        XCTAssertGreaterThan(center(e.drawing, "Ear.L").y, center(rest, "Ear.L").y + 5)
+        XCTAssertEqual(center(e.drawing, "Body"), center(rest, "Body"))
+    }
+
     func testTheFarEarTucksBehindTheHead() throws {
         var (e, x, _) = try tam()
         func order() -> [String] { e.drawing.drawStack.map(\.name) }

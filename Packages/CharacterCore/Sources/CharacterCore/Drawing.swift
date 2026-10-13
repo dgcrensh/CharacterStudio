@@ -204,6 +204,8 @@ public struct Part: Hashable, Sendable, Codable, Identifiable {
     /// before, which it goes back to when no switch applies. Not saved (the file names
     /// this one); see `Drawing.applySwitches`.
     public var switchedFrom: Int?
+    /// The deformer (a `Deformer` id) that bends or turns the part's art, if any.
+    public var deformer: Int?
 
     public init(id: Int, name: String, shapes: [VectorShape] = [], pivot: Vec2 = .zero, bone: Int? = nil,
                 isHidden: Bool = false, isLocked: Bool = false) {
@@ -495,6 +497,9 @@ public struct Drawing: Hashable, Sendable, Codable {
     /// these values, but not saved: the file keeps the rest drawing. Set it with
     /// `setParameterValues(_:)`.
     public internal(set) var parameterValues: [Int: Double] = [:]
+    /// The character's warp and rotation deformers, in the order the layers panel lists
+    /// them (see `Deformer`).
+    public var deformers: [Deformer] = []
     public var nextID = 1
 
     public init() {}

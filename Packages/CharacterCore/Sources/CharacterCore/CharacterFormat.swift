@@ -80,7 +80,7 @@ public enum CharacterFormat {
     public static func encode(_ drawing: Drawing, referenceFiles: [Int: String] = [:]) -> JSONValue {
         // The file holds the rest drawing, whatever values the parameters are at, with
         // each part's own variant named rather than one a switch chose.
-        let drawing = drawing.atRest().unswitched()
+        let drawing = drawing.atRest().unswitched().undeformed()
         let names = slotNames(for: drawing.parts)
         let parameters = fileParameters(drawing.parameters)
         let bones = boneNames(for: drawing.bones)
@@ -90,6 +90,7 @@ public enum CharacterFormat {
         // The other skins' slots, by skin id.
         var otherSkins: [Int: [(key: String, value: JSONValue)]] = [:]
         let slotOf = Dictionary(zip(drawing.parts.map(\.id), names), uniquingKeysWith: { a, _ in a })
+        let deformerNames = self.deformerNames(drawing.deformers)
         for (part, name) in zip(drawing.parts, names) {
             // A part on a bone the drawing doesn't have (a copied part) goes on the root.
             let bone = part.bone.flatMap { id in drawing.bone(id).map { (id: id, transform: $0.transform) } }
@@ -115,6 +116,9 @@ public enum CharacterFormat {
             }
             let switches = self.switches(part.switches, parameters: parameters, slots: slotOf)
             if !switches.isEmpty { slot.append((key: "switches", value: .array(switches))) }
+            if let deformer = part.deformer.flatMap({ deformerNames[$0] }) {
+                slot.append((key: "deformer", value: .string(deformer)))
+            }
             slots.append(.object(slot))
             // Attachments are stored in their bone's space.
             var local = part
@@ -190,6 +194,12 @@ public enum CharacterFormat {
                                                                "max": num(driver.maximumAngle)])))
                 }
                 return .object(fields)
+            })))
+        }
+        // The deformers are written only when the character has some.
+        if !drawing.deformers.isEmpty {
+            members.append((key: "deformers", value: .array(drawing.deformers.compactMap { deformer in
+                self.deformer(deformer, names: deformerNames, parameters: parameters)
             })))
         }
         members += [
@@ -411,6 +421,33 @@ public enum CharacterFormat {
     /// be read back, so none are written.
     private static func keyforms(_ shape: VectorShape, parameters: FileParameters) -> [JSONValue] {
         guard let keys = shape.keys, keys.isConsistent, keys.restPoints.count == shape.path.points.count else { return [] }
+        return keyforms(keys, parameters: parameters).map { key, members in
+            var members = members
+            members.append((key: "offsets", value: .array(offsets(key.offsets))))
+            if num(key.opacity) != 0 { members.append((key: "opacity", value: num(key.opacity))) }
+            return .object(members)
+        }
+    }
+
+    /// Sparse offsets: one entry per point that moves, with only the members that aren't zero.
+    private static func offsets(_ offsets: [PointGeometry]) -> [JSONValue] {
+        var out: [JSONValue] = []
+        for (i, offset) in offsets.enumerated() {
+            var point: [(key: String, value: JSONValue)] = []
+            for (name, v) in [("p", offset.position), ("in", offset.inHandle), ("out", offset.outHandle)] {
+                let pair = vec(v)
+                if pair != vec(.zero) { point.append((key: name, value: pair)) }
+            }
+            guard !point.isEmpty else { continue }
+            out.append(.object([(key: "point", value: .number(Double(i)))] + point))
+        }
+        return out
+    }
+
+    /// The keyforms on the file's parameters in the order the file lists them (see
+    /// `keyforms(_:parameters:)` for shapes), each with the members that say where it is.
+    private static func keyforms(_ keys: ShapeKeyforms, parameters: FileParameters)
+        -> [(key: Keyform, members: [(key: String, value: JSONValue)])] {
         // Each keyform's parameters as (place in the file, value), in file order.
         typealias Place = (order: Int, value: Double)
         func places(_ key: Keyform) -> (Place, Place?)? {
@@ -430,17 +467,6 @@ public enum CharacterFormat {
                 return (a.second?.value ?? 0) < (b.second?.value ?? 0)
             }
         return written.map { entry in
-            let key = entry.key
-            var offsets: [JSONValue] = []
-            for (i, offset) in key.offsets.enumerated() {
-                var point: [(key: String, value: JSONValue)] = []
-                for (name, v) in [("p", offset.position), ("in", offset.inHandle), ("out", offset.outHandle)] {
-                    let pair = vec(v)
-                    if pair != vec(.zero) { point.append((key: name, value: pair)) }
-                }
-                guard !point.isEmpty else { continue }
-                offsets.append(.object([(key: "point", value: .number(Double(i)))] + point))
-            }
             var members: [(key: String, value: JSONValue)] = [
                 (key: "parameter", value: .string(parameters.list[entry.first.order].name)),
                 (key: "value", value: num(entry.first.value)),
@@ -449,10 +475,60 @@ public enum CharacterFormat {
                 members.append((key: "parameter2", value: .string(parameters.list[second.order].name)))
                 members.append((key: "value2", value: num(second.value)))
             }
-            members.append((key: "offsets", value: .array(offsets)))
-            if num(key.opacity) != 0 { members.append((key: "opacity", value: num(key.opacity))) }
+            return (entry.key, members)
+        }
+    }
+
+    /// Names for the deformers, as the file refers to them: each one's own, made unique
+    /// (the editor keeps them unique already).
+    static func deformerNames(_ deformers: [Deformer]) -> [Int: String] {
+        var out: [Int: String] = [:]
+        var used: Set<String> = []
+        for deformer in deformers {
+            var name = deformer.name.isEmpty ? "Deformer" : deformer.name
+            var n = 2
+            while used.contains(name) {
+                name = "\(deformer.name) \(n)"
+                n += 1
+            }
+            used.insert(name)
+            out[deformer.id] = name
+        }
+        return out
+    }
+
+    /// A deformer: its kind, parent, lattice or pivot, rest (when not zero) and keyforms.
+    /// Deformers are in character space (the rest pose's world space), not a bone's.
+    private static func deformer(_ deformer: Deformer, names: [Int: String], parameters: FileParameters) -> JSONValue? {
+        guard deformer.isConsistent, let name = names[deformer.id] else { return nil }
+        var members: [(key: String, value: JSONValue)] = [(key: "id", value: .string(name))]
+        members.append((key: "type", value: .string(deformer.isWarp ? "warp" : "rotation")))
+        if let parent = deformer.parent.flatMap({ names[$0] }) { members.append((key: "parent", value: .string(parent))) }
+        let keys = deformer.keys
+        if deformer.isWarp {
+            members += [
+                (key: "x", value: num(deformer.bounds.minPoint.x)), (key: "y", value: num(deformer.bounds.minPoint.y)),
+                (key: "width", value: num(deformer.bounds.width)), (key: "height", value: num(deformer.bounds.height)),
+                (key: "columns", value: .number(Double(deformer.columns))), (key: "rows", value: .number(Double(deformer.rows))),
+            ]
+            let rest = offsets(keys.restPoints.map { PointGeometry(position: $0.position) })
+            if !rest.isEmpty { members.append((key: "rest", value: .array(rest))) }
+        } else {
+            members.append((key: "pivot", value: vec(deformer.pivot)))
+            let angle = keys.restPoints.first?.position.x ?? 0
+            if num(angle) != 0 { members.append((key: "angle", value: num(angle))) }
+        }
+        let written: [JSONValue] = keyforms(keys, parameters: parameters).map { key, members in
+            var members = members
+            if deformer.isWarp {
+                members.append((key: "offsets", value: .array(offsets(key.offsets.map { PointGeometry(position: $0.position) }))))
+            } else {
+                members.append((key: "angle", value: num(key.offsets.first?.position.x ?? 0)))
+            }
             return .object(members)
         }
+        members.append((key: "keyforms", value: .array(written)))
+        return .object(members)
     }
 
     private static func stroke(_ stroke: StrokeStyle, globals: [Int: String]) -> JSONValue {
@@ -545,7 +621,7 @@ public enum CharacterFormat {
         // Slots, in draw order.
         let slotNodes = try root.field("slots")?.array() ?? []
         typealias Slot = (id: String, attachment: String?, bone: String?, accessoryOf: String?, behindSlot: String?,
-                          switches: [FileSwitch])
+                          switches: [FileSwitch], deformer: String?)
         var slots: [Slot] = []
         for node in slotNodes {
             let id = try node.require("id").string()
@@ -556,7 +632,8 @@ public enum CharacterFormat {
             slots.append((id: id, attachment: attachment, bone: try node.field("bone")?.string(),
                           accessoryOf: try node.field("accessoryOf")?.string(),
                           behindSlot: try node.field("behindSlot")?.string(),
-                          switches: try switches(node.field("switches"), parameters: parameters)))
+                          switches: try switches(node.field("switches"), parameters: parameters),
+                          deformer: try node.field("deformer")?.string()))
         }
         var ordered: [Slot] = []
         for node in try root.field("drawOrder")?.array() ?? [] {
@@ -599,6 +676,7 @@ public enum CharacterFormat {
         var owners: [Int: String] = [:]
         var behindSlots: [Int: String] = [:]
         var slotSwitches: [Int: [FileSwitch]] = [:]
+        var slotDeformers: [Int: String] = [:]
         for slot in ordered {
             // The slot's vector attachments in each skin, in file order. Other types are skipped.
             var found: [(skin: Int, attachments: [(name: String, node: Node)])] = []
@@ -669,6 +747,7 @@ public enum CharacterFormat {
             if let owner = slot.accessoryOf { owners[part.id] = owner }
             if let behind = slot.behindSlot { behindSlots[part.id] = behind }
             if !slot.switches.isEmpty { slotSwitches[part.id] = slot.switches }
+            if let deformer = slot.deformer { slotDeformers[part.id] = deformer }
             drawing.parts.append(part)
         }
 
@@ -742,7 +821,121 @@ public enum CharacterFormat {
             drawing.frame = CharacterFrame(bounds: bounds, ground: try node.field("ground")?.number(),
                                            isHidden: try node.field("hidden")?.bool() ?? false)
         }
+        // Deformers last, then the slots find theirs by name; an unknown one leaves the slot
+        // undeformed. The art is shown through them (they move nothing at the rest unless
+        // a rest is written).
+        drawing.deformers = try deformers(root.field("deformers")?.array() ?? [], parameters: parameters, drawing: &drawing)
+        if !drawing.deformers.isEmpty {
+            let deformerIDs = Dictionary(drawing.deformers.map { ($0.name, $0.id) }, uniquingKeysWith: { a, _ in a })
+            for p in drawing.parts.indices {
+                drawing.parts[p].deformer = slotDeformers[drawing.parts[p].id].flatMap { deformerIDs[$0] }
+            }
+            drawing.evaluateKeyforms()
+        }
         return DecodedCharacter(drawing: drawing, referenceFiles: files)
+    }
+
+    /// The deformers. A repeated name is an error; an unknown type, a lattice of the wrong
+    /// size or with no area is too. An unknown parent, or one that would make a loop,
+    /// leaves the deformer at the top.
+    private static func deformers(_ nodes: [Node], parameters: [String: Parameter], drawing: inout Drawing) throws -> [Deformer] {
+        var out: [Deformer] = []
+        var parents: [String?] = []
+        for node in nodes {
+            let name = try node.require("id").string()
+            guard !out.contains(where: { $0.name == name }) else {
+                throw CharacterFileError.invalid(path: node.path + ".id", problem: "repeats deformer \"\(name)\"")
+            }
+            let id = drawing.makeID()
+            var deformer: Deformer
+            switch try node.require("type").string() {
+            case "warp":
+                let size = Vec2(try node.requireNumber("width"), try node.requireNumber("height"))
+                guard size.x > 0, size.y > 0 else { throw CharacterFileError.invalid(path: node.path, problem: "has no area") }
+                let origin = Vec2(try node.requireNumber("x"), try node.requireNumber("y"))
+                let columns = try node.require("columns").integer(), rows = try node.require("rows").integer()
+                guard Deformer.latticeSizes.contains(columns), Deformer.latticeSizes.contains(rows) else {
+                    throw CharacterFileError.invalid(path: node.path, problem: "has a lattice of \(columns) × \(rows); each side needs 2 to 5 points")
+                }
+                deformer = .warp(id: id, name: name, bounds: Rect(minPoint: origin, maxPoint: origin + size), columns: columns,
+                                 rows: rows)
+                if let rest = try node.field("rest") {
+                    let offsets = try self.offsets(rest, pointCount: columns * rows)
+                    deformer.keys.restPoints = offsets.map { PointGeometry(position: $0.position) }
+                }
+            case "rotation":
+                deformer = .rotation(id: id, name: name, pivot: try node.requireVec2("pivot"))
+                deformer.keys.restPoints = [PointGeometry(position: Vec2(try node.number("angle") ?? 0, 0))]
+            default:
+                throw CharacterFileError.invalid(path: node.childPath("type"), problem: "is not \"warp\" or \"rotation\"")
+            }
+            var keyforms: [Keyform] = []
+            for keyNode in try node.field("keyforms")?.array() ?? [] {
+                let offsets: [PointGeometry]
+                if deformer.isWarp {
+                    offsets = try self.offsets(keyNode.field("offsets"), pointCount: deformer.columns * deformer.rows)
+                        .map { PointGeometry(position: $0.position) }
+                } else {
+                    offsets = [PointGeometry(position: Vec2(try keyNode.requireNumber("angle"), 0))]
+                }
+                guard let coordinate = try keyCoordinate(keyNode, parameters: parameters),
+                      !keyforms.contains(where: { $0.coordinate.matches(coordinate) }) else { continue }
+                keyforms.append(Keyform(at: coordinate, offsets: offsets))
+            }
+            deformer.keys.keyforms = keyforms
+            deformer.keys.sortKeyforms()
+            out.append(deformer)
+            parents.append(try node.field("parent")?.string())
+        }
+        let ids = Dictionary(out.map { ($0.name, $0.id) }, uniquingKeysWith: { a, _ in a })
+        for i in out.indices { out[i].parent = parents[i].flatMap { ids[$0] } }
+        // A loop of parents: the first deformer found in it goes to the top.
+        var check = Drawing()
+        check.deformers = out
+        for i in out.indices {
+            let chain = check.deformerChain(from: out[i].id)
+            if let last = chain.last, let parent = last.parent, chain.contains(where: { $0.id == parent }),
+               let j = check.deformerIndex(last.id) {
+                check.deformers[j].parent = nil
+            }
+        }
+        return check.deformers
+    }
+
+    /// Sparse offsets (see the writer's `offsets`) as one per point.
+    private static func offsets(_ node: Node?, pointCount: Int) throws -> [PointGeometry] {
+        var offsets = Array(repeating: PointGeometry.zero, count: pointCount)
+        var seen = Set<Int>()
+        for offsetNode in try node?.array() ?? [] {
+            let index = try offsetNode.require("point").integer()
+            guard index >= 0, index < pointCount else {
+                throw CharacterFileError.invalid(path: offsetNode.childPath("point"), problem: "is not a point of the shape")
+            }
+            guard seen.insert(index).inserted else {
+                throw CharacterFileError.invalid(path: offsetNode.childPath("point"), problem: "repeats point \(index)")
+            }
+            offsets[index] = PointGeometry(position: try offsetNode.vec2("p") ?? .zero,
+                                           inHandle: try offsetNode.vec2("in") ?? .zero,
+                                           outHandle: try offsetNode.vec2("out") ?? .zero)
+        }
+        return offsets
+    }
+
+    /// Where a keyform is: nil when it is on an unknown parameter or at a default (a grid
+    /// keyform also when its two parameters are the same). Values are brought into range.
+    private static func keyCoordinate(_ keyNode: Node, parameters: [String: Parameter]) throws -> KeyCoordinate? {
+        let name = try keyNode.require("parameter").string()
+        let value = try keyNode.requireNumber("value")
+        let second = try keyNode.string("parameter2")
+        let value2 = second == nil ? 0 : try keyNode.requireNumber("value2")
+        guard let parameter = parameters[name] else { return nil }
+        let clamped = parameter.clamped(value)
+        guard !Parameter.same(clamped, parameter.defaultValue) else { return nil }
+        guard let second else { return KeyCoordinate(parameter: parameter.id, value: clamped) }
+        guard let other = parameters[second], other.id != parameter.id else { return nil }
+        let clamped2 = other.clamped(value2)
+        guard !Parameter.same(clamped2, other.defaultValue) else { return nil }
+        return KeyCoordinate(parameter.id, clamped, other.id, clamped2)
     }
 
     /// One vector attachment's shapes and groups, with each shape's per-point weights

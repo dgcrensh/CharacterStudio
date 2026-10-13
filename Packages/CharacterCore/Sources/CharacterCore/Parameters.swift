@@ -154,6 +154,7 @@ extension Drawing {
             shape.keys?.rebase(parameter: id, from: old, to: new)
             shape.settleKeys()
         }
+        for d in deformers.indices { deformers[d].keys.rebase(parameter: id, from: old, to: new) }
         parameters[i].defaultValue = new
         var values = parameterValues
         values[id] = current
@@ -180,6 +181,9 @@ extension Drawing {
             shape.keys?.clip(parameter: id, minimum: lo, maximum: hi, defaultValue: newDefault)
             shape.settleKeys()
         }
+        for d in deformers.indices {
+            deformers[d].keys.clip(parameter: id, minimum: lo, maximum: hi, defaultValue: newDefault)
+        }
         parameters[i].minimum = lo
         parameters[i].maximum = hi
         parameters[i].defaultValue = newDefault
@@ -203,6 +207,7 @@ extension Drawing {
             }
             shape.settleKeys()
         }
+        for d in deformers.indices { deformers[d].keys.keyforms.removeAll { $0.coordinate.involves(id) } }
         parameterValues = [:]
         setParameterValues(values)
         evaluateKeyforms()
