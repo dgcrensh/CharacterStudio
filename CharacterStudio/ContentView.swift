@@ -90,6 +90,7 @@ private struct ToolBar: View {
     @State private var showingInspector = false
     @State private var showingAppearance = false
     @State private var showingFrame = false
+    @State private var showingRigCheck = false
     @State private var importingSVG = false
     @State private var exporting = false
     @State private var exportFile = ExportFile()
@@ -111,6 +112,7 @@ private struct ToolBar: View {
         .popover(isPresented: $showingAppearance) { AppearancePanel(store: store, ui: ui) }
         .popover(isPresented: $showingLayers) { LayersPanel(store: store, ui: ui) }
         .popover(isPresented: $showingFrame) { FramePanel(store: store, ui: ui) }
+        .popover(isPresented: $showingRigCheck) { RigCheckPanel(store: store) }
         // The importer and exporter sit on separate views: SwiftUI shows only one file
         // panel modifier per view.
         .background {
@@ -189,6 +191,8 @@ private struct ToolBar: View {
                     }
                 }
                 .disabled(!ui.canExport)
+                Divider()
+                Button("Clean for Rig", systemImage: "checklist") { showingRigCheck = true }
                 Divider()
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) { store.clear() }
             } label: {
@@ -738,13 +742,24 @@ private struct ContextBar: View {
                 .monospacedDigit()
             Button("Reset Bone", systemImage: "arrow.uturn.backward") { store.resetSelectedBonePose() }
                 .disabled(ui.selectedBoneRotation == 0)
+            limbMenu
         } else {
-            Text("Drag a bone to turn it; its children follow")
+            Text("Drag a bone to turn it, or an IK target to bend a limb")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
         Button("Reset Pose", systemImage: "figure.stand") { store.resetPose() }
             .disabled(!ui.canResetPose)
+        if ui.canMirrorPoseFromLeft || ui.canMirrorPoseFromRight {
+            Menu {
+                Button("Left to Right", systemImage: "arrow.right") { store.mirrorPose(from: .left) }
+                    .disabled(!ui.canMirrorPoseFromLeft)
+                Button("Right to Left", systemImage: "arrow.left") { store.mirrorPose(from: .right) }
+                    .disabled(!ui.canMirrorPoseFromRight)
+            } label: {
+                Label("Mirror Pose", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+            }
+        }
         Menu {
             Button("Save Pose", systemImage: "plus") { store.savePose() }
             if !ui.poses.isEmpty { Divider() }
@@ -761,6 +776,33 @@ private struct ContextBar: View {
         if let id = ui.activePose, let pose = ui.poses.first(where: { $0.id == id }) {
             NameField(placeholder: "Pose name", name: pose.name) { store.renamePose(id, to: $0) }
         }
+    }
+
+    /// The selected bone's IK target and rotation limits.
+    private var limbMenu: some View {
+        Menu {
+            if ui.canAddIK {
+                Button("Add IK Target", systemImage: "scope") { store.addIK() }
+            }
+            if ui.selectedBoneIK != nil {
+                Button("Flip Bend", systemImage: "arrow.uturn.left") { store.flipIKBend() }
+                Button("Remove IK Target", systemImage: "xmark.circle") { store.removeIK() }
+            }
+            Section(limitTitle) {
+                Button("Set Minimum to Current Angle", systemImage: "arrow.down.to.line") { store.setLimitMinimumToPose() }
+                Button("Set Maximum to Current Angle", systemImage: "arrow.up.to.line") { store.setLimitMaximumToPose() }
+                Button("Clear Limits", systemImage: "infinity") { store.clearLimit() }
+                    .disabled(ui.selectedBoneLimit == nil)
+            }
+        } label: {
+            Label("Limb", systemImage: ui.selectedBoneIK != nil ? "scope" : "angle")
+        }
+    }
+
+    private var limitTitle: String {
+        guard let limit = ui.selectedBoneLimit else { return "Turns freely" }
+        let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...1))
+        return "Turns \(limit.min.formatted(format))° to \(limit.max.formatted(format))°"
     }
 
     /// Mirror drawing about a vertical axis.

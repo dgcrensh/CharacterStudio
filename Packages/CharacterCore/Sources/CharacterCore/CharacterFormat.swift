@@ -195,11 +195,23 @@ public enum CharacterFormat {
         while rotation > 180 { rotation -= 360 }
         while rotation <= -180 { rotation += 360 }
         let parentName = parent.flatMap { names[$0.id] } ?? rootBone
-        return obj([
+        let value = obj([
             "id": .string(names[bone.id] ?? rootBone), "parent": .string(parentName), "length": num(bone.length),
             "x": num(local.x), "y": num(local.y), "rotation": num(rotation), "scaleX": 1, "scaleY": 1,
         ])
+        // The limb constraints are written only when set.
+        guard bone.limit != nil || bone.ik != nil, case .object(var members) = value else { return value }
+        if let limit = bone.limit {
+            members.append((key: "limits", value: obj(["min": num(limit.min), "max": num(limit.max)])))
+        }
+        if let ik = bone.ik {
+            members.append((key: "ik", value: obj(["bend": .string(ik.bendsClockwise ? clockwise : counterclockwise)])))
+        }
+        return .object(members)
     }
+
+    /// The `ik` constraint's `bend` values.
+    static let clockwise = "clockwise", counterclockwise = "counterclockwise"
 
     /// Bone ids in the file, from bone names made unique, non-empty and never `root`.
     static func boneNames(for bones: [Bone]) -> [Int: String] {
@@ -535,7 +547,7 @@ public enum CharacterFormat {
             let id = drawing.makeID()
             boneIDs[raw.name] = id
             drawing.bones.append(Bone(id: id, name: raw.name, parent: raw.parent.flatMap { boneIDs[$0] },
-                                      head: raw.head, tail: raw.tail))
+                                      head: raw.head, tail: raw.tail, limit: raw.limit, ik: raw.ik))
         }
         for p in drawing.parts.indices {
             drawing.parts[p].bone = partBones[drawing.parts[p].id].flatMap { boneIDs[$0] }
@@ -665,6 +677,8 @@ public enum CharacterFormat {
         var parent: String?
         var head: Vec2
         var tail: Vec2
+        var limit: RotationLimit?
+        var ik: IKConstraint?
     }
 
     /// Reads the bone list: every bone's world transform by name (the root's included),
@@ -676,6 +690,8 @@ public enum CharacterFormat {
             var parent: String?
             var length: Double
             var local: Affine2D
+            var limit: RotationLimit?
+            var ik: IKConstraint?
         }
         var raws: [Raw] = []
         for node in nodes {
@@ -689,7 +705,15 @@ public enum CharacterFormat {
             let rotation = (try node.field("rotation")?.number() ?? 0) * .pi / 180
             let sx = try node.field("scaleX")?.number() ?? 1, sy = try node.field("scaleY")?.number() ?? 1
             let local = Affine2D.translation(Vec2(x, y)) * Affine2D.rotation(rotation) * Affine2D.scale(x: sx, y: sy)
-            raws.append(Raw(name: name, parent: try node.field("parent")?.string(), length: length, local: local))
+            // A limit missing an end is free that way; an unknown bend reads as clockwise.
+            let limit = try node.field("limits").map { limits in
+                RotationLimit(min: try limits.number("min") ?? -180, max: try limits.number("max") ?? 180)
+            }
+            let ik = try node.field("ik").map { ik in
+                IKConstraint(bendsClockwise: try ik.string("bend") != counterclockwise)
+            }
+            raws.append(Raw(name: name, parent: try node.field("parent")?.string(), length: length, local: local,
+                            limit: limit?.isFree == true ? nil : limit, ik: ik))
         }
         let names = Set(raws.map(\.name))
         var world: [String: Affine2D] = [:]
@@ -706,7 +730,8 @@ public enum CharacterFormat {
                 world[raw.name] = w
                 if raw.name != rootBone {
                     out.append(DecodedBone(name: raw.name, parent: parent == rootBone ? nil : parent,
-                                           head: w.apply(.zero), tail: w.apply(Vec2(raw.length, 0))))
+                                           head: w.apply(.zero), tail: w.apply(Vec2(raw.length, 0)),
+                                           limit: raw.limit, ik: raw.ik))
                 }
                 return true
             }

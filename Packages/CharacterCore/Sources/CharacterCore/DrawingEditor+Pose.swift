@@ -45,7 +45,9 @@ extension DrawingEditor {
         setRotation(rotation, of: id)
     }
 
-    private mutating func setRotation(_ degrees: Double, of id: Int) {
+    /// Sets bone `id`'s turn, kept inside its rotation limit.
+    mutating func setRotation(_ degrees: Double, of id: Int) {
+        let degrees = drawing.limitedRotation(degrees, of: id)
         if abs(degrees) < 1e-9 {
             drawing.pose.rotations[id] = nil
         } else {
@@ -110,7 +112,7 @@ extension DrawingEditor {
         guard let i = drawing.poseIndex(id) else { return }
         cancelGesture()
         let before = drawing
-        drawing.pose = drawing.poses[i].pose
+        drawing.pose = drawing.limited(drawing.poses[i].pose)
         activePose = id
         commit(from: before)
     }

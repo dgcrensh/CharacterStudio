@@ -141,6 +141,13 @@ final class EditorUIState {
     /// The two bones of the part being painted: the part's own, then its second.
     var weightPaintChoices: [Bone] = []
 
+    // Limbs
+    var canAddIK = false
+    var selectedBoneIK: IKConstraint?
+    var selectedBoneLimit: RotationLimit?
+    var canMirrorPoseFromLeft = false
+    var canMirrorPoseFromRight = false
+
     // Variants and skins
     /// The part the variant strip shows, and its variants in strip order (none for a
     /// part with one drawing).
@@ -393,6 +400,11 @@ final class CanvasStore {
         update(\.weightPaintBone, editor.weightPaintBone)
         let painted = editor.weightPaintPart.flatMap { editor.drawing.part($0) }
         update(\.weightPaintChoices, [painted?.bone, painted?.secondBone].compactMap { $0.flatMap { editor.drawing.bone($0) } })
+        update(\.canAddIK, editor.canAddIK)
+        update(\.selectedBoneIK, editor.selectedBoneIK)
+        update(\.selectedBoneLimit, editor.selectedBoneLimit)
+        update(\.canMirrorPoseFromLeft, editor.canMirrorPose(from: .left))
+        update(\.canMirrorPoseFromRight, editor.canMirrorPose(from: .right))
         let variantPart = editor.variantPart.flatMap { editor.drawing.part($0) }
         update(\.variantPart, variantPart?.id)
         update(\.variantPartName, variantPart?.name ?? "")
@@ -617,6 +629,25 @@ final class CanvasStore {
     func bindSecondBone() { edit { $0.editor.bindSelectedPartToSecondBone() } }
     func unbindSecondBone() { edit { $0.editor.unbindSecondBone() } }
     func autoWeightSelectedPart() { edit { $0.editor.autoWeightSelectedPart() } }
+
+    // MARK: Limbs
+
+    func addIK() { edit { $0.editor.addIKToSelectedBone() } }
+    func removeIK() { edit { $0.editor.removeIKFromSelectedBone() } }
+    func flipIKBend() { edit { $0.editor.flipSelectedIKBend() } }
+    func setLimitMinimumToPose() { edit { $0.editor.setSelectedBoneMinimumToPose() } }
+    func setLimitMaximumToPose() { edit { $0.editor.setSelectedBoneMaximumToPose() } }
+    func clearLimit() { edit { $0.editor.clearSelectedBoneLimit() } }
+    func mirrorPose(from side: SideName.Side) { edit { $0.editor.mirrorPose(from: side) } }
+
+    /// What Clean for Rig finds now, each with the line the list shows.
+    func rigIssues() -> [(issue: RigIssue, summary: String)] {
+        let editor = session.editor
+        return editor.rigIssues.map { (issue: $0, summary: $0.summary(in: editor.drawing)) }
+    }
+
+    /// Fixes `issues`, or everything Clean for Rig finds when nil.
+    func cleanForRig(_ issues: [RigIssue]? = nil) { edit { $0.editor.cleanForRig(issues) } }
 
     // MARK: Variants and skins
 

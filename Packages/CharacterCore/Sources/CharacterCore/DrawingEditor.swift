@@ -371,6 +371,9 @@ public struct DrawingEditor: Sendable {
         /// Turning bone `id` in Pose mode about its posed `head`, from the Pencil's angle
         /// `startAngle` (radians) and the bone's turn `startRotation` (degrees) as it began.
         case poseTurn(id: Int, before: Drawing, head: Vec2, startAngle: Double, startRotation: Double)
+        /// Dragging the IK target at bone `id`'s posed tip; `grab` keeps the tip from
+        /// jumping to the Pencil.
+        case ikDrag(id: Int, before: Drawing, grab: Vec2)
         /// Painting part `part`'s weights.
         case weightPaint(part: Int, before: Drawing, last: Vec2)
         /// A drag that does nothing (for example, from a pen shortcut target).
@@ -562,6 +565,9 @@ public struct DrawingEditor: Sendable {
         case .poseTurn(let id, _, let head, let startAngle, let startRotation):
             turnBone(id, head: head, startAngle: startAngle, startRotation: startRotation, to: p)
 
+        case .ikDrag(let id, _, let grab):
+            drawing.pose = drawing.solvingIK(drawing.pose, bone: id, target: p + grab)
+
         case .weightPaint(let part, let before, let last):
             // A dab every half radius along the stroke, however fast or slow it moves.
             let step = max(weightBrushRadius / gestureZoom / 2, 1e-6)
@@ -612,7 +618,7 @@ public struct DrawingEditor: Sendable {
         case .transform(_, _, let before, _), .pivot(_, let before, _, _),
              .segment(_, _, _, let before, _), .handle(_, _, _, let before, _), .penPlace(_, _, let before, _),
              .erase(let before, _), .boneEdit(_, _, let before, _, _), .poseTurn(_, let before, _, _, _),
-             .weightPaint(_, let before, _):
+             .ikDrag(_, let before, _), .weightPaint(_, let before, _):
             commit(from: undoBase ?? before)
             undoBase = nil
         case .marquee(_, let additive, let baseShapes, let baseAnchors):
@@ -637,7 +643,7 @@ public struct DrawingEditor: Sendable {
         case .transform(_, _, let before, _), .anchors(_, _, let before, _), .segment(_, _, _, let before, _),
              .handle(_, _, _, let before, _), .shapeDraw(_, _, let before), .erase(let before, _),
              .boneDraw(_, _, _, _, let before), .boneEdit(_, _, let before, _, _), .poseTurn(_, let before, _, _, _),
-             .weightPaint(_, let before, _):
+             .ikDrag(_, let before, _), .weightPaint(_, let before, _):
             drawing = undoBase ?? before
             undoBase = nil
             validateSelection()
@@ -656,9 +662,14 @@ public struct DrawingEditor: Sendable {
 
     // MARK: Pose
 
-    /// A Pose-mode drag on bone `id` from `start`: it turns about its head as posed.
-    private func beginPoseTurn(_ id: Int, from start: Vec2) -> Gesture {
+    /// A Pose-mode drag on bone `id` from `start`: it turns about its head as posed, or
+    /// from the tip of a bone with an IK chain, moves the IK target.
+    private func beginPoseTurn(_ id: Int, handle: BoneHandle, from start: Vec2) -> Gesture {
         guard let bone = drawing.bone(id) else { return .idle }
+        if handle == .tail, drawing.ikChain(id) != nil {
+            let tip = drawing.posedSkeleton(drawing.pose).posed(bone).tail
+            return .ikDrag(id: id, before: drawing, grab: tip - start)
+        }
         let head = drawing.posedSkeleton(drawing.pose).posed(bone).head
         let d = start - head
         return .poseTurn(id: id, before: drawing, head: head, startAngle: atan2(d.y, d.x),
@@ -1084,7 +1095,7 @@ public struct DrawingEditor: Sendable {
             guard let bone = drawing.bone(id) else { return .idle }
             selectedBone = id
             // Pose mode turns bones; the weight brush never moves them.
-            if boneMode == .pose { return beginPoseTurn(id, from: start) }
+            if boneMode == .pose { return beginPoseTurn(id, handle: handle, from: start) }
             if boneMode == .weights { return .idle }
             // In draw mode only the middle is pressed here (joints start new bones): it moves the bone.
             let edit: BoneHandle = boneMode == .draw ? .body : handle

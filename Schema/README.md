@@ -48,6 +48,8 @@ Bones were always part of 0.1 and 0.2; the app now writes them. A file with only
 - A bone's tail is at (`length`, 0) in its own space. Children don't have to start at the tail: a sibling-style branch starts wherever its `x`, `y` says.
 - Readers should place a bone with an unknown parent on `root`, and a slot on an unknown bone on `root` too. Two bones with the same id are an error.
 - Names ending in `.L`/`.R` (also `_L`, `-L`, ` L` and `Left`/`Right` words) mark sides for mirroring. The character faces the viewer, so its left side (`.L`) is on the right of the screen.
+- **Limits** (optional): `limits: { "min", "max" }` bounds how far a pose may turn the bone from its rest rotation, in degrees clockwise from -180 to 180, `min` no more than `max`. A missing end is free that way. The app keeps every pose it makes inside the limits and writes `limits` only when a bone has them.
+- **IK** (optional): `ik: { "bend" }` on a bone puts a two-bone IK target at its tail: the bone and its parent turn so the tail reaches the target, with the joint between them bending `clockwise` (on screen, the bone turning clockwise from its parent's line) or `counterclockwise`; a missing or unknown `bend` reads as `clockwise`. The target is an editing aid: poses still store only each bone's `rotation`. A bone on `root` has no parent to bend with, so its `ik` does nothing. Mirrored copies get mirrored limits (`min` and `max` negated and swapped) and the other bend.
 
 ## Poses and weights
 

@@ -117,7 +117,22 @@
         "y": { "type": "number" },
         "rotation": { "description": "Rest rotation relative to the parent bone, in degrees clockwise. The bone points along its own +x axis.", "type": "number" },
         "scaleX": { "type": "number" },
-        "scaleY": { "type": "number" }
+        "scaleY": { "type": "number" },
+        "limits": {
+          "description": "How far a pose may turn the bone from its rest rotation, in degrees clockwise. A missing end is free that way. Written only when set.",
+          "type": "object",
+          "properties": {
+            "min": { "type": "number", "minimum": -180, "maximum": 180 },
+            "max": { "type": "number", "minimum": -180, "maximum": 180 }
+          }
+        },
+        "ik": {
+          "description": "A two-bone IK target at this bone's tail: the bone and its parent bend so the tail reaches it. An editing aid; poses still store rotations. Written only when set.",
+          "type": "object",
+          "properties": {
+            "bend": { "description": "Which way the joint between the bone and its parent bends, on screen. Missing reads as clockwise.", "enum": ["clockwise", "counterclockwise"] }
+          }
+        }
       }
     },
     "slot": {

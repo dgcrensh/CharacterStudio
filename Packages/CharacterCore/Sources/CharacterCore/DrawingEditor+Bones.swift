@@ -268,6 +268,9 @@ extension DrawingEditor {
             copy.name = drawing.uniqueBoneName(SideName.flipped(drawing.bones[i].name) ?? copy.name)
             copy.parent = old == id ? mirrorParent(of: copy.parent) : copy.parent.flatMap { map[$0] }
             copy.apply(mirror)
+            // A mirror turns the other way, so limits and bends flip.
+            copy.limit = copy.limit?.mirrored
+            copy.ik = copy.ik?.mirrored
             drawing.bones.append(copy)
         }
         // Parts on the mirrored bones come along, mirrored too (accessories with their parts).

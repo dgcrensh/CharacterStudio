@@ -18,6 +18,8 @@ public enum EditorOverlay {
     public static let firstBoneWeightColor = RGBAColor(r: 0.2, g: 0.45, b: 0.95)
     public static let secondBoneWeightColor = RGBAColor(r: 0.95, g: 0.35, b: 0.2)
     /// The onion skin of a part's other variants.
+    /// IK targets (the tips of bones with IK chains) while posing.
+    public static let ikColor = RGBAColor(r: 0.95, g: 0.55, b: 0.1)
     public static let onionColor = RGBAColor(r: 0.55, g: 0.35, b: 0.85, a: 0.55)
 
     /// The color of an anchor whose second-bone weight is `weight`.
@@ -365,6 +367,20 @@ private struct Builder {
                     dot(point, radius: lit ? jointRadius + 2 : jointRadius, color: color)
                     dot(point, radius: (lit ? jointRadius + 2 : jointRadius) - 1.5, color: Overlay.handleFill)
                 }
+            }
+        }
+
+        // IK targets while posing: a ring with a cross at each IK bone's tip, to drag.
+        if editor.isPosing, editor.boneMode == .pose {
+            // The bones here are already posed.
+            for bone in drawing.bones where drawing.ikChain(bone.id) != nil {
+                let color = bone.id == editor.selectedBone ? accent : Overlay.ikColor
+                let tip = bone.tail, r = 9 * px
+                ring(tip, radius: r, color: color)
+                line(tip - Vec2(r * 1.6, 0), tip - Vec2(r * 0.6, 0), width: 1.5, color: color)
+                line(tip + Vec2(r * 0.6, 0), tip + Vec2(r * 1.6, 0), width: 1.5, color: color)
+                line(tip - Vec2(0, r * 1.6), tip - Vec2(0, r * 0.6), width: 1.5, color: color)
+                line(tip + Vec2(0, r * 0.6), tip + Vec2(0, r * 1.6), width: 1.5, color: color)
             }
         }
 
