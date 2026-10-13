@@ -43,6 +43,9 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 7. Limbs: two-bone IK, rotation limits, mirror pose and Clean for Rig (done; see the notes below).
 8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
 9. Head turns: keyforms on grids of two parameters (`AngleX` × `AngleY`), draw order and variant swaps by parameter, Mirror Keyforms, keyform onion skin and bone-driven parameters (done; see the notes below).
+10. Deformers: warp lattices and rotation deformers, keyed on parameters and nested in a tree in the Layers panel (done; see the notes below).
+
+Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
 
 ## Milestone 10 notes (deformers)
 
@@ -156,8 +159,6 @@ Milestone 5 of the [2.5D roadmap](docs/plans/2.5d-roadmap.md), with the renderin
 - **Model** (CharacterCore, `Pose.swift`): `Drawing.pose` is the current pose (bone id to degrees), kept in the drawing so undo covers it but never written to the file; `Drawing.poses` are the saved test poses. `PosedSkeleton` gives each bone's transform from rest to posed world space: its parent's, then its own turn about its rest head. A rigid part moves through its bone's transform; a part with `Part.secondBone` blends both transforms per point by `PathPoint.weight`, anchor and both handles alike (linear blend skinning). `AutoWeights` sets weights from the distances to the two bones. `DrawingEditor+Pose` has the Pose and Weights gestures and the commands; tests are in `PoseTests`.
 - **Rendering:** in Pose mode the canvas builds the art from `PosedArt`: rigid parts stay at rest, so their cached triangles are reused, and each part's segment of the art batch draws through its bone's transform on the GPU. Only parts that bend are skinned and re-tessellated on the CPU. The overlay draws the posed bones and art. Timings and the reasoning are in [deformation-rendering.md](docs/plans/deformation-rendering.md).
 - **Format:** `poses` holds each test pose as bone id to `{ "rotation" }`; a two-bone part writes `weights` on every point as its own bone and its second bone with their shares. The example robot has two poses, Nod and Lean. See [Schema/README.md](Schema/README.md#poses-and-weights).
-
-Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
 
 ## Milestone 1 notes
 
