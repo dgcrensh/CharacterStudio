@@ -43,6 +43,9 @@ Or open the package in Xcode and press Cmd-U. To run everything CI runs (core te
 7. Limbs: two-bone IK, rotation limits, mirror pose and Clean for Rig (done; see the notes below).
 8. Parameters and keyforms: named parameters with sliders, keyforms made by editing the art at a value, blending, several parameters at once, the topology lock and file format 0.3 (done; see the notes below).
 9. Head turns: keyforms on grids of two parameters (`AngleX` × `AngleY`), draw order and variant swaps by parameter, Mirror Keyforms, keyform onion skin and bone-driven parameters (done; see the notes below).
+10. Deformers: warp lattices and rotation deformers, keyed on parameters and nested in a tree in the Layers panel (done; see the notes below).
+
+Milestones 7 to 13 take the app toward a Live2D-style 2.5D character modeler (IK, parameters and keyforms, head turns, deformers, physics, a runtime); see [docs/plans/2.5d-roadmap.md](docs/plans/2.5d-roadmap.md), which also adds to 5 and 6.
 
 ## Milestone 10 notes (deformers)
 
